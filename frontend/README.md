@@ -2,6 +2,22 @@
 
 Scaffold mínimo, reproducible y accesible del frontend de Freyja 2.0, generado con Angular CLI 22.0.7.
 
+Esta fase contiene únicamente la fundación técnica de la aplicación. Todavía no incluye dashboard, conexión con el backend ni funcionalidad de trading.
+
+## Requisitos
+
+- Node.js 24 LTS.
+- npm 11.
+- Dependencias instaladas mediante el lockfile versionado.
+
+## Instalación reproducible
+
+Desde `frontend/`:
+
+```bash
+npm ci
+```
+
 ## Desarrollo local
 
 ```bash
