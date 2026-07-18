@@ -1,0 +1,36 @@
+:host {
+  display: block;
+  min-height: 100vh;
+  box-sizing: border-box;
+  padding: 2rem;
+  color: #1a1a1a;
+  background-color: #ffffff;
+  font-family: system-ui, sans-serif;
+}
+
+main {
+  max-width: 40rem;
+  margin: 0 auto;
+}
+
+h1 {
+  font-size: 2rem;
+  line-height: 1.2;
+  margin: 0 0 1rem;
+}
+
+p {
+  font-size: 1rem;
+  line-height: 1.5;
+  margin: 0 0 0.5rem;
+}
+
+@media (max-width: 480px) {
+  :host {
+    padding: 1rem;
+  }
+
+  h1 {
+    font-size: 1.5rem;
+  }
+}
