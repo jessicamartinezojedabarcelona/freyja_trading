@@ -1,59 +1,57 @@
-# FreyjaFrontend
+# Freyja 2.0 — Frontend
 
-This project was generated using [Angular CLI](https://github.com/angular/angular-cli) version 22.0.7.
+Scaffold mínimo, reproducible y accesible del frontend de Freyja 2.0, generado con Angular CLI 22.0.7.
 
-## Development server
-
-To start a local development server, run:
+## Desarrollo local
 
 ```bash
-ng serve
+npm start
 ```
 
-Once the server is running, open your browser and navigate to `http://localhost:4200/`. The application will automatically reload whenever you modify any of the source files.
+El servidor de desarrollo utiliza la configuración de Angular y se inicia en `http://localhost:4200/` de forma predeterminada.
 
-## Code scaffolding
-
-Angular CLI includes powerful code scaffolding tools. To generate a new component, run:
+## Build de producción
 
 ```bash
-ng generate component component-name
+npm run build
 ```
 
-For a complete list of available schematics (such as `components`, `directives`, or `pipes`), run:
+Los artefactos generados se almacenan en `dist/` y no se versionan.
+
+## Lint
 
 ```bash
-ng generate --help
+npm run lint
 ```
 
-## Building
+## Tests unitarios
 
-To build the project run:
+Ejecución única y no interactiva:
 
 ```bash
-ng build
+npm test -- --watch=false
 ```
 
-This will compile your project and store the build artifacts in the `dist/` directory. By default, the production build optimizes your application for performance and speed.
+## Seguridad de dependencias
 
-## Running unit tests
+El proyecto fija Vite 7.3.6 mediante `overrides` para utilizar una versión corregida y deduplicada de esbuild 0.28.1.
 
-To execute unit tests with the [Vitest](https://vitest.dev/) test runner, use the following command:
+La auditoría debe mantenerse limpia:
 
 ```bash
-ng test
+npm audit
 ```
 
-## Running end-to-end tests
+## Capacidades no incluidas
 
-For end-to-end (e2e) testing, run:
+Este scaffold no incluye:
 
-```bash
-ng e2e
-```
+- pruebas E2E;
+- dashboard funcional;
+- autenticación;
+- conexión con APIs;
+- datos de mercado;
+- señales o estrategias;
+- ejecución DEMO o REAL.
 
-Angular CLI does not come with an end-to-end testing framework by default. You can choose one that suits your needs.
-
-## Additional Resources
-
-For more information on using the Angular CLI, including detailed command references, visit the [Angular CLI Overview and Command Reference](https://angular.dev/tools/cli) page.
+Las capacidades posteriores se implementarán únicamente mediante tareas autorizadas y revisadas por el Arquitecto.
