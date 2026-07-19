@@ -94,9 +94,10 @@ desarrollo. No incluye ningún otro servicio (sin Adminer, sin pgAdmin).
 ### Configuración
 
 1. Copia `.env.example` a `.env`.
-2. Completa `POSTGRES_DB`, `POSTGRES_USER` y `POSTGRES_PORT`, y define
-   `POSTGRES_PASSWORD` con una contraseña local robusta. Sin este valor,
-   Docker Compose falla al iniciar (configuración fail-closed).
+2. Define `POSTGRES_DB`, `POSTGRES_USER` y `POSTGRES_PASSWORD`.
+   `POSTGRES_PORT` es opcional y utiliza `5432` por defecto. Si falta
+   cualquiera de las tres variables obligatorias, Docker Compose falla
+   antes de iniciar (configuración fail-closed).
 3. `.env` está ignorado por Git; nunca debe versionarse ni compartirse.
 
 ### Arranque
