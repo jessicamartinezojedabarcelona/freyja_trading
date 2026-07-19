@@ -4,8 +4,11 @@ version = "0.1.0"
 description = "Freyja 2.0 backend"
 requires-python = "==3.12.*"
 dependencies = [
+    "alembic>=1.16,<2",
     "fastapi==0.139.2",
+    "psycopg[binary]>=3.2,<4",
     "pydantic-settings>=2,<3",
+    "sqlalchemy>=2,<3",
     "uvicorn>=0.34,<1",
 ]
 
@@ -38,6 +41,7 @@ known-first-party = ["freyja_backend"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
+plugins = ["pydantic.mypy"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"
