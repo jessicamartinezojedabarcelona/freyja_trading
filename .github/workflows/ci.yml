@@ -1,0 +1,168 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend quality controls
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18.4
+        env:
+          POSTGRES_DB: freyja_ci
+          POSTGRES_USER: freyja_ci
+          # Deterministic, ephemeral CI-only credential. Not a real secret,
+          # not reused anywhere else, and never persisted beyond this job.
+          POSTGRES_PASSWORD: freyja_ci_ephemeral_5f3a9c2b
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U freyja_ci -d freyja_ci"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+          --health-start-period=15s
+    env:
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: freyja_ci
+      POSTGRES_USER: freyja_ci
+      # Same ephemeral CI-only credential as the service container above.
+      POSTGRES_PASSWORD: freyja_ci_ephemeral_5f3a9c2b
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.6"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "backend/uv.lock"
+
+      - name: Install backend dependencies (uv sync --locked)
+        working-directory: backend
+        run: uv sync --locked
+
+      - name: Ruff format check
+        working-directory: backend
+        run: uv run ruff format --check .
+
+      - name: Ruff lint
+        working-directory: backend
+        run: uv run ruff check .
+
+      - name: Mypy strict type-check
+        working-directory: backend
+        run: uv run mypy src tests
+
+      - name: Pytest
+        working-directory: backend
+        run: uv run pytest -v
+
+      - name: Apply Alembic migrations (upgrade head)
+        working-directory: backend
+        run: uv run alembic upgrade head
+
+      - name: Validate Alembic heads and current revision
+        run: |
+          uv run --project backend python - <<'PY'
+          import os
+          import subprocess
+          import sys
+
+          sys.path.insert(0, os.environ["GITHUB_WORKSPACE"])
+          from scripts.quality import (
+              validate_alembic_current,
+              validate_alembic_heads,
+              validate_alembic_stderr,
+          )
+
+
+          def run(args: list[str]) -> subprocess.CompletedProcess[str]:
+              return subprocess.run(
+                  args, cwd="backend", capture_output=True, text=True, check=False
+              )
+
+
+          heads = run(["uv", "run", "alembic", "heads"])
+          if heads.returncode != 0:
+              print("alembic heads exited non-zero", file=sys.stderr)
+              sys.exit(heads.returncode)
+          validate_alembic_stderr(heads.stderr)
+          validate_alembic_heads(heads.stdout)
+
+          current = run(["uv", "run", "alembic", "current"])
+          if current.returncode != 0:
+              print("alembic current exited non-zero", file=sys.stderr)
+              sys.exit(current.returncode)
+          validate_alembic_stderr(current.stderr)
+          validate_alembic_current(current.stdout)
+
+          print("alembic heads and current validated: 0001_initial (head)")
+          PY
+
+      - name: Build backend package (isolated temporary directory)
+        working-directory: backend
+        run: |
+          BUILD_DIR="$(mktemp -d "${RUNNER_TEMP}/freyja-backend-build.XXXXXX")"
+          uv build --out-dir "$BUILD_DIR"
+
+  frontend:
+    name: Frontend quality controls
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.17.0"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies (npm ci)
+        working-directory: frontend
+        run: npm ci
+
+      - name: Prettier format check
+        working-directory: frontend
+        run: npm run format:check
+
+      - name: ESLint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: TypeScript type-check
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Unit tests (non-interactive)
+        working-directory: frontend
+        run: npm run test:ci
+
+      - name: Production build
+        working-directory: frontend
+        run: npm run build
