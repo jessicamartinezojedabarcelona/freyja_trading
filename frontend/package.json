@@ -7,7 +7,11 @@
     "build": "ng build",
     "watch": "ng build --watch --configuration development",
     "test": "ng test",
-    "lint": "ng lint"
+    "lint": "ng lint",
+    "format:check": "prettier --check --end-of-line auto \"src/**/*.{ts,html,scss}\" \"angular.json\" \"package.json\" \"tsconfig.json\" \"tsconfig.app.json\" \"tsconfig.spec.json\" \"eslint.config.js\" \".prettierrc\"",
+    "typecheck": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.spec.json --noEmit",
+    "test:ci": "ng test --watch=false",
+    "quality": "npm run format:check && npm run lint && npm run typecheck && npm run test:ci && npm run build"
   },
   "private": true,
   "packageManager": "npm@11.13.0",
