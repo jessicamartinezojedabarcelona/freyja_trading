@@ -119,3 +119,27 @@ docker compose down
 
 No se debe ejecutar `docker compose down -v`: eliminaría el volumen de
 datos persistente.
+
+## Backend — Persistencia y migraciones (Alembic)
+
+Requiere que PostgreSQL local (ver sección anterior) esté `healthy`. Todos
+los comandos se ejecutan desde `backend/`. Las credenciales se leen del
+`.env` de la raíz del repositorio y nunca se versionan. SQLite no está
+soportado en ningún caso.
+
+```bash
+uv sync
+uv run alembic current
+uv run alembic heads
+uv run alembic upgrade head
+```
+
+`uv run alembic downgrade base` es un comando de verificación/desarrollo
+para comprobar la reversibilidad de la cadena de migraciones; no es una
+operación rutinaria y no debe ejecutarse sobre datos valiosos.
+
+Para ejecutar los tests de integración (requieren PostgreSQL real):
+
+```bash
+uv run pytest tests/integration
+```
