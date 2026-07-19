@@ -143,3 +143,57 @@ Para ejecutar los tests de integración (requieren PostgreSQL real):
 ```bash
 uv run pytest tests/integration
 ```
+
+## Controles de calidad
+
+Existe una única entrada reproducible y multiplataforma (Windows y Linux)
+para ejecutar todos los controles locales de calidad, desde la raíz del
+repositorio:
+
+```bash
+uv run --python 3.12 scripts/quality.py
+uv run --python 3.12 scripts/quality.py --backend
+uv run --python 3.12 scripts/quality.py --frontend
+```
+
+Sin argumentos equivale a `--backend` + `--frontend`. Los tres modos son
+mutuamente excluyentes.
+
+El modo completo (o `--backend`) requiere que PostgreSQL local esté
+`healthy` (ver sección de PostgreSQL más arriba); los tests de backend usan
+PostgreSQL real, nunca SQLite ni mocks. El orquestador no inicia, detiene ni
+recrea Docker: solo valida la configuración (`docker compose config
+--quiet`) y comprueba de forma segura que el servicio esté disponible. No
+utiliza auto-fix ni modifica archivos. Cada control se detiene ante el
+primer error y propaga su código de salida.
+
+`F0-CI-001` reutilizará posteriormente estos mismos controles como base de
+la integración continua; todavía no existe CI en este repositorio.
+
+### Backend manual
+
+Desde `backend/`:
+
+```bash
+uv sync --locked
+uv run ruff format --check .
+uv run ruff check .
+uv run mypy src tests
+uv run pytest
+uv run alembic heads
+uv run alembic current
+uv build
+```
+
+### Frontend manual
+
+Desde `frontend/`:
+
+```bash
+npm ci
+npm run format:check
+npm run lint
+npm run typecheck
+npm run test:ci
+npm run build
+```
