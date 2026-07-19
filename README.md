@@ -73,7 +73,48 @@ de forma individual.
 
 ## Entorno ejecutable
 
-Todavía no existe un entorno ejecutable. No hay backend, frontend ni
-base de datos implementados, por lo que no existen comandos de
-instalación o arranque en este momento. Dichos comandos se documentarán
-en tareas futuras, una vez los componentes correspondientes existan.
+Todavía no existe una aplicación funcional completa. Existen scaffolds
+mínimos de backend y frontend, sin capacidades funcionales, autenticación
+ni dominio de trading implementados. Adicionalmente, está disponible la
+base de datos PostgreSQL local mediante Docker Compose, descrita a
+continuación. El resto de comandos de instalación o arranque se
+documentará en tareas futuras, una vez los componentes correspondientes
+existan.
+
+## Desarrollo local — PostgreSQL
+
+Este repositorio incluye una configuración de Docker Compose v2 para
+levantar una instancia local de PostgreSQL 18.4, exclusivamente para
+desarrollo. No incluye ningún otro servicio (sin Adminer, sin pgAdmin).
+
+### Requisitos
+
+- Docker Engine y Docker Compose v2 (`docker compose`).
+
+### Configuración
+
+1. Copia `.env.example` a `.env`.
+2. Completa `POSTGRES_DB`, `POSTGRES_USER` y `POSTGRES_PORT`, y define
+   `POSTGRES_PASSWORD` con una contraseña local robusta. Sin este valor,
+   Docker Compose falla al iniciar (configuración fail-closed).
+3. `.env` está ignorado por Git; nunca debe versionarse ni compartirse.
+
+### Arranque
+
+```bash
+docker compose up -d
+docker compose ps
+```
+
+El servicio expone PostgreSQL únicamente en
+`127.0.0.1:${POSTGRES_PORT:-5432}`. Los datos persisten en un volumen
+Docker nombrado; no se utilizan bind mounts para los datos.
+
+### Detener
+
+```bash
+docker compose down
+```
+
+No se debe ejecutar `docker compose down -v`: eliminaría el volumen de
+datos persistente.
