@@ -197,3 +197,23 @@ npm run typecheck
 npm run test:ci
 npm run build
 ```
+
+## Integración continua (GitHub Actions)
+
+`.github/workflows/ci.yml` ejecuta los controles de calidad de backend y
+frontend como dos jobs independientes, activados en Pull Requests contra
+`main` y en cada push a `main`. Cada job ejecuta las mismas categorías de
+controles que el orquestador local: instalación desde lockfile,
+format-check, lint, type-check, tests y build; el backend valida además la
+cadena de migraciones de Alembic de forma estricta (fail-closed).
+
+El backend usa un contenedor de servicio PostgreSQL 18.4 efímero, exclusivo
+de cada ejecución de CI, con credenciales deterministas y no sensibles
+generadas solo para ese contenedor. La CI no depende del `.env` local: no
+se crea, copia, lee ni publica ningún `.env` en ningún paso del workflow.
+
+Para reproducir localmente todos los controles equivalentes:
+
+```bash
+uv run --python 3.12 scripts/quality.py
+```
