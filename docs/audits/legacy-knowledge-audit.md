@@ -11,22 +11,26 @@
 
 Esta auditoría revisa el repositorio previo de Freyja (`<LEGACY_ROOT>`, en adelante `LEGACY-SRC-01`) como fuente de conocimiento, sin copiar código, sin ejecutar nada y sin modificar ese repositorio.
 
-**Recuento exacto de cobertura (verificado matemáticamente, ver §17):**
+**Recuento exacto de cobertura (verificado matemáticamente, ver §17). Actualizado tras el cierre de `LEGACY-AUDIT-L01` (Gobierno, ADR, postmortems y seguridad — 13 archivos):**
 
 | Estado | Archivos | % del total |
 |---|---|---|
-| `REVIEWED_FULL` (lectura completa) | 25 | 8,7% |
+| `REVIEWED_FULL` (lectura completa) | 38 | 13,2% |
 | `REVIEWED_PARTIAL` (lectura parcial) | 3 | 1,0% |
 | `MANIFEST_ONLY` (solo vía manifiesto de cuarentena legacy, sin lectura directa del archivo) | 48 | 16,7% |
-| `NAME_ONLY` (solo existencia registrada por nombre/ruta, sin contenido leído) | 212 | 73,6% |
+| `NAME_ONLY` (solo existencia registrada por nombre/ruta, sin contenido leído) | 199 | 69,1% |
 | `EXCLUDED` (excluido explícitamente) | 0 | 0% |
 | **Total rastreado en `HEAD`** | **288** | **100%** |
 
-Es decir: **el 91,3% de los 288 archivos versionados no fue leído directamente.** De ese 91,3%, casi dos tercios (212 de 288) no tienen ninguna evidencia más allá de su nombre y ruta.
+Es decir: **el 85,8% de los 288 archivos versionados sigue sin haber sido leído directamente** (era 91,3% antes de L01). De ese 85,8%, la gran mayoría (199 de 288) sigue sin ninguna evidencia más allá de su nombre y ruta.
 
-Los **54 hallazgos** de la matriz de trazabilidad (§5) son, en consecuencia, **preliminares**. Se derivan de: 25 archivos leídos íntegramente (mayoritariamente documentación — README/ARQUITECTURA/ROADMAP/MANUAL_USUARIO, ADR, postmortems, tickets, y el prototipo de persistencia `freyja2/*`), 3 archivos leídos parcialmente, y — para una parte no menor de los hallazgos sobre código de dominio — la clasificación que el propio proyecto anterior hizo de sí mismo en `legacy-trading-manifest.json`. Ese manifiesto es una **fuente secundaria producida por el proyecto que se audita**, no una validación independiente; sus afirmaciones se han tratado en esta versión como lo que son — documentación del propio legacy, sujeta a contraste — y no como hechos verificados por esta auditoría.
+Los **65 hallazgos** de la matriz de trazabilidad (§5) son, en consecuencia, **preliminares** en su mayor parte — con la excepción de los 13 archivos de L01, cuyo contenido ya fue leído íntegro y cuyos hallazgos asociados quedan con `Estado de revisión = VERIFICADO` directo. Se derivan de: 38 archivos leídos íntegramente (documentación, ADR, postmortems, tickets, el prototipo de persistencia `freyja2/*`, y ahora los 13 archivos de gobierno/seguridad de L01), 3 archivos leídos parcialmente, y — para una parte no menor de los hallazgos sobre código de dominio aún no auditado — la clasificación que el propio proyecto anterior hizo de sí mismo en `legacy-trading-manifest.json`. Ese manifiesto es una **fuente secundaria producida por el proyecto que se audita**, no una validación independiente; sus afirmaciones se han tratado en esta versión como lo que son — documentación del propio legacy, sujeta a contraste — y no como hechos verificados por esta auditoría.
 
-Los totales de clasificación (**22 candidatos REUSE, 7 candidatos REWRITE, 19 REFERENCE, 6 REJECT**) corresponden **únicamente al subconjunto de 28 archivos con evidencia examinada** (25 completos + 3 parciales), más un número limitado de afirmaciones basadas en el manifiesto legacy. **No pueden interpretarse como cobertura completa del proyecto legacy**, ni como conclusión definitiva sobre qué del legacy es o no reutilizable: quedan **260 archivos** (48 `MANIFEST_ONLY` + 212 `NAME_ONLY`) sin evidencia directa, agrupados en un plan de 10 lotes (§15) para revisión posterior.
+Los totales de clasificación (**29 candidatos REUSE, 6 candidatos REWRITE, 22 REFERENCE, 8 REJECT** — verificados por recuento directo sobre la matriz, no estimados) corresponden **únicamente al subconjunto de 41 archivos con evidencia examinada** (38 completos + 3 parciales), más un número limitado de afirmaciones basadas en el manifiesto legacy. **No pueden interpretarse como cobertura completa del proyecto legacy**, ni como conclusión definitiva sobre qué del legacy es o no reutilizable: quedan **247 archivos** (48 `MANIFEST_ONLY` + 199 `NAME_ONLY`) sin evidencia directa. `L01` (13 archivos, Gobierno/ADR/postmortems/seguridad) queda **completado**; `L02` (Dominio, persistencia y catálogo POINT1, 14 archivos) es el siguiente lote pendiente, siguiendo el orden ya aprobado (§15).
+
+**Nota sobre el recuento histórico de clasificación:** el recuento preliminar anterior a L01 (`22/7/19/6`) contenía una imprecisión heredada de la corrección estructural previa y no había sido verificado por conteo directo sobre la matriz. El recuento real de los 54 hallazgos originales (verificado ahora por patrón exacto) es **27 REUSE CANDIDATE / 6 REWRITE CANDIDATE / 15 REFERENCE / 6 REJECT**. Los 11 hallazgos nuevos de L01 (LEGACY-AUDIT-055 a 065) aportan **+2/+0/+7/+2**, produciendo el total actual verificado: **29/6/22/8 = 65**. Esta imprecisión no fue causada por L01 ni es una reclasificación de hallazgos existentes — es una corrección de un error de recuento preexistente, detectada al verificar la matriz por patrón exacto durante esta tarea.
+
+**Hallazgo de mayor severidad de este lote:** `backend/app/models/user.py` declara columnas textuales (`binance_api_key`/`binance_api_secret`/`whatsapp_apikey`) capaces de almacenar credenciales, y el modelo no fuerza cifrado en la capa ORM — contradice directamente el mecanismo de cifrado Fernet (`broker_crypto.py`, también en L01) descrito por la documentación. **La protección efectiva antes de persistirlas y su vigencia dentro del flujo real permanecen PENDIENTES DE VALIDACIÓN** hasta revisar los flujos de escritura y lectura en Lote 5/Lote 7 — ver LEGACY-AUDIT-060 y §12.
 
 Ningún hallazgo REUSE/REWRITE debe interpretarse como autorización para copiar código: son, en el mejor de los casos, **candidatos** a reimplementar, pendientes de validación contra el código real en el lote correspondiente. Ninguna sección de este documento crea, modifica ni reordena el roadmap maestro.
 
@@ -110,13 +114,13 @@ Leyenda de `Estado de revisión`:
 | LEGACY-AUDIT-018 | `backend/tests/architecture/test_architecture_freyja2_legacy_quarantine.py`, `test_architecture_legacy_signal_generation_disabled.py` | Test | Patrón de "Architecture Tests" (invariantes fail-closed verificados con `pytest` contra AST real y BD real). Confirmado solo en los primeros fragmentos de 2 de 26 archivos `test_architecture_*.py` del directorio (recuento exacto y disjunto en el Lote 9F, ver §15); los 24 restantes son `NAME_ONLY`. | REUSE CANDIDATE | PARCIAL | El patrón parece sólido en los 2 archivos vistos; no generalizable automáticamente a los 24 restantes sin leerlos (Lote 9F). | (metodología de testing — sin ID exacto en la lista provista) | Baja |
 | LEGACY-AUDIT-019 | `docs/testing/frontend-testing-roadmap.md` | Documentación | Plan de infraestructura de tests frontend por fases. **Inconsistencia verificada directamente por esta auditoría:** el documento afirma "cero archivos `*.test.ts(x)`", pero `git ls-tree` del mismo commit muestra 14 archivos `*.test.tsx`/`*.test.ts` reales y `vitest.config.ts`. | REUSE CANDIDATE (el método de priorización por fases, no el estado "qué existe" que describe) | VERIFICADO (tanto el contenido del documento como la discrepancia con `git ls-tree`, ambos confirmados directamente) | El documento está desactualizado; no usar su sección "qué NO existe" sin verificación adicional (Lote 8E). | ROADMAP GAP → `FRONTEND-TEST-001`, **preliminar, no confirmado** (ver §10) | Media |
 | LEGACY-AUDIT-020 | `README.md` (§"Tests") | Documentación | El README declara 175 tests legacy cubriendo ciertas áreas. Ninguno de los archivos de test reales (62 en `backend/tests/*.py` + `freyja2/`, 28 en `architecture/`) fue contado o verificado independientemente — la cifra "175" es una afirmación del propio README, no un recuento propio. | REFERENCE | PENDIENTE DE VALIDACIÓN | La cifra "175" no ha sido verificada; podría estar desactualizada igual que LEGACY-AUDIT-019. | POINT1-TEST | Baja |
-| LEGACY-AUDIT-021 | `ARQUITECTURA.md` (§"Seguridad de logs") | Seguridad/Ops | ARQUITECTURA.md describe el patrón `safe_log_exc`. El archivo real `backend/app/utils/safe_log.py` es `NAME_ONLY`. | REUSE CANDIDATE | PENDIENTE DE VALIDACIÓN | Riesgo de que la implementación real difiera de la descripción. | PLATFORM-OPS-DESIGN-001 | Baja |
-| LEGACY-AUDIT-022 | `README.md`, `ARQUITECTURA.md` (§"Auditoría") | Seguridad/Ops | Documentación describe tablas de auditoría append-only con patrón ATTEMPT→SUCCESS/FAILED. Los modelos reales (`broker_audit_log.py`, `trade_audit_log.py`) son `NAME_ONLY`. | REUSE CANDIDATE | PENDIENTE DE VALIDACIÓN | Ídem. | SECURITY-BROKER-DESIGN-001 | Baja |
-| LEGACY-AUDIT-023 | `ARQUITECTURA.md` (§"Seguridad de claves de broker") | Seguridad/Ops | Documentación describe cifrado Fernet AES-128. `backend/app/utils/broker_crypto.py` es `NAME_ONLY`. | REUSE CANDIDATE | PENDIENTE DE VALIDACIÓN | Ídem; además, riesgo de que la clave de cifrado se gestione de forma insegura en el código real, no visible desde la documentación. | SECURITY-BROKER-DESIGN-001 | Baja |
+| LEGACY-AUDIT-021 | `backend/app/utils/safe_log.py` (leído íntegro en L01; antes `ARQUITECTURA.md` §"Seguridad de logs") | Seguridad/Ops | `safe_log_exc()` nunca registra `str(exc)`, solo `type(exc).__name__` + un `context` filtrado. El filtrado es una lista de denegación **exacta de 13 nombres de clave** (`api_key`, `secret`, `password`, `token`, etc.) aplicada solo a las claves de primer nivel del dict `context` — no inspecciona valores ni estructuras anidadas, así que una clave con nombre distinto (variante, typo) que contenga un secreto no sería redactada. No captura traceback (`exc_info` no se activa). | REUSE CANDIDATE | VERIFICADO (código leído íntegro) | Es una defensa parcial y bien intencionada, no una garantía de seguridad: depende de que cada `caller` nombre sus claves correctamente; no escanea contenido. Ver LEGACY-AUDIT-064. | PLATFORM-OPS-DESIGN-001 | Alta (estructura) / Media (cobertura real, dado el mecanismo exacto-por-nombre) |
+| LEGACY-AUDIT-022 | `backend/app/models/broker_audit_log.py`, `backend/app/models/trade_audit_log.py` (leídos íntegros en L01) | Seguridad/Ops | Dos tablas append-only por convención (docstring: "nunca se borran"/"nunca se permite DELETE ni UPDATE desde endpoints"), sin restricción de escritura a nivel de BD/ORM en estos archivos (ninguna revocación de permisos, ningún trigger). `broker_connection_id`/`broker_account_id` son `Integer` sin `ForeignKey` real — decisión deliberada para que la fila de auditoría sobreviva aunque se borre la conexión referenciada. `trade_audit_log.py` documenta explícitamente qué NO contiene (API keys, secrets, passphrases, balance, email, nombre). Timestamps `DateTime(timezone=True)` con `server_default=func.now()` (generados por BD, no por la app). | REUSE CANDIDATE | VERIFICADO (código leído íntegro) | La inmutabilidad es una promesa de convención/docstring, no una restricción técnica exigible en estos dos archivos; sin política de retención/borrado visible aquí — relevante para `COMPLIANCE-PRIVACY-DESIGN-001` (primera evidencia legacy real en el área "Privacidad", antes sin evidencia). Ver LEGACY-AUDIT-059. | SECURITY-BROKER-DESIGN-001 | Alta |
+| LEGACY-AUDIT-023 | `backend/app/utils/broker_crypto.py` (leído íntegro en L01; antes `ARQUITECTURA.md` §"Seguridad de claves de broker") | Seguridad/Ops | Confirmado: Fernet (AES-128-CBC + HMAC-SHA256, autenticado) para cifrar/descifrar credenciales de broker. Clave única desde `settings.BROKER_ENCRYPTION_KEY` (env, nunca hardcodeada). Fail-closed explícito: si la clave no está configurada, `_get_fernet()` lanza `RuntimeError` en vez de guardar en claro. Incluye `mask_key()` para mostrar solo los primeros/últimos 4 caracteres en frontend. **Sin mecanismo de rotación ni versionado de clave** — una única clave global para todas las credenciales de todos los usuarios. **Contradicción material detectada:** `backend/app/models/user.py` (también L01) declara `binance_api_key`/`binance_api_secret` como columnas de texto plano, sin evidencia en ese archivo de que pasen por `encrypt_secret()` — ver LEGACY-AUDIT-060. | REUSE CANDIDATE | VERIFICADO (código leído íntegro) | El diseño del propio módulo es sólido (autenticado, fail-closed); el riesgo real está en si `user.py` lo evita — sin resolver hasta Lote 5 (`broker_connection.py`). Clave única global sin rotación: compromiso de esa clave expone todas las credenciales de broker del sistema a la vez. | SECURITY-BROKER-DESIGN-001 | Alta (módulo) / Baja (garantía end-to-end, por la contradicción con `user.py`) |
 | LEGACY-AUDIT-024 | `ARQUITECTURA.md` (§"Arquitectura multi-broker") | Seguridad/Ops | Documentación describe `BrokerCapabilities` y `BrokerFactory`. `backend/app/services/brokers/base.py` y `factory.py` son `NAME_ONLY`. | REUSE CANDIDATE | PENDIENTE DE VALIDACIÓN | Ídem. | SECURITY-BROKER-DESIGN-001 | Baja |
 | LEGACY-AUDIT-025 | `README.md`, `MANUAL_USUARIO.md` (§7) | Seguridad/Ops | Documentación describe rechazo automático de API Keys con permisos de retirada. El código que lo implementaría (endpoint de test-connection, `backend/app/main.py`, `MANIFEST_ONLY` solo a nivel de endpoint) no fue leído directamente. **Corrección respecto a la versión anterior:** no puede afirmarse "validado en producción real" — es una afirmación de la documentación del proyecto anterior sobre sí mismo, no verificada por esta auditoría (ver §14, reclasificación de afirmaciones). | REUSE CANDIDATE | PENDIENTE DE VALIDACIÓN | Riesgo de que el comportamiento real difiera de lo documentado — precisamente el tipo de riesgo de seguridad que no debe darse por sentado. | SECURITY-BROKER-DESIGN-001 | Baja |
 | LEGACY-AUDIT-026 | `backend/app/services/brokers/{binance,coinbase,kraken,bybit}_adapter.py` | Algoritmo | Implementaciones concretas de adaptadores por exchange sobre `ccxt`. **Corrección respecto a la versión anterior:** el documento previo afirmaba que "el manifiesto legacy las clasifica REVIEW_BEFORE_REUSE" — esto es **incorrecto**; se ha verificado ahora, releyendo el manifiesto completo, que estos 4 archivos **no aparecen en absoluto** en `legacy-trading-manifest.json`. Son `NAME_ONLY`, no `MANIFEST_ONLY`. Se retracta la cita anterior al manifiesto. | REWRITE CANDIDATE | PENDIENTE DE VALIDACIÓN | Sin ninguna evidencia directa ni siquiera documental sobre el contenido real de estos 4 archivos — el nivel de confianza más bajo de toda la matriz. | SECURITY-BROKER-DESIGN-001 | Baja |
-| LEGACY-AUDIT-027 | `ARQUITECTURA.md` (§"Deuda técnica") | Lección aprendida | ARQUITECTURA.md lista `/auth/login` sin protección de fuerza bruta como deuda técnica conocida. **Corrección de lenguaje:** no puede afirmarse que esta brecha "nunca se cerró en la vida del proyecto" — solo que, a la fecha de este documento (el commit auditado), seguía listada como pendiente; esta auditoría no revisó el historial de commits posteriores ni el código real (`backend/app/utils/auth.py` es `NAME_ONLY`). | REFERENCE | VERIFICADO (que el documento lo lista así, a fecha del documento); INFERENCIA (que "nunca se cerró") | Vector de ataque conocido si se repite sin verificar si de verdad sigue abierto. | F0-AUTH-BACKEND-001 | Media |
+| LEGACY-AUDIT-027 | `ARQUITECTURA.md` (§"Deuda técnica"); `backend/app/utils/auth.py` (leído íntegro en L01) | Lección aprendida | ARQUITECTURA.md lista `/auth/login` sin protección de fuerza bruta como deuda técnica conocida. **Confirmado ahora por código, no solo por documento:** `backend/app/utils/auth.py` (hashing, tokens, `get_current_user`) no contiene ningún contador de intentos fallidos, bloqueo temporal ni retardo — dentro de ese módulo, la ausencia de protección de fuerza bruta es un hecho observado, no una inferencia. Sigue siendo inferencia que la brecha "nunca se cerró en la vida del proyecto": esta auditoría no revisó el historial de commits posteriores, y una protección a nivel de endpoint (`main.py`, fuera de L01) o de infraestructura no puede descartarse sin leerlo. | REFERENCE | VERIFICADO (que `auth.py`, a este commit, no implementa la protección — hecho de código); INFERENCIA (que "nunca se cerró" en ningún otro lugar ni en commits posteriores) | Vector de ataque conocido si se repite sin verificar si de verdad sigue abierto en Freyja 2.0. | F0-AUTH-BACKEND-001 | Alta (para `auth.py` en este commit) / Media (para la ausencia total en el sistema) |
 | LEGACY-AUDIT-028 | `ARQUITECTURA.md` (§"Seguridad general") | Seguridad/Ops | ARQUITECTURA.md documenta `CORS: allow_origins=["*"]` con la nota "cerrar en producción". Mismo matiz que LEGACY-AUDIT-027: no verificado si se cerró después de la fecha del documento. | REJECT | VERIFICADO (la nota del documento); INFERENCIA (que nunca se cerró) | No usar wildcard de CORS en ningún entorno con datos reales, independientemente de si legacy lo cerró o no. | F0-AUTH-BACKEND-001 | Media |
 | LEGACY-AUDIT-029 | `backend/LEGACY_TRADING.md` | Lección aprendida | Documento describe, con cifras concretas, un incidente de purga de datos de producción sin backup externo. | REFERENCE | VERIFICADO (el documento lo declara con cifras específicas); no verificado contra ningún registro externo al propio documento | Crítico: ninguna estrategia de backup/recuperación existía antes de este incidente, según el propio documento. | PLATFORM-OPS-DESIGN-001 | Alta (como afirmación documental) |
 | LEGACY-AUDIT-030 | `docs/postmortems/P0-3-strategy-metrics.md` | Lección aprendida | El postmortem describe, citando un hash de commit concreto (`843e28e`), que dos motores de cierre de trade coexistieron y que unificar uno rompió silenciosamente la actualización de métricas. | REJECT (duplicar motores) / REFERENCE (la lección) | VERIFICADO (el postmortem lo describe con detalle técnico verificable internamente, incluyendo el hash) | Repetir dos implementaciones "canónicas" simultáneas de la misma responsabilidad. | PLATFORM-OPS-DESIGN-001 | Alta |
@@ -135,7 +139,7 @@ Leyenda de `Estado de revisión`:
 | LEGACY-AUDIT-043 | `MANUAL_USUARIO.md` (§1) | Producto/UX | Manual describe onboarding con selección de perfil en lenguaje humano. `frontend/src/pages/Onboarding.tsx` es `NAME_ONLY`. | REUSE CANDIDATE | PENDIENTE DE VALIDACIÓN | Riesgo de que la UI real no coincida con la descripción del manual. | PRODUCT-ONBOARDING-DESIGN-001 | Baja |
 | LEGACY-AUDIT-044 | `ARQUITECTURA.md` (§"Frontend"), `README.md` | Producto/UX | Documentación describe "Modo Fácil"/"Modo Experto" como superficies alternadas por `ModeContext`. El archivo/mecanismo exacto (`context/`) es `NAME_ONLY` — no se ha confirmado el nombre exacto del archivo ni su implementación. | REJECT | VERIFICADO (la descripción textual); PENDIENTE DE VALIDACIÓN (el archivo/mecanismo exacto) | Contradice el principio vigente de `CLAUDE.md` §4 si la descripción documental es exacta. | UX-IA-001 | Media |
 | LEGACY-AUDIT-045 | `docs/testing/frontend-testing-roadmap.md` | Lección aprendida | El propio roadmap de testing legacy señala `EasyMode.tsx` (894 líneas) como riesgo de mantenibilidad. | REFERENCE | VERIFICADO (el roadmap lo declara); el tamaño real del archivo no fue confirmado de forma independiente | Antipatrón de componentización; **discrepancia detectada:** `EasyMode.tsx` no aparece en el listado de 288 archivos de este commit, lo que sugiere que el roadmap de testing describe un estado del proyecto anterior a este commit, o un archivo renombrado/eliminado. Ver §12. | UX-MODULES-001 | Media |
-| LEGACY-AUDIT-046 | `README.md` (§"Auditoría"), `ARQUITECTURA.md` | Seguridad/Ops | Documentación describe JWT con auditoría de sesión. `backend/app/utils/auth.py`, `backend/app/models/user.py` son `NAME_ONLY`. | REUSE CANDIDATE | PENDIENTE DE VALIDACIÓN | Ninguno en el concepto. | F0-AUTH-DESIGN-001 | Baja |
+| LEGACY-AUDIT-046 | `backend/app/utils/auth.py`, `backend/app/models/user.py` (ambos leídos íntegros en L01; antes `README.md`/`ARQUITECTURA.md`) | Seguridad/Ops | Confirmado: JWT (HS256, vía `python-jose`) con claims mínimos (`sub`+`exp` únicamente, sin email/roles embebidos). Hashing de contraseña con `passlib` + `bcrypt`. `get_current_user` falla cerrado ante token inválido o `user.is_active=False`, con mensaje de error genérico (sin filtrar si el fallo es de email o de contraseña). Expiración configurable (`ACCESS_TOKEN_EXPIRE_MINUTES`, 10080 min/7 días en `.env.example`). **No se observa un mecanismo de revocación o blacklist dentro de `auth.py`** — un JWT robado permanece válido hasta su expiración natural dentro de ese módulo; la protección efectiva del sistema permanece PENDIENTE DE VALIDACIÓN hasta revisar endpoints, middleware y tests en Lote 7/Lote 9C/Lote 9D. Auditoría de sesión real: `LOGIN_SUCCESS`/`LOGIN_FAILED`/`LOGOUT` sí existen como valores de `AuditAction` en `broker_audit_log.py`, confirmando la tabla append-only descrita documentalmente. | REUSE CANDIDATE | VERIFICADO (código leído íntegro) | Ausencia de revocación en `auth.py` + expiración larga por defecto = ventana de exposición amplia dentro de ese módulo si un token se compromete; alcance en el resto del sistema sin confirmar. Ver LEGACY-AUDIT-062. | F0-AUTH-DESIGN-001 | Alta |
 | LEGACY-AUDIT-047 | `README.md`, `ARQUITECTURA.md` | Algoritmo | Documentación describe filtro de noticias vía scraping de ForexFactory. `backend/app/services/news/*` es `NAME_ONLY`. | REWRITE CANDIDATE | PENDIENTE DE VALIDACIÓN | Ver LEGACY-AUDIT-053. | NOTIFICATION-DESIGN-001 | Baja |
 | LEGACY-AUDIT-048 | `README.md` (§"Variables de entorno") | Algoritmo/Ops | Documentación describe notificaciones vía Discord y WhatsApp (CallMeBot). `backend/app/utils/notifications.py` es `MANIFEST_ONLY` (el manifiesto advierte que está acoplado a `strategy_registry` y necesita desacoplarse antes de reutilizarse). | REWRITE CANDIDATE | BASADO EN MANIFIESTO | Ver LEGACY-AUDIT-054. | NOTIFICATION-DESIGN-001 | Baja |
 | LEGACY-AUDIT-049 | `ARQUITECTURA.md` (§"Deuda técnica"); manifiesto | Producto/IA | El manifiesto cita textualmente el docstring de `strategy_discoverer.py`, que se autodeclara "SKELETON" sin implementación real. | REFERENCE | BASADO EN MANIFIESTO (que a su vez cita el docstring real del archivo — evidencia indirecta pero de razonable calidad) | Ninguno; es una aspiración sin implementación. | AI-LLM-EVALUATION-001 | Media |
@@ -144,6 +148,17 @@ Leyenda de `Estado de revisión`:
 | LEGACY-AUDIT-052 | `ARQUITECTURA.md` (§"Deuda técnica") | Algoritmo/UX | Documentación declara el WebSocket de posiciones como polling de 5s, no tiempo real verdadero. | REWRITE CANDIDATE | VERIFICADO (declaración del propio documento) | Ninguno; es una capacidad pendiente según la fuente. | UX-DASHBOARD-001 | Media |
 | LEGACY-AUDIT-053 | `README.md`, `ARQUITECTURA.md` (filtro de noticias) | Seguridad/Ops | Documentación describe scraping no oficial de ForexFactory. `backend/app/services/news/provider.py` es `NAME_ONLY` — no se confirmó el mecanismo real, solo la descripción documental. | REJECT | VERIFICADO (la descripción documental); PENDIENTE DE VALIDACIÓN (el código real) | Riesgo legal/ToS y de fragilidad técnica, según lo descrito. | NOTIFICATION-DESIGN-001 | Media |
 | LEGACY-AUDIT-054 | `README.md` (notificaciones WhatsApp) | Seguridad/Ops | Documentación describe CallMeBot como transporte de WhatsApp. | REJECT | VERIFICADO (la descripción documental) | Riesgo de disponibilidad/ToS, según lo descrito. | NOTIFICATION-DESIGN-001 | Media |
+| LEGACY-AUDIT-055 | `.claude/launch.json` | Seguridad/Ops | Configuración de lanzamiento local para frontend (`npm run dev`, comando reproducible) y backend (ejecutable de un entorno virtual referenciado por una ruta absoluta específica de la máquina/usuario de desarrollo original — no reproducida aquí por ser una ruta personal). No contiene secretos ni argumentos sensibles. | REJECT | VERIFICADO (código leído íntegro) | Ninguno de seguridad; el archivo no es reutilizable tal cual por depender de una ruta de máquina concreta — cualquier equivalente en Freyja 2.0 debe usar comandos relativos/portables, no rutas absolutas de intérprete. | (sin tarea vigente específica — configuración de desarrollo local, no roadmap) | Alta |
+| LEGACY-AUDIT-056 | `.github/workflows/backend-ci.yml`, `.github/workflows/frontend-ci.yml` | Seguridad/Ops | Dos workflows separados, disparados por `paths:` (solo cuando cambia `backend/**`/`frontend/**`), a diferencia del workflow único de Freyja 2.0 que siempre ejecuta ambos jobs. Acciones referenciadas por **tag flotante** (`@v7`, `@v5`, `@v6`), no por SHA — a diferencia de la CI vigente de Freyja 2.0, que sí fija SHA de 40 caracteres. Permisos mínimos (`contents: read`) en ambos. Sin `continue-on-error`, sin `\|\| true`, sin pasos que silencien fallos. Sin `pull_request_target`. Credenciales de Postgres de test explícitamente comentadas como no-reales y efímeras (mismo patrón que la CI actual de Freyja 2.0). Backend instala con `pip install -r requirements.txt` (sin lockfile); frontend usa `npm ci` (determinista, mismo patrón que Freyja 2.0). | REFERENCE | VERIFICADO (código leído íntegro; contrastado explícitamente contra `.github/workflows/ci.yml` vigente de Freyja 2.0) | Ninguno directo — es evidencia de que la decisión ya tomada en `F0-CI-001` (SHA-pinning) mejora sobre la práctica legacy, no un patrón a heredar. El particionado por `paths:` es una idea de eficiencia de CI, no una necesidad de seguridad. | PLATFORM-OPS-DESIGN-001 | Alta |
+| LEGACY-AUDIT-057 | `.gitignore` | Documentación | Excluye correctamente secretos (`.env`, `*.secret`, `*.pem`, `*.key`), bases de datos (`*.db`, `*.sqlite*`), entornos virtuales, `node_modules/`, cachés y logs. Sin excepciones (`!patrón`) que reintroduzcan algo excluido. No oculta código fuente ni nada que debiera auditarse. | REFERENCE | VERIFICADO (código leído íntegro) | Ninguno; higiene de repositorio sólida y sin patrones peligrosos. | PLATFORM-OPS-DESIGN-001 | Alta |
+| LEGACY-AUDIT-058 | `backend/.env.example` | Seguridad/Ops | Todos los valores son placeholders o están vacíos (`SECRET_KEY=cambia-esto-...`, `ANTHROPIC_API_KEY=`, `BROKER_ENCRYPTION_KEY=`) — ningún secreto real. Distingue lo obligatorio para trading real (`BROKER_ENCRYPTION_KEY`, con advertencia "NUNCA subir este valor") de lo opcional. **Contradicción con LEGACY-AUDIT-041 detectada:** este archivo declara `ANTHROPIC_API_KEY` y `FREYJA_MODEL=claude-haiku-4-5-20251001` para "Voz de Freyja" — un modo con LLM de pago — mientras que ARQUITECTURA.md/MANUAL_USUARIO.md (fuente de LEGACY-AUDIT-041) describen ese motor como "rule-based, sin LLM". Ambas cosas pueden ser ciertas si es un modo opcional no documentado en los textos leídos, pero no puede darse por sentado que el motor sea siempre sin LLM. Inconsistencia interna menor: el comentario dice que `/docs` está "cerrado por defecto (ver config.py)" pero el valor literal es `ENABLE_API_DOCS=true`. Sin variables de CORS ni de base de datos distinta de SQLite. | REFERENCE | VERIFICADO (código leído íntegro; valores no reproducidos, solo estructura) | Ninguno de exposición (sin secretos reales); riesgo documental — no asumir "sin LLM" como universalmente cierto para el motor de voz sin contrastar el código real (`freyja_voice.py`, Lote 3). | AI-LLM-EVALUATION-001 | Media |
+| LEGACY-AUDIT-059 | `backend/app/models/broker_audit_log.py`, `backend/app/models/trade_audit_log.py` | Contrato/Dominio | Patrón deliberado: `broker_connection_id`/`broker_account_id`/`signal_id`/`trade_id` se guardan como `Integer` simple, **sin `ForeignKey`**, para que la fila de auditoría sobreviva aunque la entidad referenciada se borre — prioriza integridad del rastro de auditoría sobre integridad referencial estricta. | REUSE CANDIDATE | VERIFICADO (código leído íntegro) | Ninguno; es un patrón de diseño deliberado y documentado en el propio código. | SECURITY-BROKER-DESIGN-001 | Alta |
+| LEGACY-AUDIT-060 | `backend/app/models/user.py` | Seguridad/Ops | **Hallazgo crítico:** el modelo `User` declara `binance_api_key`, `binance_api_secret` y `whatsapp_apikey` como columnas `String` de texto plano (`Column(String(200), nullable=True)`), sin ninguna referencia a `encrypt_secret()`/`broker_crypto.py` en este archivo. Contradice directamente el mecanismo de cifrado Fernet descrito por la documentación y confirmado en `broker_crypto.py` (LEGACY-AUDIT-023). No se puede determinar desde L01 si estas columnas son una ruta legacy/muerta ya sustituida por un modelo `BrokerConnection` cifrado separado (mencionado en ARQUITECTURA.md, archivo real `backend/app/models/broker_connection.py`, `NAME_ONLY`, asignado al Lote 5) o si conviven activamente con él. | REJECT | VERIFICADO (código leído íntegro; la resolución de "vigente vs. muerto" queda pendiente del Lote 5) | Alto: si esta ruta estuviera activa, expondría credenciales de broker en texto plano en la base de datos. No copiar este patrón bajo ninguna circunstancia. | SECURITY-BROKER-DESIGN-001 | Alta (el hecho de la columna en texto plano) / Baja (si está activa en producción, sin resolver) |
+| LEGACY-AUDIT-061 | `backend/app/schemas/auth.py` | Contrato/UX | `UserOut` (el schema de salida pública) declara explícitamente sus campos y **excluye** `hashed_password`, `binance_api_key`, `binance_api_secret` y `whatsapp_apikey` — ninguno de los campos sensibles del modelo `User` se serializa por accidente. Validación de contraseña: longitud mínima 8, sin regla de complejidad adicional. Validación de email: comprobación simple de `"@"` y `"."`, no una validación RFC completa. | REUSE CANDIDATE | VERIFICADO (código leído íntegro) | Ninguno; patrón de schema de salida explícito y seguro. La ausencia de reglas de complejidad de contraseña es una decisión de producto a tomar deliberadamente en `F0-AUTH-BACKEND-001`, no un defecto en sí. | F0-AUTH-DESIGN-001 | Alta |
+| LEGACY-AUDIT-062 | `backend/app/utils/auth.py` | Seguridad/Ops | No existe ningún mecanismo de revocación o lista negra de tokens JWT en este módulo — un token robado permanece válido hasta su expiración natural (por defecto 7 días, según `.env.example`). Tampoco hay `jti`/nonce de un solo uso. | REFERENCE | VERIFICADO (ausencia confirmada por lectura íntegra del módulo) | Ventana de exposición amplia ante un token comprometido; decisión de diseño a tomar explícitamente en `F0-AUTH-BACKEND-001`/`SAFETY-CONTROL-DESIGN-001` (revocación, tokens de corta duración + refresh, o ambos). | F0-AUTH-BACKEND-001 | Alta |
+| LEGACY-AUDIT-063 | `backend/app/utils/broker_crypto.py` | Seguridad/Ops | Sin mecanismo de rotación ni versionado de `BROKER_ENCRYPTION_KEY` — una única clave global cifra las credenciales de broker de todos los usuarios; no hay campo de versión de clave ni ruta de re-cifrado gradual. | REFERENCE | VERIFICADO (ausencia confirmada por lectura íntegra del módulo) | Si la clave global se compromete o necesita rotarse, no existe un mecanismo incremental — habría que re-cifrar todo de una vez. Relevante para `SECURITY-BROKER-DESIGN-001`. | SECURITY-BROKER-DESIGN-001 | Alta |
+| LEGACY-AUDIT-064 | `backend/app/utils/safe_log.py` | Seguridad/Ops | La redacción de `safe_log_exc()` compara claves de `context` contra una lista fija de 13 nombres exactos (`k.lower() in _FORBIDDEN_CONTEXT_KEYS`) — no es un escaneo de contenido ni cubre variantes de nombre, claves anidadas, o el propio mensaje de la excepción (que de todas formas nunca se registra, por diseño). No presenta esto como prueba de seguridad completa: es una defensa de primera capa, dependiente de que cada `caller` nombre correctamente sus claves. | REFERENCE | VERIFICADO (código leído íntegro) | Falso negativo posible si un `caller` usa un nombre de clave no listado para un valor sensible, o anida el valor sensible dentro de otra estructura. | PLATFORM-OPS-DESIGN-001 | Alta |
+| LEGACY-AUDIT-065 | `backend/docs/tickets/be-bug-004-session-audit.md` | Lección aprendida | Continuación de la investigación de LEGACY-AUDIT-003/017: tras el fix de dimensionado de pool (PR #61, sesiones cortas en 3 bucles de fondo), producción seguía agotando el pool — la causa real, según esta auditoría posterior con metodología explícita (16 llamadas a `SessionLocal()` + 30 endpoints con `Depends(get_db)`), es que `get_current_user`/`get_db` mantienen la sesión abierta **durante todo el request**, y varios endpoints REST (`GET /freyja/status`, `GET /freyja/briefing` sobre todo, de alta frecuencia por polling del Dashboard) hacen llamadas síncronas lentas (CCXT, LLM) mientras la conexión sigue retenida. El propio `get_current_user` (`utils/auth.py`, L01) documenta y evita deliberadamente este problema para sí mismo. El ticket instrumentó el pool de forma segura (`pool_instrumentation.py`, solo IDs anónimos y metadatos, nunca SQL/tokens/URLs) pero **no aplicó ninguna corrección todavía** — es diagnóstico, no remediación. | REFERENCE | VERIFICADO (código leído íntegro; el ticket documenta su propia metodología con detalle verificable internamente) | Ninguno directo; lección arquitectónica de que el dimensionado de pool (LEGACY-AUDIT-003/017) fue necesario pero no suficiente — la causa raíz real era el acoplamiento entre sesión de BD y llamadas de red síncronas. | PLATFORM-DATA-DESIGN-001 | Alta |
 
 ---
 
@@ -155,7 +170,11 @@ Los cinco grupos siguientes son los de mayor interés aparente, **todos pendient
 
 **LEGACY-AUDIT-012/013/014 — Catálogo canónico `freyja2_*`.** VERIFICADO/PARCIAL — el único bloque de "código de producción" leído directamente en su totalidad (excepto la mayor parte de los datos literales de la migración de siembra). Es, junto con LEGACY-AUDIT-004, el candidato con mayor base de evidencia real. Tarea destino: `POINT1-DB`, `POINT1-SEED`. Pendiente: leer completa la migración de siembra (Lote 2) y los 12 tests de `freyja2/` (Lote 9E) antes de promover a definitivo.
 
-**LEGACY-AUDIT-021/022/023/024/025 — Paquete de seguridad de brokers.** Todos **PENDIENTE DE VALIDACIÓN** — ninguno de los archivos de código subyacentes (`safe_log.py`, modelos de auditoría, `broker_crypto.py`, `brokers/base.py`, `brokers/factory.py`) fue leído. La evidencia es exclusivamente prosa de `ARQUITECTURA.md`/`README.md`/`MANUAL_USUARIO.md`. **No puede afirmarse, como hacía la versión anterior de este documento, que la regla de rechazo de permisos de retirada "ya fue validada en producción real"** — eso es una afirmación de la propia documentación legacy sobre sí misma, no verificada por esta auditoría (ver §14). Tarea destino: `SECURITY-BROKER-DESIGN-001`. Requiere Lote 1 (seguridad) y Lote 5 (brokers) antes de cualquier promoción.
+**LEGACY-AUDIT-021/022/023 — Paquete de seguridad de brokers (actualizado tras L01).** Los tres, hoy **VERIFICADO** por lectura íntegra de `safe_log.py`, `broker_audit_log.py`/`trade_audit_log.py` y `broker_crypto.py`. La clasificación se mantiene `REUSE CANDIDATE` (no se promueve a definitivo solo por leer el código, conforme a la regla explícita de esta corrección) porque ninguno se ha ejecutado ni probado, y porque `broker_crypto.py` en particular queda condicionado a resolver la contradicción con `user.py` (LEGACY-AUDIT-060) en el Lote 5. **LEGACY-AUDIT-024/025 siguen PENDIENTE DE VALIDACIÓN** — sus archivos de evidencia (`brokers/base.py`, `brokers/factory.py`, `backend/app/main.py`) no forman parte de L01 y requieren el Lote 5/7. Tarea destino: `SECURITY-BROKER-DESIGN-001`. L01 (seguridad) completado; requiere Lote 5 (brokers) para cerrar por completo.
+
+**LEGACY-AUDIT-046 — Autenticación JWT + hashing (actualizado tras L01).** VERIFICADO por lectura íntegra de `auth.py`/`user.py`: bcrypt para contraseñas, JWT HS256 con claims mínimos, fallo cerrado en `get_current_user`. Sigue como `REUSE CANDIDATE` porque no se ejecutó ni probó, y porque no se observa mecanismo de revocación de tokens dentro de `auth.py` (LEGACY-AUDIT-062; protección efectiva del sistema sin resolver). Tarea destino: `F0-AUTH-DESIGN-001`.
+
+**LEGACY-AUDIT-059/061 — Patrones nuevos de L01 (integridad de auditoría sin FK; schema de salida sin campos sensibles).** Ambos VERIFICADO por lectura íntegra. Son los candidatos de menor riesgo de todo L01: patrones de diseño defensivo ya demostrados en el propio código, sin dependencia de piezas no leídas. Tarea destino: `SECURITY-BROKER-DESIGN-001` (059), `F0-AUTH-DESIGN-001` (061).
 
 **LEGACY-AUDIT-036/037/038/039/040 — Controles de seguridad de ejecución.** Mayormente **BASADO EN MANIFIESTO** o **PENDIENTE DE VALIDACIÓN**; solo LEGACY-AUDIT-038/040 tienen algo más de solidez por describir flujo de producto/UX documentado explícitamente, no comportamiento de backend. Tarea destino: `SAFETY-CONTROL-DESIGN-001`. Requiere Lote 5 (riesgo/brokers) y Lote 4 (señales) antes de promoción.
 
@@ -165,7 +184,7 @@ Los cinco grupos siguientes son los de mayor interés aparente, **todos pendient
 
 ## 7. Candidatos REWRITE (preliminares)
 
-**LEGACY-AUDIT-026 — Adaptadores concretos de broker.** **Confianza más baja de todo el documento.** Se retracta expresamente la afirmación de la versión anterior de que "el manifiesto los clasifica REVIEW_BEFORE_REUSE" — verificado ahora que estos 4 archivos no aparecen en el manifiesto en absoluto. No hay ninguna evidencia, ni siquiera documental indirecta, sobre su contenido real. Tarea destino: `SECURITY-BROKER-DESIGN-001`. Requiere Lote 5 íntegro antes de cualquier afirmación sobre estos archivos.
+**LEGACY-AUDIT-026 — Adaptadores concretos de broker.** Se retracta expresamente la afirmación de la versión anterior de que "el manifiesto los clasifica REVIEW_BEFORE_REUSE" — verificado ahora que estos 4 archivos no aparecen en el manifiesto en absoluto. No hay ninguna evidencia, ni siquiera documental indirecta, sobre su contenido real. Tarea destino: `SECURITY-BROKER-DESIGN-001`. Requiere Lote 5 íntegro antes de cualquier afirmación sobre estos archivos — el Lote 5 debe además resolver si `broker_connection.py` (también Lote 5) es la ruta cifrada real que sustituye a las columnas en claro de `user.py` (LEGACY-AUDIT-060, la nueva confianza más baja/crítica del documento).
 
 **LEGACY-AUDIT-047 / LEGACY-AUDIT-053 — Filtro de noticias.** PENDIENTE DE VALIDACIÓN / VERIFICADO (documental). La capacidad de producto (filtrar por noticias) está descrita consistentemente; la técnica concreta (scraping) también, y se rechaza como técnica (§9) independientemente de si se valida el código. Tarea destino: `NOTIFICATION-DESIGN-001`. Requiere Lote 3.
 
@@ -196,6 +215,13 @@ Se mantiene la clasificación de la versión anterior; se añade aquí la distin
 - **LEGACY-AUDIT-035** — Pregunta de position sizing abierta. VERIFICADO (el postmortem la declara explícitamente abierta).
 - **LEGACY-AUDIT-045** — Componente monolítico `EasyMode.tsx`. VERIFICADO que el roadmap de testing lo señala; **discrepancia sin resolver:** ese archivo no aparece en el listado de 288 rutas de este commit — ver §12.
 - **LEGACY-AUDIT-049** — Skeleton de descubrimiento por ML. BASADO EN MANIFIESTO (que cita el docstring real del archivo).
+- **LEGACY-AUDIT-056** — Workflows de CI legacy con tags flotantes (no SHA-pinned). VERIFICADO por lectura íntegra; confirma que la decisión de SHA-pinning de `F0-CI-001` mejora sobre la práctica legacy.
+- **LEGACY-AUDIT-057** — `.gitignore` legacy con higiene sólida. VERIFICADO.
+- **LEGACY-AUDIT-058** — Contradicción entre `.env.example` (expone `ANTHROPIC_API_KEY` para "Voz de Freyja") y la documentación ("motor rule-based, sin LLM"). VERIFICADO el contenido del archivo; no resuelto cuál de las dos descripciones es la vigente sin leer `freyja_voice.py` (Lote 3).
+- **LEGACY-AUDIT-062** — Ausencia de revocación de tokens JWT. VERIFICADO por lectura íntegra de `auth.py`.
+- **LEGACY-AUDIT-063** — Ausencia de rotación de `BROKER_ENCRYPTION_KEY`. VERIFICADO por lectura íntegra de `broker_crypto.py`.
+- **LEGACY-AUDIT-064** — Limitación estructural de `safe_log_exc()` (denylist exacta, no escaneo de contenido). VERIFICADO por lectura íntegra.
+- **LEGACY-AUDIT-065** — Causa raíz profunda del agotamiento de pool (sesión retenida durante llamadas de red síncronas), continuación de LEGACY-AUDIT-003/017. VERIFICADO por lectura íntegra del ticket de seguimiento.
 
 ---
 
@@ -211,6 +237,8 @@ Se mantiene la tabla de la versión anterior; se ajusta la columna de evidencia 
 | LEGACY-AUDIT-044 — "Modo Fácil"/"Modo Experto" como productos separados | Dos experiencias de producto conmutadas por toggle, en vez de una única profundidad adaptativa. | Fragmentación de producto. | `CLAUDE.md` §4. | VERIFICADO (descripción documental); PENDIENTE DE VALIDACIÓN (archivo/mecanismo exacto — ver nota en la matriz) | No replicar el patrón de dos páginas/toggle. |
 | LEGACY-AUDIT-053 — Scraping no oficial de ForexFactory | Sin acuerdo ni API documentada. | Riesgo legal/ToS; fragilidad técnica. | Buen juicio de proveedor/dependencia. | VERIFICADO (descripción documental); PENDIENTE DE VALIDACIÓN (código real, `NAME_ONLY`) | No replicar la técnica. |
 | LEGACY-AUDIT-054 — CallMeBot como transporte WhatsApp | API no oficial de terceros. | Riesgo de disponibilidad/ToS. | Buen juicio de proveedor/dependencia. | VERIFICADO (descripción documental) | No replicar la técnica. |
+| LEGACY-AUDIT-055 — `.claude/launch.json` con ruta absoluta de máquina personal | Configuración de lanzamiento no portable, atada a una ruta de intérprete específica de un equipo de desarrollo concreto. | Ninguno de seguridad; riesgo de confusión/no-reproducibilidad si se copiara tal cual. | Buen juicio de portabilidad; ruta personal no reproducida en este documento. | VERIFICADO (código leído íntegro) | No copiar la ruta; cualquier configuración de lanzamiento local en Freyja 2.0 debe usar comandos relativos/portables. |
+| LEGACY-AUDIT-060 — Columnas textuales para credenciales sin cifrado forzado por la capa ORM en `user.py`; uso y protección efectiva pendientes de validación | Columnas de credenciales de broker/terceros sin cifrado visible en el modelo, contradiciendo el mecanismo Fernet de `broker_crypto.py`. **VERIFICADO:** existen columnas textuales (`binance_api_key`/`binance_api_secret`/`whatsapp_apikey`) y el modelo no impone cifrado. **PENDIENTE:** flujo real de escritura, cifrado antes de persistir, lectura y vigencia (activa vs. muerta) — no demostrado desde L01. | Alto (potencial): exposición de credenciales de broker en claro en la base de datos, únicamente si esta ruta resultara estar activa y sin cifrado en el flujo real — no confirmado. | `CLAUDE.md` §5 (seguridad tiene prioridad sobre velocidad; nunca credenciales de broker sin protección adecuada). El REJECT se aplica al patrón de persistencia sin garantía estructural de cifrado, no a una afirmación de almacenamiento en claro ya demostrada. | VERIFICADO (columnas textuales y ausencia de cifrado forzado en el modelo, código leído íntegro); PENDIENTE DE VALIDACIÓN (flujo de escritura/lectura real, cifrado efectivo, vigencia — Lote 5/Lote 7). | No replicar el patrón de persistencia sin garantía estructural de cifrado bajo ninguna circunstancia; confirmar en Lote 5/Lote 7 el flujo real antes de afirmar exposición efectiva. |
 
 ---
 
@@ -231,7 +259,7 @@ Reemplaza la tabla cualitativa de la versión anterior. Cada archivo de los 288 
 | Área | Archivos | Íntegros | Parciales | Solo manifiesto/nombre | Excluidos | Cobertura |
 |---|---|---|---|---|---|---|
 | Documentación y ADR | 10 | 10 | 0 | 0 | 0 | Completa |
-| Gobierno/cutover/postmortems | 10 | 9 | 0 | 1 | 0 | Casi completa |
+| Gobierno/cutover/postmortems | 10 | 10 | 0 | 0 | 0 | Completa |
 | Dominio | 8 | 0 | 0 | 8 | 0 | Inventariada, no revisada |
 | Persistencia y migraciones | 7 | 2 | 0 | 5 | 0 | Parcial |
 | Catálogo/POINT1 | 6 | 4 | 1 | 1 | 0 | Mayormente completa |
@@ -242,7 +270,7 @@ Reemplaza la tabla cualitativa de la versión anterior. Cada archivo de los 288 
 | Brokers y ejecución | 10 | 0 | 0 | 10 | 0 | Inventariada, no revisada |
 | Riesgo | 4 | 0 | 0 | 4 | 0 | Inventariada, no revisada (manifiesto) |
 | Backtesting | 2 | 0 | 0 | 2 | 0 | Inventariada, no revisada (manifiesto) |
-| Autenticación y seguridad | 12 | 0 | 0 | 12 | 0 | Inventariada, no revisada |
+| Autenticación y seguridad | 12 | 12 | 0 | 0 | 0 | Completa |
 | Operación/observabilidad | 18 | 0 | 0 | 18 | 0 | Inventariada, no revisada (1 archivo con evidencia de manifiesto a nivel de endpoint) |
 | Frontend/UX | 69 | 0 | 0 | 69 | 0 | Inventariada, no revisada (17 con ficha de manifiesto) |
 | Noticias/notificaciones | 6 | 0 | 0 | 6 | 0 | Inventariada, no revisada (1 con ficha de manifiesto) |
@@ -251,9 +279,9 @@ Reemplaza la tabla cualitativa de la versión anterior. Cada archivo de los 288 
 | Tests backend (flat + `freyja2/`) | 62 | 0 | 0 | 62 | 0 | No revisada |
 | Tests frontend | 14 | 0 | 0 | 14 | 0 | No revisada |
 | Architecture tests | 28 | 0 | 2 | 26 | 0 | Mínima (2 de 28) |
-| **Total** | **288** | **25** | **3** | **260** | **0** | — |
+| **Total** | **288** | **38** | **3** | **247** | **0** | — |
 
-**Nota de honestidad explícita:** "Inventariada, no revisada" significa que se conoce la existencia y ruta del archivo, no su contenido. No debe leerse como "sin necesidad" ni como evidencia de que el área carece de conocimiento legacy útil — significa exactamente lo contrario: que el conocimiento, si existe, todavía no se ha extraído. Privacidad y Comunidad (áreas cualitativas de la versión anterior) no tienen archivos identificables como propios dentro de los 288 — se mantienen como "sin evidencia legacy" y se listan en §12, no en esta tabla cuantitativa.
+**Nota de honestidad explícita:** "Inventariada, no revisada" significa que se conoce la existencia y ruta del archivo, no su contenido. No debe leerse como "sin necesidad" ni como evidencia de que el área carece de conocimiento legacy útil — significa exactamente lo contrario: que el conocimiento, si existe, todavía no se ha extraído. Privacidad y Comunidad (áreas cualitativas de la versión anterior) no tienen archivos identificables como propios dentro de los 288 — se mantienen como "sin evidencia legacy" y se listan en §12, no en esta tabla cuantitativa. **Actualización tras L01:** los modelos de auditoría (`broker_audit_log.py`, `trade_audit_log.py`) aportan la primera evidencia legacy real relacionada con Privacidad (ausencia de política de retención/borrado visible) — sigue sin existir una fila cuantitativa propia para Privacidad, pero ya no es cierto que el área carezca por completo de evidencia; ver LEGACY-AUDIT-022 y §12.
 
 ---
 
@@ -261,21 +289,28 @@ Reemplaza la tabla cualitativa de la versión anterior. Cada archivo de los 288 
 
 **Críticos**
 - Ninguna estrategia de backup/recuperación existía en el proyecto anterior antes del incidente de purga de datos (LEGACY-AUDIT-029, VERIFICADO como afirmación documental). Freyja 2.0 debe decidir su estrategia de backup de PostgreSQL antes de acumular cualquier dato de valor.
-- **91,3% de los archivos legacy no revisados.** Ninguna decisión de arquitectura de Freyja 2.0 debería citar esta auditoría como "conocimiento legacy agotado" hasta cerrar, al menos, los Lotes que cubran las áreas relevantes a esa decisión.
+- **85,8% de los archivos legacy siguen sin revisar** (era 91,3% antes de L01). Ninguna decisión de arquitectura de Freyja 2.0 debería citar esta auditoría como "conocimiento legacy agotado" hasta cerrar, al menos, los Lotes que cubran las áreas relevantes a esa decisión.
+- **Nuevo, crítico (L01):** `backend/app/models/user.py` almacena `binance_api_key`/`binance_api_secret`/`whatsapp_apikey` en columnas de texto plano (LEGACY-AUDIT-060), contradiciendo el cifrado Fernet confirmado en `broker_crypto.py` (LEGACY-AUDIT-023). Si esta ruta estuviera activa en el sistema legacy real, expondría credenciales de broker en claro en la base de datos. No se puede resolver si es código muerto o una ruta activa sin leer `broker_connection.py` (Lote 5) — se eleva a crítico precisamente porque su estado es desconocido, no porque se haya confirmado que está en uso.
 
 **Altos**
-- `/auth/login` sin protección de fuerza bruta era una brecha conocida a la fecha del commit auditado (LEGACY-AUDIT-027) — pero esta auditoría **no puede confirmar** si seguía abierta en commits posteriores del legacy, ni si el código correspondiente (`NAME_ONLY`) implementaba alguna mitigación no documentada.
+- `/auth/login` sin protección de fuerza bruta era una brecha conocida a la fecha del commit auditado (LEGACY-AUDIT-027) — **ahora confirmado por código** que `backend/app/utils/auth.py` no la implementa en ese módulo; sigue sin poder confirmarse si existe en `main.py` (fuera de L01) o en infraestructura.
 - **LEGACY-AUDIT-026 corregido:** los adaptadores concretos de broker no tienen ninguna evidencia, ni siquiera del manifiesto (se retracta la cita incorrecta de la versión anterior). Deben tratarse como completamente desconocidos hasta el Lote 5.
-- Privacidad, comunidad y (en gran medida) backtesting **no tienen evidencia legacy** en absoluto dentro de lo revisado — no se debe inferir que el legacy "no tenía nada" en estas áreas; simplemente no se ha buscado con suficiente profundidad.
+- **Nuevo (L01):** no se observa un mecanismo de revocación o blacklist dentro de `auth.py` (LEGACY-AUDIT-062), combinado con expiración larga por defecto (7 días) — ventana de exposición amplia dentro de ese módulo ante un token robado. La protección efectiva del sistema permanece PENDIENTE DE VALIDACIÓN hasta revisar endpoints, middleware y tests en Lote 7/Lote 9C/Lote 9D — no se afirma que todo el sistema legacy carezca de revocación. Decisión de diseño pendiente para `F0-AUTH-BACKEND-001`.
+- **Nuevo (L01):** `broker_crypto.py` no soporta rotación ni versionado de la clave global de cifrado (LEGACY-AUDIT-063) — un único punto de fallo para todas las credenciales de broker del sistema.
+- Comunidad y (en gran medida) backtesting **no tienen evidencia legacy** en absoluto dentro de lo revisado — no se debe inferir que el legacy "no tenía nada" en estas áreas; simplemente no se ha buscado con suficiente profundidad. Privacidad ya cuenta con evidencia parcial tras L01 (ver §11).
 
 **Medios**
-- **Discrepancia sin resolver (nueva en esta corrección):** LEGACY-AUDIT-045 cita `EasyMode.tsx` como un componente de 894 líneas mencionado por el roadmap de testing legacy, pero ese archivo **no aparece** en el listado de 288 rutas del commit `44192410e70975a5f156db81f711e56bee63376b` que esta auditoría audita. Dos explicaciones posibles, ninguna confirmada: (a) el roadmap de testing describe un estado anterior del proyecto y el archivo fue renombrado o eliminado antes de este commit; (b) un error de transcripción en la auditoría original. Debe resolverse en el Lote 8B antes de dar por buena cualquier afirmación sobre `EasyMode.tsx`.
+- **Discrepancia sin resolver (nueva en la corrección anterior):** LEGACY-AUDIT-045 cita `EasyMode.tsx` como un componente de 894 líneas mencionado por el roadmap de testing legacy, pero ese archivo **no aparece** en el listado de 288 rutas del commit `44192410e70975a5f156db81f711e56bee63376b` que esta auditoría audita. Dos explicaciones posibles, ninguna confirmada: (a) el roadmap de testing describe un estado anterior del proyecto y el archivo fue renombrado o eliminado antes de este commit; (b) un error de transcripción en la auditoría original. Debe resolverse en el Lote 8B antes de dar por buena cualquier afirmación sobre `EasyMode.tsx`.
+- **Nueva discrepancia sin resolver (L01):** `backend/.env.example` expone `ANTHROPIC_API_KEY`/`FREYJA_MODEL` para "Voz de Freyja" (LEGACY-AUDIT-058), mientras que la documentación (LEGACY-AUDIT-041) describe ese motor como "rule-based, sin LLM". No se puede afirmar cuál describe el comportamiento real sin leer `freyja_voice.py` (Lote 3).
+- **Nuevo (L01):** la redacción de `safe_log_exc()` es una lista de denegación exacta por nombre de clave, no un escaneo de contenido (LEGACY-AUDIT-064) — riesgo de falso negativo si un `caller` usa un nombre de clave no previsto.
 - Varios hallazgos de dominio de alto valor (LEGACY-AUDIT-006, 007, 008, 033, 050, 051) quedan formalmente **PENDIENTE DE MAPEO — requiere contrastar contratos vigentes de POINT2–POINT15**, no asignados a un ID inventado, porque el encargo de esta auditoría no detalló el contenido de esos puntos del roadmap. Se resuelve en el Lote 10. **Se solicita al Arquitecto** indicar a qué punto exacto corresponden, o confirmar que aún no existe un punto asignado para ellos.
 - Deriva de contrato entre canales (LEGACY-AUDIT-034) ya ocurrió una vez en legacy — recomienda una única fuente de verdad tipada desde el principio en `POINT1-API`.
+- **Nueva lección (L01):** el fix de dimensionado de pool (LEGACY-AUDIT-003/017) fue necesario pero no suficiente — la causa raíz real, según LEGACY-AUDIT-065, era el acoplamiento entre sesión de BD y llamadas de red síncronas en varios endpoints REST. Relevante para el diseño de sesión/pool de `PLATFORM-DATA-DESIGN-001` en Freyja 2.0.
 
 **Bajos**
 - El origen del capital para el cálculo de tamaño de posición (LEGACY-AUDIT-035) quedó como pregunta abierta en legacy.
 - `docs/testing/frontend-testing-roadmap.md` (LEGACY-AUDIT-019) está desactualizado respecto al estado real del mismo commit — no citarlo como estado vigente sin verificación adicional (Lote 8E).
+- `.claude/launch.json` legacy (LEGACY-AUDIT-055) no es reutilizable tal cual por depender de una ruta de máquina personal — sin impacto más allá de portabilidad.
 
 ---
 
@@ -285,11 +320,12 @@ Sin cambios de fondo respecto a la versión anterior, salvo que ahora cada recom
 
 - `POINT1-DOMAIN`: consultar LEGACY-AUDIT-004/005 (VERIFICADO) — no requiere esperar a un lote, ya que la evidencia es documental completa.
 - `POINT1-DB`/`POINT1-SEED`: consultar LEGACY-AUDIT-012/013/014, pero **cerrar primero el Lote 2** (completar la lectura de la migración de siembra y los 12 tests de `freyja2/`) antes de tratar el patrón como validado.
-- `SECURITY-BROKER-DESIGN-001`: **no actuar sobre LEGACY-AUDIT-021 a 026 hasta cerrar los Lotes 1 y 5** — toda la evidencia actual es documental o inexistente (026), nunca de código.
+- `SECURITY-BROKER-DESIGN-001`: **L01 completado** para LEGACY-AUDIT-021/022/023 (VERIFICADO por código); **no actuar sobre LEGACY-AUDIT-024/025/026/060 hasta cerrar el Lote 5** — en particular, `broker_connection.py` (Lote 5) debe resolver la contradicción de LEGACY-AUDIT-060 antes de diseñar el almacenamiento de credenciales de Freyja 2.0.
 - `SAFETY-CONTROL-DESIGN-001`: **no actuar sobre LEGACY-AUDIT-036 a 040 hasta cerrar el Lote 5**; decidir explícitamente la pregunta abierta de LEGACY-AUDIT-035.
-- `FREYJA-VOICE-DESIGN-001`: LEGACY-AUDIT-042 (vocabulario) puede consultarse ya (VERIFICADO); LEGACY-AUDIT-041 (motor) espera al Lote 3.
-- `F0-AUTH-BACKEND-001`: revisar LEGACY-AUDIT-027/028 **con la salvedad explícita** de que "nunca se cerró" es una inferencia, no un hecho — confirmar contra el Lote 1 y el Lote 9C (test de rate limiting, `test_be_sec_003_rate_limit_and_docs.py`, hoy `NAME_ONLY`).
-- `PLATFORM-OPS-DESIGN-001`: incorporar una estrategia de backup motivada por LEGACY-AUDIT-029; no requiere esperar a un lote (la evidencia documental ya es suficiente para motivar la decisión, aunque no para copiar ningún mecanismo legacy concreto).
+- `FREYJA-VOICE-DESIGN-001`: LEGACY-AUDIT-042 (vocabulario) puede consultarse ya (VERIFICADO); LEGACY-AUDIT-041 (motor) espera al Lote 3 para resolver la contradicción con LEGACY-AUDIT-058 (`.env.example` con clave de Anthropic).
+- `F0-AUTH-BACKEND-001`: **L01 completado** — LEGACY-AUDIT-027 confirmado por código (`auth.py`, este commit, sin protección de fuerza bruta); LEGACY-AUDIT-046 confirmado (JWT+bcrypt); LEGACY-AUDIT-062 (sin revocación de tokens) es una decisión de diseño a tomar explícitamente. Confirmar aún contra el Lote 9C (`test_be_sec_003_rate_limit_and_docs.py`) y el Lote 7 (`main.py`, por si la protección vive ahí).
+- `PLATFORM-OPS-DESIGN-001`: incorporar una estrategia de backup motivada por LEGACY-AUDIT-029; no requiere esperar a un lote. **Nuevo tras L01:** incorporar también la lección de LEGACY-AUDIT-065 (no acoplar sesiones de BD a llamadas de red síncronas).
+- `PLATFORM-DATA-DESIGN-001`: **nuevo tras L01** — diseñar explícitamente el patrón de sesión corta para dependencias de solo-autenticación (como hace `get_current_user` en `auth.py`, LEGACY-AUDIT-046/065), evitando repetir el patrón que causó el agotamiento de pool documentado en LEGACY-AUDIT-003/017/065.
 - `NOTIFICATION-DESIGN-001`: decidir proveedores con acuerdo/API oficial; esperar al Lote 3 para el resto de detalles.
 - `FRONTEND-TEST-001` (gap preliminar): decidir con el Arquitecto solo después de cerrar los sublotes 8A–8E, especialmente 8E.
 
@@ -313,43 +349,43 @@ Requerido explícitamente por la corrección del Arquitecto. Se listan las afirm
 
 ## 15. Plan de auditoría restante (Lotes 1–10)
 
-Cubre exactamente los **260 archivos** sin evidencia directa (48 `MANIFEST_ONLY` + 212 `NAME_ONLY`), sin solapamientos, verificado matemáticamente (§17, contra el apéndice completo de §19). Los 25 `REVIEWED_FULL` + 3 `REVIEWED_PARTIAL` no se reasignan a ningún lote, salvo una advertencia puntual en los Lotes 2 y 9F para *completar* (no repetir) las 3 lecturas parciales.
+Cubría originalmente los **260 archivos** sin evidencia directa (48 `MANIFEST_ONLY` + 212 `NAME_ONLY`). Tras el cierre de `LEGACY-AUDIT-L01` (13 archivos, todos promovidos a `REVIEWED_FULL`), quedan **247 archivos pendientes** (48 `MANIFEST_ONLY` + 199 `NAME_ONLY`), sin solapamientos, verificado matemáticamente (§17, contra el apéndice completo de §19). Los 38 `REVIEWED_FULL` + 3 `REVIEWED_PARTIAL` no se reasignan a ningún lote, salvo una advertencia puntual en los Lotes 2 y 9F para *completar* (no repetir) las 3 lecturas parciales restantes.
 
-**Corrección estructural respecto a la versión anterior:** los Lotes 8 y 9 (83 y 88 archivos) se han subdividido en sublotes de máximo 25 archivos cada uno, por ser demasiado grandes para una sola ejecución.
+**Corrección estructural de la versión anterior (mantenida):** los Lotes 8 y 9 (83 y 88 archivos) están subdivididos en sublotes de máximo 25 archivos cada uno.
 
-| Lote | Archivos | Tema |
-|---|---|---|
-| 1 | 13 | Gobierno, ADR, postmortems y seguridad (infraestructura de seguridad no cubierta por los documentos ya leídos) |
-| 2 | 14 | Dominio, persistencia y catálogo POINT1 |
-| 3 | 10 | Proveedores, datos, noticias y notificaciones |
-| 4 | 15 | Señales, estrategias, indicadores y ciclo de vida |
-| 5 | 15 | Brokers, ejecución y riesgo |
-| 6 | 4 | Backtesting, evaluación cuantitativa y ML |
-| 7 | 18 | Backend API, autenticación y operación |
-| 8A | 21 | Frontend — configuración, entrada, routing y shell |
-| 8B | 12 | Frontend — páginas y navegación |
-| 8C | 23 | Frontend — componentes de dominio y dashboard |
-| 8D | 13 | Frontend — servicios, hooks y contratos frontend |
-| 8E | 14 | Frontend — tests frontend y reconciliación de `FRONTEND-TEST-001` |
-| 9A | 18 | Tests de dominio y modelos |
-| 9B | 14 | Tests de servicios, estrategias e indicadores |
-| 9C | 13 | Tests de brokers, ejecución y seguridad |
-| 9D | 6 | Tests de API e integración |
-| 9E | 12 | Tests `freyja2` |
-| 9F | 25 | Architecture tests y reconciliación de invariantes |
-| 10 | 0 (síntesis) | Reconciliación final y mapeo POINT2–POINT15 |
-| **Total** | **260** | — |
+| Lote | Archivos | Tema | Estado |
+|---|---|---|---|
+| 1 | 13 | Gobierno, ADR, postmortems y seguridad | ✅ **COMPLETADO** |
+| 2 | 14 | Dominio, persistencia y catálogo POINT1 | ⏭️ **Siguiente lote** |
+| 3 | 10 | Proveedores, datos, noticias y notificaciones | Pendiente |
+| 4 | 15 | Señales, estrategias, indicadores y ciclo de vida | Pendiente |
+| 5 | 15 | Brokers, ejecución y riesgo | Pendiente |
+| 6 | 4 | Backtesting, evaluación cuantitativa y ML | Pendiente |
+| 7 | 18 | Backend API, autenticación y operación | Pendiente |
+| 8A | 21 | Frontend — configuración, entrada, routing y shell | Pendiente |
+| 8B | 12 | Frontend — páginas y navegación | Pendiente |
+| 8C | 23 | Frontend — componentes de dominio y dashboard | Pendiente |
+| 8D | 13 | Frontend — servicios, hooks y contratos frontend | Pendiente |
+| 8E | 14 | Frontend — tests frontend y reconciliación de `FRONTEND-TEST-001` | Pendiente |
+| 9A | 18 | Tests de dominio y modelos | Pendiente |
+| 9B | 14 | Tests de servicios, estrategias e indicadores | Pendiente |
+| 9C | 13 | Tests de brokers, ejecución y seguridad | Pendiente |
+| 9D | 6 | Tests de API e integración | Pendiente |
+| 9E | 12 | Tests `freyja2` | Pendiente |
+| 9F | 25 | Architecture tests y reconciliación de invariantes | Pendiente |
+| 10 | 0 (síntesis) | Reconciliación final y mapeo POINT2–POINT15 | Pendiente |
+| **Total pendiente** | **247** | — | — |
 
-Verificación de subtotales: Lotes 1–7 = 13+14+10+15+15+4+18 = **89**. Sublotes 8A–8E = 21+12+23+13+14 = **83**. Sublotes 9A–9F = 18+14+13+6+12+25 = **88**. Lote 10 = 0. `89 + 83 + 88 + 0 = 260` ✓, coincide exactamente con `MANIFEST_ONLY (48) + NAME_ONLY (212)`.
+Verificación de subtotales tras L01: Lotes 2–7 = 14+10+15+15+4+18 = **76**. Sublotes 8A–8E = 21+12+23+13+14 = **83**. Sublotes 9A–9F = 18+14+13+6+12+25 = **88**. Lote 10 = 0. `76 + 83 + 88 + 0 = 247` ✓, coincide exactamente con `MANIFEST_ONLY (48) + NAME_ONLY (199)`. El orden de lotes aprobado no se ha alterado — solo se retira el Lote 1 del conteo de pendientes por estar completado.
 
-### Lote 1 — Gobierno, ADR, postmortems y seguridad
+### Lote 1 — Gobierno, ADR, postmortems y seguridad — ✅ COMPLETADO (`LEGACY-AUDIT-L01`)
 
-- **Rutas incluidas (13):** `.claude/launch.json`, `.github/workflows/backend-ci.yml`, `.github/workflows/frontend-ci.yml`, `.gitignore`, `backend/.env.example`, `backend/app/models/broker_audit_log.py`, `backend/app/models/trade_audit_log.py`, `backend/app/models/user.py`, `backend/app/schemas/auth.py`, `backend/app/utils/auth.py`, `backend/app/utils/broker_crypto.py`, `backend/app/utils/safe_log.py`, `backend/docs/tickets/be-bug-004-session-audit.md`.
-- **Objetivo:** validar directamente (no solo por descripción documental) los mecanismos de seguridad ya citados como candidatos REUSE en LEGACY-AUDIT-021/023/025/046, y confirmar si `be-bug-004-session-audit.md` (no leído aún) añade contexto al incidente de pool.
-- **Riesgos:** puede revelar que `safe_log_exc`/`broker_crypto` no cumplen exactamente lo descrito en ARQUITECTURA.md; posible exposición de patrones inseguros que la documentación no menciona.
-- **Entregable:** confirmación o corrección de LEGACY-AUDIT-021/022/023/025/046; nuevos hallazgos si el CI legacy revela prácticas de seguridad no documentadas.
-- **Dependencias:** ninguna.
-- **Criterios de cierre:** los 13 archivos con estado `REVIEWED_FULL` o `REVIEWED_PARTIAL` justificado; cada hallazgo afectado promovido de CANDIDATE a definitivo o mantenido como candidato con motivo explícito.
+- **Rutas incluidas (13, todas `REVIEWED_FULL`):** `.claude/launch.json`, `.github/workflows/backend-ci.yml`, `.github/workflows/frontend-ci.yml`, `.gitignore`, `backend/.env.example`, `backend/app/models/broker_audit_log.py`, `backend/app/models/trade_audit_log.py`, `backend/app/models/user.py`, `backend/app/schemas/auth.py`, `backend/app/utils/auth.py`, `backend/app/utils/broker_crypto.py`, `backend/app/utils/safe_log.py`, `backend/docs/tickets/be-bug-004-session-audit.md`.
+- **Objetivo (cumplido):** se validaron directamente (no solo por descripción documental) los mecanismos de seguridad ya citados como candidatos REUSE en LEGACY-AUDIT-021/023/025/046, y `be-bug-004-session-audit.md` añadió contexto sustancial al incidente de pool (LEGACY-AUDIT-065).
+- **Resultado:** confirmados por código LEGACY-AUDIT-021/022/023/027/046 (promovidos de `PENDIENTE DE VALIDACIÓN`/documental a `VERIFICADO`, manteniendo su clasificación `CANDIDATE`, conforme a la regla de esta corrección). 11 hallazgos nuevos (LEGACY-AUDIT-055 a 065), incluido uno crítico (LEGACY-AUDIT-060 — columnas para credenciales sin garantía de cifrado en la capa ORM en `user.py`, contradiciendo el cifrado de `broker_crypto.py`; protección efectiva pendiente de Lote 5/Lote 7) cuya resolución final depende del Lote 5.
+- **Entregable:** ver tabla de transición de archivo→estado y hallazgos nuevos en el informe de cierre de esta tarea.
+- **Dependencias:** ninguna (cumplidas).
+- **Criterios de cierre (cumplidos):** los 13 archivos con estado `REVIEWED_FULL`; cada hallazgo afectado promovido a `VERIFICADO` o mantenido como candidato con motivo explícito documentado.
 
 ### Lote 2 — Dominio, persistencia y catálogo POINT1
 
@@ -572,46 +608,47 @@ Búsqueda explícita realizada sobre el contenido de este documento corregido an
 
 ## 17. Verificación matemática de cobertura
 
-Esta verificación se realiza contra el **apéndice completo de 288 filas incluido en este mismo documento (§19)**, no contra listas externas ni archivos auxiliares. El apéndice es la única fuente de verdad de qué ruta tiene qué estado y qué lote asignado; esta sección solo confirma, con comandos de solo lectura, que esa tabla es exacta.
+Esta verificación se realiza contra el **apéndice completo de 288 filas incluido en este mismo documento (§19)**, no contra listas externas ni archivos auxiliares. El apéndice es la única fuente de verdad de qué ruta tiene qué estado y qué lote asignado; esta sección solo confirma, con comandos de solo lectura, que esa tabla es exacta. **Actualizada tras el cierre de `LEGACY-AUDIT-L01`.**
 
-**Comandos de solo lectura ejecutados** (ninguno modifica el repositorio legacy ni lee contenido de archivos, solo metadatos de nombres vía `git ls-tree`, y el propio texto del apéndice de este documento):
+**Comandos de solo lectura ejecutados** (ninguno modifica el repositorio legacy ni lee contenido de archivos, solo metadatos de nombres vía `git ls-tree`, y el propio texto del apéndice/matriz de este documento):
 
-1. `git -C <ruta-legacy> ls-tree -r --name-only HEAD | wc -l` → **288**, confirma el total de archivos rastreados en el commit auditado.
+1. `git -C <ruta-legacy> ls-tree -r --name-only HEAD | wc -l` → **288**, confirma el total de archivos rastreados en el commit auditado (sin cambio respecto a antes de L01).
 2. Extracción de las 288 rutas de la primera columna del apéndice (§19) y comparación exacta (`comm -23`/`comm -13`) contra la salida del comando anterior → **sin ausencias, sin sobrantes**.
 3. Recuento de rutas del apéndice (`wc -l` sobre las filas de la tabla) → **288**, y verificación de unicidad (`sort` + `uniq -d` sobre la primera columna) → **cero duplicados**.
 4. Recuento por columna "Estado actual" del apéndice (`cut` + `sort` + `uniq -c`):
 
 ```
-REVIEWED_FULL      25
-REVIEWED_PARTIAL    3
-MANIFEST_ONLY      48
-NAME_ONLY         212
-EXCLUDED            0
+REVIEWED_FULL      38   (era 25; +13 por L01)
+REVIEWED_PARTIAL    3   (sin cambio)
+MANIFEST_ONLY      48   (sin cambio)
+NAME_ONLY         199   (era 212; −13 por L01)
+EXCLUDED            0   (sin cambio)
 ---------------------
 TOTAL             288   ✓ coincide con el punto 1
 ```
 
-5. Recuento por columna "Área" del apéndice → coincide exactamente con la tabla de §11: 10+10+8+7+6+3+9+3+4+10+4+2+12+18+69+6+1+2+62+14+28 = **288** ✓, sin solapamientos ni huecos contra el punto 2.
-6. Recuento por columna "Lote asignado" del apéndice (excluyendo las filas con `—`):
+5. Recuento por columna "Área" del apéndice → coincide exactamente con la tabla de §11 tras actualizarla: 10+10+8+7+6+3+9+3+4+10+4+2+12+18+69+6+1+2+62+14+28 = **288** ✓ (las 21 áreas no cambiaron de tamaño, solo "Autenticación y seguridad" y "Gobierno/cutover/postmortems" cambiaron de columnas internas Íntegros/Solo-manifiesto-nombre), sin solapamientos ni huecos contra el punto 2.
+6. Recuento por columna "Lote asignado" del apéndice (excluyendo las filas con `—`; el Lote 1 ya no aparece — sus 13 filas pasaron a `—`):
 
 ```
-Lote 1    13   Lote 8A   21   Lote 9A   18
-Lote 2    14   Lote 8B   12   Lote 9B   14
-Lote 3    10   Lote 8C   23   Lote 9C   13
-Lote 4    15   Lote 8D   13   Lote 9D    6
-Lote 5    15   Lote 8E   14   Lote 9E   12
-Lote 6     4                  Lote 9F   25
-Lote 7    18
+Lote 2    14   Lote 8A   21   Lote 9A   18
+Lote 3    10   Lote 8B   12   Lote 9B   14
+Lote 4    15   Lote 8C   23   Lote 9C   13
+Lote 5    15   Lote 8D   13   Lote 9D    6
+Lote 6     4   Lote 8E   14   Lote 9E   12
+Lote 7    18                  Lote 9F   25
 -------------------------------------------
-Subtotal 89   Subtotal 83   Subtotal 88
+Subtotal 76   Subtotal 83   Subtotal 88
 ```
 
-`89 + 83 + 88 = 260` ✓, coincide exactamente con `MANIFEST_ONLY (48) + NAME_ONLY (212) = 260`. Filas con lote `—` (reviewadas): **28** = `REVIEWED_FULL (25) + REVIEWED_PARTIAL (3)`. `260 + 28 + 0 (EXCLUDED) = 288` ✓.
-7. Cada sublote 8A–8E y 9A–9F verificado individualmente ≤ 25 archivos: máximo observado = 23 (8C) y 25 (9F) — ambos dentro del límite.
+`76 + 83 + 88 = 247` ✓, coincide exactamente con `MANIFEST_ONLY (48) + NAME_ONLY (199) = 247`. Filas con lote `—` (revisadas): **41** = `REVIEWED_FULL (38) + REVIEWED_PARTIAL (3)`. `247 + 41 + 0 (EXCLUDED) = 288` ✓.
+7. Cada sublote 8A–8E y 9A–9F verificado individualmente ≤ 25 archivos: máximo observado = 23 (8C) y 25 (9F) — ambos dentro del límite (sin cambio, L01 no tocó los Lotes 8/9).
+8. **Nuevo — recuento de la matriz de trazabilidad (§5):** 65 filas `LEGACY-AUDIT-NNN` (54 originales + 11 nuevas, `LEGACY-AUDIT-055` a `065`, sin huecos ni renumeración). Recuento de clasificación por patrón exacto sobre las 65 filas: `REUSE CANDIDATE` 29, `REWRITE CANDIDATE` 6, `REFERENCE` 22 (como celda de clasificación única — una fila, LEGACY-AUDIT-030, tiene clasificación compuesta `REJECT/REFERENCE` y se cuenta una sola vez, bajo REJECT), `REJECT` 8. `29 + 6 + 22 + 8 = 65` ✓.
+9. **Nuevo — verificación de que ningún archivo fuera de L01 cambió de estado o lote:** diferencia entre el apéndice actual y el previo a esta tarea, restringida a las columnas "Estado actual"/"Lote asignado" → exactamente 13 filas difieren, y las 13 son las rutas de L01 listadas en §15. Cero diferencias en cualquier otra fila.
 
-Todas las comprobaciones anteriores son reproducibles releyendo el apéndice de §19 y aplicando los mismos comandos; ninguna depende de un archivo fuera de este documento.
+Todas las comprobaciones anteriores son reproducibles releyendo el apéndice/matriz de este documento y aplicando los mismos comandos; ninguna depende de un archivo fuera de este documento ni de scripts auxiliares guardados en el repositorio.
 
-Las rutas exactas de cada estado están enumeradas en su totalidad: las de los 10 lotes en §15; las de `REVIEWED_FULL`/`REVIEWED_PARTIAL`/`MANIFEST_ONLY` como evidencia de cada hallazgo en §5 y §6–9. Dado el volumen del estado `NAME_ONLY` (212 archivos), su listado exhaustivo de rutas se mantiene en los ficheros de trabajo de esta auditoría (no reproducido íntegro en este documento por motivos de longitud) y es reconstruible en cualquier momento por diferencia exacta contra los demás estados, sin ambigüedad.
+Las rutas exactas de cada estado están enumeradas en su totalidad: las de los lotes/sublotes pendientes en §15; las de `REVIEWED_FULL`/`REVIEWED_PARTIAL`/`MANIFEST_ONLY` como evidencia de cada hallazgo en §5 y §6–9, y la totalidad exacta de las 288 en el apéndice de §19.
 
 ---
 
@@ -632,15 +669,15 @@ Cada una de las 288 rutas rastreadas en `HEAD` (`44192410e70975a5f156db81f711e56
 
 | Ruta relativa | Área | Estado actual | Lote asignado | Observación |
 |---|---|---|---|---|
-| `.claude/launch.json` | Autenticación y seguridad | NAME_ONLY | Lote 1 | — |
-| `.github/workflows/backend-ci.yml` | Autenticación y seguridad | NAME_ONLY | Lote 1 | — |
-| `.github/workflows/frontend-ci.yml` | Autenticación y seguridad | NAME_ONLY | Lote 1 | — |
-| `.gitignore` | Autenticación y seguridad | NAME_ONLY | Lote 1 | — |
+| `.claude/launch.json` | Autenticación y seguridad | REVIEWED_FULL | — | L01 — ver LEGACY-AUDIT-055 |
+| `.github/workflows/backend-ci.yml` | Autenticación y seguridad | REVIEWED_FULL | — | L01 — ver LEGACY-AUDIT-056 |
+| `.github/workflows/frontend-ci.yml` | Autenticación y seguridad | REVIEWED_FULL | — | L01 — ver LEGACY-AUDIT-056 |
+| `.gitignore` | Autenticación y seguridad | REVIEWED_FULL | — | L01 — ver LEGACY-AUDIT-057 |
 | `ARQUITECTURA.md` | Documentación y ADR | REVIEWED_FULL | — | — |
 | `MANUAL_USUARIO.md` | Documentación y ADR | REVIEWED_FULL | — | — |
 | `README.md` | Documentación y ADR | REVIEWED_FULL | — | — |
 | `ROADMAP.md` | Documentación y ADR | REVIEWED_FULL | — | — |
-| `backend/.env.example` | Autenticación y seguridad | NAME_ONLY | Lote 1 | — |
+| `backend/.env.example` | Autenticación y seguridad | REVIEWED_FULL | — | L01 — ver LEGACY-AUDIT-058 (valores no reproducidos) |
 | `backend/Dockerfile` | Operación/observabilidad | NAME_ONLY | Lote 7 | — |
 | `backend/LEGACY_TRADING.md` | Gobierno/cutover/postmortems | REVIEWED_FULL | — | — |
 | `backend/alembic.ini` | Persistencia y migraciones | NAME_ONLY | Lote 2 | — |
@@ -659,7 +696,7 @@ Cada una de las 288 rutas rastreadas en `HEAD` (`44192410e70975a5f156db81f711e56
 | `backend/app/freyja2/persistence/models.py` | Catálogo/POINT1 | REVIEWED_FULL | — | — |
 | `backend/app/main.py` | Operación/observabilidad | MANIFEST_ONLY | Lote 7 | MANIFEST_ONLY solo a nivel de 15 endpoints anotados en el manifiesto; archivo completo no leído |
 | `backend/app/models/__init__.py` | Dominio | NAME_ONLY | Lote 2 | — |
-| `backend/app/models/broker_audit_log.py` | Autenticación y seguridad | NAME_ONLY | Lote 1 | — |
+| `backend/app/models/broker_audit_log.py` | Autenticación y seguridad | REVIEWED_FULL | — | L01 — ver LEGACY-AUDIT-022/059 |
 | `backend/app/models/broker_connection.py` | Brokers y ejecución | NAME_ONLY | Lote 5 | — |
 | `backend/app/models/demo_account.py` | Operación/observabilidad | NAME_ONLY | Lote 7 | — |
 | `backend/app/models/pending_execution.py` | Ciclo de vida | MANIFEST_ONLY | Lote 2 | — |
@@ -669,11 +706,11 @@ Cada una de las 288 rutas rastreadas en `HEAD` (`44192410e70975a5f156db81f711e56
 | `backend/app/models/strategy_spec.py` | Dominio | MANIFEST_ONLY | Lote 2 | — |
 | `backend/app/models/strategy_spec_seed.py` | Dominio | MANIFEST_ONLY | Lote 2 | — |
 | `backend/app/models/trade.py` | Dominio | MANIFEST_ONLY | Lote 2 | — |
-| `backend/app/models/trade_audit_log.py` | Autenticación y seguridad | NAME_ONLY | Lote 1 | — |
-| `backend/app/models/user.py` | Autenticación y seguridad | NAME_ONLY | Lote 1 | — |
+| `backend/app/models/trade_audit_log.py` | Autenticación y seguridad | REVIEWED_FULL | — | L01 — ver LEGACY-AUDIT-022/059 |
+| `backend/app/models/user.py` | Autenticación y seguridad | REVIEWED_FULL | — | L01 — ver LEGACY-AUDIT-046/060 (crítico) |
 | `backend/app/models/user_profile.py` | Dominio | NAME_ONLY | Lote 2 | — |
 | `backend/app/schemas/__init__.py` | Operación/observabilidad | NAME_ONLY | Lote 7 | — |
-| `backend/app/schemas/auth.py` | Autenticación y seguridad | NAME_ONLY | Lote 1 | — |
+| `backend/app/schemas/auth.py` | Autenticación y seguridad | REVIEWED_FULL | — | L01 — ver LEGACY-AUDIT-061 |
 | `backend/app/schemas/broker.py` | Brokers y ejecución | NAME_ONLY | Lote 5 | — |
 | `backend/app/schemas/catalog.py` | Proveedores y datos | NAME_ONLY | Lote 7 | — |
 | `backend/app/schemas/user_profile.py` | Dominio | NAME_ONLY | Lote 2 | — |
@@ -716,17 +753,17 @@ Cada una de las 288 rutas rastreadas en `HEAD` (`44192410e70975a5f156db81f711e56
 | `backend/app/services/strategy_spec_resolver.py` | Señales y estrategias | MANIFEST_ONLY | Lote 4 | — |
 | `backend/app/services/ws_manager.py` | Operación/observabilidad | MANIFEST_ONLY | Lote 3 | — |
 | `backend/app/utils/__init__.py` | Operación/observabilidad | NAME_ONLY | Lote 7 | — |
-| `backend/app/utils/auth.py` | Autenticación y seguridad | NAME_ONLY | Lote 1 | — |
-| `backend/app/utils/broker_crypto.py` | Autenticación y seguridad | NAME_ONLY | Lote 1 | — |
+| `backend/app/utils/auth.py` | Autenticación y seguridad | REVIEWED_FULL | — | L01 — ver LEGACY-AUDIT-027/046/062 |
+| `backend/app/utils/broker_crypto.py` | Autenticación y seguridad | REVIEWED_FULL | — | L01 — ver LEGACY-AUDIT-023/063 |
 | `backend/app/utils/dates.py` | Indicadores | NAME_ONLY | Lote 4 | — |
 | `backend/app/utils/indicators.py` | Indicadores | NAME_ONLY | Lote 4 | — |
 | `backend/app/utils/notifications.py` | Noticias/notificaciones | MANIFEST_ONLY | Lote 3 | — |
 | `backend/app/utils/perf_log.py` | Operación/observabilidad | NAME_ONLY | Lote 7 | — |
 | `backend/app/utils/pool_instrumentation.py` | Operación/observabilidad | NAME_ONLY | Lote 7 | — |
-| `backend/app/utils/safe_log.py` | Autenticación y seguridad | NAME_ONLY | Lote 1 | — |
+| `backend/app/utils/safe_log.py` | Autenticación y seguridad | REVIEWED_FULL | — | L01 — ver LEGACY-AUDIT-021/064 |
 | `backend/app/utils/signal_normalizer.py` | Indicadores | NAME_ONLY | Lote 4 | — |
 | `backend/app/utils/trade_audit.py` | Operación/observabilidad | NAME_ONLY | Lote 7 | — |
-| `backend/docs/tickets/be-bug-004-session-audit.md` | Gobierno/cutover/postmortems | NAME_ONLY | Lote 1 | — |
+| `backend/docs/tickets/be-bug-004-session-audit.md` | Gobierno/cutover/postmortems | REVIEWED_FULL | — | L01 — ver LEGACY-AUDIT-065 |
 | `backend/legacy-trading-manifest.json` | Gobierno/cutover/postmortems | REVIEWED_FULL | — | — |
 | `backend/requirements.txt` | Operación/observabilidad | NAME_ONLY | Lote 7 | — |
 | `backend/tests/__init__.py` | Tests backend | NAME_ONLY | Lote 9D | — |
@@ -921,7 +958,7 @@ Cada una de las 288 rutas rastreadas en `HEAD` (`44192410e70975a5f156db81f711e56
 | `test_system.py` | Tests backend | NAME_ONLY | Lote 9D | — |
 | `vercel.json` | Operación/observabilidad | NAME_ONLY | Lote 7 | — |
 
-**Verificación de esta tabla:** 288 filas, 0 rutas duplicadas, 0 rutas ausentes o sobrantes respecto a `git ls-tree -r --name-only HEAD` (ver §17). Totales por estado: `REVIEWED_FULL` 25, `REVIEWED_PARTIAL` 3, `MANIFEST_ONLY` 48, `NAME_ONLY` 212, `EXCLUDED` 0.
+**Verificación de esta tabla (actualizada tras `LEGACY-AUDIT-L01`):** 288 filas, 0 rutas duplicadas, 0 rutas ausentes o sobrantes respecto a `git ls-tree -r --name-only HEAD` (ver §17). Totales por estado: `REVIEWED_FULL` 38, `REVIEWED_PARTIAL` 3, `MANIFEST_ONLY` 48, `NAME_ONLY` 199, `EXCLUDED` 0. Los 13 archivos del Lote 1 pasaron de `NAME_ONLY`/`Lote 1` a `REVIEWED_FULL`/`—`; ninguna otra fila cambió de estado ni de lote.
 
 ---
 
@@ -929,4 +966,4 @@ Cada una de las 288 rutas rastreadas en `HEAD` (`44192410e70975a5f156db81f711e56
 
 **AUDITORÍA PRELIMINAR — REQUIERE REVISIÓN POR LOTES**
 
-No se publica, no se hace commit, no se modifica GitHub ni Notion. El documento queda a la espera de que el Arquitecto autorice la ejecución de los Lotes 1–10 (§15), en el orden propuesto o en el que se determine, antes de que cualquier hallazgo de este documento pueda tratarse como definitivo.
+`LEGACY-AUDIT-L01` (Lote 1 — Gobierno, ADR, postmortems y seguridad, 13 archivos) queda completado — ver LEGACY-AUDIT-L01 COMPLETADO — INFORME LISTO PARA REVISIÓN más abajo. La auditoría general sigue siendo preliminar: quedan 247 archivos sin evidencia directa, distribuidos en los Lotes 2–7 y los sublotes 8A–8E/9A–9F pendientes (§15). `L02` (Dominio, persistencia y catálogo POINT1, 14 archivos) es el siguiente lote, siguiendo el orden ya aprobado — no alterado por esta tarea. No se publica, no se hace commit, no se modifica GitHub ni Notion. El documento queda a la espera de que el Arquitecto autorice la ejecución del siguiente lote.
