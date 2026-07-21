@@ -1,1 +1,229 @@
-/* You can add global styles to this file, and also import other style files */
+/* Freyja 2.0 — global design tokens for the authentication experience.
+   System serif stacks are used deliberately instead of a webfont, to avoid
+   adding an external network dependency without a demonstrated need. */
+:root {
+  --freyja-bg: #090b12;
+  --freyja-bg-glow: #10131d;
+  --freyja-card-bg: #12141e;
+  --freyja-input-bg: #171a26;
+  --freyja-input-bg-focus: #1c2436;
+  --freyja-border: rgba(201, 162, 74, 0.28);
+  --freyja-border-strong: #c9a24a;
+  --freyja-gold: #c9a24a;
+  --freyja-gold-bright: #e0bf7c;
+  --freyja-text-cream: #f1ead9;
+  --freyja-text-muted: #9c9578;
+  --freyja-error: #e26a8a;
+  --freyja-success: #8fd2ab;
+  --freyja-font-serif:
+    'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, 'Times New Roman', serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--freyja-bg);
+}
+
+/* Shared form styling for every authentication page. Scoped under
+   .auth-page (rendered by the shared AuthShell wrapper) so it never leaks
+   into unrelated parts of the application. */
+.auth-page {
+  form {
+    display: block;
+  }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .field label {
+    font-size: 0.75rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--freyja-gold);
+    font-family: var(--freyja-font-serif);
+  }
+
+  .field input {
+    font-family: var(--freyja-font-serif);
+    font-size: 1rem;
+    padding: 0.75rem 0.9rem;
+    background: var(--freyja-input-bg);
+    border: 1px solid var(--freyja-border);
+    border-radius: 0.15rem;
+    color: var(--freyja-text-cream);
+    transition:
+      background-color 0.15s ease,
+      border-color 0.15s ease;
+  }
+
+  .field input::placeholder {
+    color: var(--freyja-text-muted);
+  }
+
+  .field input:focus-visible {
+    outline: 2px solid var(--freyja-gold-bright);
+    outline-offset: 2px;
+    background: var(--freyja-input-bg-focus);
+    border-color: var(--freyja-border-strong);
+  }
+
+  .field input[aria-invalid='true'] {
+    border-color: var(--freyja-error);
+  }
+
+  .field-error,
+  .field-hint {
+    font-size: 0.78rem;
+    margin: 0.4rem 0 0;
+    line-height: 1.4;
+  }
+
+  .field-error {
+    color: var(--freyja-error);
+  }
+
+  .field-error::before {
+    content: '⚠ ';
+  }
+
+  .field-hint {
+    color: var(--freyja-text-muted);
+  }
+
+  .field-with-toggle {
+    position: relative;
+    display: flex;
+  }
+
+  .field-with-toggle input {
+    flex: 1;
+    padding-right: 3.5rem;
+  }
+
+  .password-toggle {
+    position: absolute;
+    top: 0;
+    right: 0;
+    height: 100%;
+    padding: 0 0.9rem;
+    background: transparent;
+    border: none;
+    color: var(--freyja-text-muted);
+    font-family: var(--freyja-font-serif);
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+
+  .password-toggle:hover {
+    color: var(--freyja-gold-bright);
+  }
+
+  .password-toggle:focus-visible {
+    outline: 2px solid var(--freyja-gold-bright);
+    outline-offset: -2px;
+  }
+
+  .divider {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin: 1.75rem 0;
+    color: var(--freyja-gold);
+  }
+
+  .divider::before,
+  .divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--freyja-border);
+  }
+
+  .error,
+  .notice,
+  .success {
+    font-size: 0.85rem;
+    text-align: center;
+    margin: 0 0 1.25rem;
+    line-height: 1.5;
+  }
+
+  .error {
+    color: var(--freyja-error);
+  }
+
+  .notice {
+    color: var(--freyja-text-cream);
+    background: rgba(201, 162, 74, 0.08);
+    border: 1px solid var(--freyja-border);
+    border-radius: 0.15rem;
+    padding: 0.75rem 1rem;
+  }
+
+  .success {
+    color: var(--freyja-success);
+  }
+
+  button[type='submit'] {
+    display: block;
+    width: 100%;
+    font-family: var(--freyja-font-serif);
+    font-size: 0.9rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 0.85rem 1rem;
+    background: transparent;
+    color: var(--freyja-gold-bright);
+    border: 1px solid var(--freyja-border-strong);
+    border-radius: 0.15rem;
+    cursor: pointer;
+    transition:
+      background-color 0.15s ease,
+      color 0.15s ease;
+  }
+
+  button[type='submit']:hover:not(:disabled) {
+    background: rgba(201, 162, 74, 0.12);
+  }
+
+  button[type='submit']:focus-visible {
+    outline: 2px solid var(--freyja-gold-bright);
+    outline-offset: 2px;
+  }
+
+  button[type='submit']:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  a {
+    color: var(--freyja-gold-bright);
+    text-decoration: underline;
+  }
+
+  a:focus-visible {
+    outline: 2px solid var(--freyja-gold-bright);
+    outline-offset: 2px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-page * {
+    transition: none !important;
+  }
+}

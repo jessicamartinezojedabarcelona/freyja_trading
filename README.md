@@ -9,19 +9,21 @@ la profundidad de la información mostrada, pero todos los usuarios
 comparten el mismo dominio, el mismo motor y la misma base de código.
 
 **Estado real actual: Fase 0 — Fundación técnica.** Existen scaffolds
-mínimos y operativos de backend, frontend, persistencia y controles de
-calidad (incluida integración continua verde en `main`), pero **todavía no
-existe dominio funcional de trading, autenticación, ni ejecución
-DEMO/REAL**. Este README describe cómo instalar, arrancar y verificar esa
-fundación técnica; no describe un producto terminado.
+mínimos y operativos de backend, frontend, persistencia, controles de
+calidad (incluida integración continua verde en `main`) y un inicio de
+sesión mínimo para la propietaria (§12), pero **todavía no existe dominio
+funcional de trading ni ejecución DEMO/REAL**. Este README describe cómo
+instalar, arrancar y verificar esa fundación técnica; no describe un
+producto terminado.
 
 Consulta el detalle completo y las justificaciones del stack en
 [`docs/adr/0001-stack-y-arquitectura-inicial.md`](docs/adr/0001-stack-y-arquitectura-inicial.md).
 
 ## 2. Componentes actuales
 
-- **Backend**: Python 3.12, FastAPI, gestionado con `uv`. Expone un único
-  endpoint de salud (`/api/v1/health`).
+- **Backend**: Python 3.12, FastAPI, gestionado con `uv`. Expone un
+  endpoint de salud (`/api/v1/health`) y un inicio de sesión mínimo para
+  la propietaria (`/api/v1/auth/*`, ver §12).
 - **Frontend**: Angular 22.x, TypeScript, gestionado con `npm`. Aplicación
   base sin vistas funcionales de dominio.
 - **PostgreSQL**: única base de datos del sistema, versión `18.4`,
@@ -188,7 +190,7 @@ Consultar los heads disponibles:
 uv run alembic heads
 ```
 
-Actualmente existe un único head: `0001_initial (head)`.
+Actualmente existe un único head: `0003_auth_email_flows (head)`.
 
 Consultar la revisión actual aplicada:
 
@@ -274,7 +276,65 @@ Orden operativo recomendado, con verificación de salud en cada paso:
 Backend y frontend necesitan cada uno su propia terminal, ya que ambos
 procesos permanecen en primer plano hasta que se detienen manualmente.
 
-## 12. Calidad y pruebas
+## 12. Autenticación (propietaria)
+
+Inicio de sesión mínimo para la propietaria, sobre un modelo relacional
+persistido mediante Alembic (`auth_users`, `auth_sessions`,
+`auth_login_attempts`). No hay registro público, recuperación de contraseña
+por correo, OAuth ni roles múltiples.
+
+### Crear la cuenta inicial de la propietaria
+
+Requiere que PostgreSQL local esté `healthy` y las migraciones aplicadas
+(`uv run alembic upgrade head`). Desde `backend/`:
+
+```bash
+uv run freyja-create-owner
+```
+
+El script pide el identificador de acceso y la contraseña de forma
+interactiva (la contraseña se lee con `getpass`, nunca se muestra en
+pantalla ni se registra en ningún log). Es idempotente: si la propietaria
+ya existe, el script falla explícitamente sin modificar nada. La
+contraseña debe tener entre 12 y 128 caracteres.
+
+Para automatizaciones controladas (no recomendado para uso interactivo),
+el identificador y la contraseña pueden leerse de las variables de entorno
+`FREYJA_OWNER_IDENTIFIER` y `FREYJA_OWNER_PASSWORD`; el script emite un
+aviso explícito en ese caso.
+
+### Endpoints
+
+- `POST /api/v1/auth/login` — cuerpo `{"identifier", "password"}`. Respuesta
+  `200` con `{"id", "identifier"}` y cookies de sesión; `401` genérico
+  (mismo mensaje para identificador inexistente, contraseña incorrecta o
+  cuenta inactiva); `429` si se supera el límite de intentos.
+- `POST /api/v1/auth/logout` — revoca la sesión activa (si existe) y limpia
+  las cookies. Idempotente.
+- `GET /api/v1/auth/me` — `200` con el usuario autenticado; `401` si no hay
+  sesión válida.
+
+### Sesión, cookies y CSRF
+
+- `freyja_session`: cookie de sesión opaca, `HttpOnly`, `SameSite=Strict`,
+  `Secure` únicamente cuando `FREYJA_ENVIRONMENT=production`. Solo se
+  persiste su hash (SHA-256) en `auth_sessions`, nunca el valor en claro.
+- `freyja_csrf`: cookie legible por JavaScript, emitida en toda respuesta.
+  Cualquier `POST` a `/auth/login` o `/auth/logout` debe repetir su valor
+  en la cabecera `X-CSRF-Token` (patrón *double-submit*).
+- Duración de sesión configurable vía `FREYJA_SESSION_TTL_MINUTES`
+  (720 minutos / 12 horas por defecto).
+- El origen permitido para CORS con credenciales es configurable vía
+  `FREYJA_FRONTEND_ORIGIN` (`http://localhost:4200` por defecto).
+
+### Rate limiting
+
+Los intentos fallidos se cuentan en `auth_login_attempts` (PostgreSQL, no
+en memoria): 5 fallos por identificador o 20 fallos por IP en una ventana
+deslizante de 15 minutos bloquean nuevos intentos con `429` genérico,
+hasta que los fallos más antiguos salen de la ventana.
+
+## 13. Calidad y pruebas
 
 Entrada única, reproducible y multiplataforma (Windows y Linux) para
 ejecutar todos los controles locales, desde la raíz del repositorio:
@@ -340,7 +400,7 @@ Esta es la única sección del README que enumera estos comandos
 individuales; el resto del documento remite aquí en lugar de repetirlos,
 para evitar que ambos textos diverjan con el tiempo.
 
-## 13. Integración continua (GitHub Actions)
+## 14. Integración continua (GitHub Actions)
 
 `.github/workflows/ci.yml` ejecuta los controles de calidad de backend y
 frontend como **dos jobs independientes**, activados en Pull Requests
@@ -362,7 +422,7 @@ Para reproducir localmente todos los controles equivalentes:
 uv run --python 3.12 scripts/quality.py
 ```
 
-## 14. Estructura del repositorio
+## 15. Estructura del repositorio
 
 ```text
 freyja_trading/
@@ -391,7 +451,7 @@ freyja_trading/
 └── CLAUDE.md
 ```
 
-## 15. Solución de problemas
+## 16. Solución de problemas
 
 - **El daemon de Docker no está iniciado**: arranca Docker Desktop (o el
   servicio de Docker Engine) y espera a que esté completamente listo antes
@@ -420,7 +480,7 @@ freyja_trading/
   `docker compose logs postgres`; normalmente indica que el proceso sigue
   inicializando o que las variables de entorno no son válidas. No borres
   el volumen como primera solución.
-- **`alembic current` aparece vacío o distinto de `0001_initial (head)`**:
+- **`alembic current` aparece vacío o distinto de `0003_auth_email_flows (head)`**:
   ejecuta `uv run alembic upgrade head` desde `backend/` con PostgreSQL
   `healthy`. Un valor vacío es normal en una base de datos recién creada
   antes de aplicar migraciones.
@@ -449,9 +509,11 @@ freyja_trading/
 Ninguna de estas soluciones implica borrar volúmenes, desactivar
 seguridad, usar `trust`, ignorar errores o editar lockfiles manualmente.
 
-## 16. Limitaciones actuales
+## 17. Limitaciones actuales
 
-- No existe todavía autenticación.
+- Existe un inicio de sesión mínimo para la propietaria (§12); no hay
+  registro público, recuperación de contraseña por correo, OAuth ni
+  roles múltiples.
 - No existe dominio funcional de trading.
 - No existe integración con brokers.
 - No existe ejecución DEMO ni REAL.
@@ -463,7 +525,7 @@ seguridad, usar `trust`, ignorar errores o editar lockfiles manualmente.
 - El entorno documentado en este README está orientado exclusivamente a
   desarrollo local.
 
-## 17. Seguridad operativa
+## 18. Seguridad operativa
 
 - No versiones `.env` bajo ninguna circunstancia.
 - No pegues secretos (contraseñas, tokens, credenciales) en incidencias,

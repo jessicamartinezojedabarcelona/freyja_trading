@@ -1,0 +1,64 @@
+<app-auth-shell heading="Iniciar sesión">
+  @if (sessionExpired()) {
+    <p class="notice" role="status">Tu sesión ha expirado. Vuelve a iniciar sesión.</p>
+  }
+
+  <form [formGroup]="form" (ngSubmit)="submit()" novalidate>
+    <div class="field">
+      <label for="identifier">Correo</label>
+      <input
+        id="identifier"
+        #identifierInput
+        type="email"
+        formControlName="identifier"
+        autocomplete="email"
+        [attr.aria-invalid]="identifierError() ? 'true' : null"
+        [attr.aria-describedby]="identifierError() ? 'identifier-error' : null"
+      />
+      @if (identifierError(); as message) {
+        <p id="identifier-error" class="field-error">{{ message }}</p>
+      }
+    </div>
+
+    <div class="field">
+      <label for="password">Contraseña</label>
+      <div class="field-with-toggle">
+        <input
+          id="password"
+          #passwordInput
+          [type]="passwordVisible() ? 'text' : 'password'"
+          formControlName="password"
+          autocomplete="current-password"
+          [attr.aria-invalid]="passwordError() ? 'true' : null"
+          [attr.aria-describedby]="passwordError() ? 'password-error' : null"
+        />
+        <button
+          type="button"
+          class="password-toggle"
+          [attr.aria-label]="passwordVisible() ? 'Ocultar contraseña' : 'Mostrar contraseña'"
+          [attr.aria-pressed]="passwordVisible()"
+          (click)="togglePasswordVisibility()"
+        >
+          {{ passwordVisible() ? 'Ocultar' : 'Mostrar' }}
+        </button>
+      </div>
+      @if (passwordError(); as message) {
+        <p id="password-error" class="field-error">{{ message }}</p>
+      }
+    </div>
+
+    @if (errorMessage()) {
+      <p class="error" role="alert">{{ errorMessage() }}</p>
+    }
+
+    <button type="submit" [disabled]="submitting()">
+      {{ submitting() ? 'Entrando…' : 'Entrar' }}
+    </button>
+  </form>
+
+  <p below-card>
+    <a routerLink="/register">Crear cuenta</a>
+    ·
+    <a routerLink="/forgot-password">He olvidado mi contraseña</a>
+  </p>
+</app-auth-shell>

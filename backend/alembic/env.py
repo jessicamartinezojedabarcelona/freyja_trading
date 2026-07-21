@@ -4,12 +4,16 @@ from sqlalchemy import URL, create_engine, pool
 
 from alembic import context
 from freyja_backend.core.database import get_postgres_settings
+from freyja_backend.db import models  # noqa: F401  (registers ORM models on Base.metadata)
 from freyja_backend.db.base import Base
 
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False: this file's logging config must not
+    # silently disable unrelated application loggers (e.g. when Alembic's
+    # Python API runs in-process, as tests do).
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

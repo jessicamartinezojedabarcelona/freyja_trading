@@ -1,0 +1,7 @@
+<main>
+  <h1>Freyja 2.0</h1>
+  @if (currentUser(); as user) {
+    <p>Sesión iniciada como {{ user.identifier }}</p>
+  }
+  <button type="button" (click)="logout()">Cerrar sesión</button>
+</main>

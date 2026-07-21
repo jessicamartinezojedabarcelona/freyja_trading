@@ -19,5 +19,23 @@ services:
       retries: 10
       start_period: 15s
 
+  # Dev-only local SMTP catcher. Never a dependency of postgres, never used
+  # in CI/tests (those use InMemoryEmailSender — see backend/tests/conftest.py),
+  # never usable in production. Its captured messages are sensitive temporary
+  # data (real-looking verification/reset links): never persisted to a volume,
+  # never committed, never printed to logs. Both ports are bound to
+  # 127.0.0.1 only. Start with: docker compose --profile dev up mailpit
+  # Stop/discard with a normal `down` — never `down -v` (there is no volume
+  # to preserve, and that flag is a habit worth not forming here).
+  mailpit:
+    image: axllent/mailpit:v1.30.2@sha256:37a38e48e9338cd7e89dfeb487f37b02ebfcd9cb23111bed2d345e79d37d6dd6
+    profiles: ["dev"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:1025:1025"
+      - "127.0.0.1:8025:8025"
+    environment:
+      MP_MAX_MESSAGES: "500"
+
 volumes:
   freyja_postgres_data:
