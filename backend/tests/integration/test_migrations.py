@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from sqlalchemy import URL, create_engine, text
+from sqlalchemy import URL, Connection, create_engine, inspect, text
 
 from alembic import command
 from freyja_backend.core.database import get_postgres_settings
@@ -106,7 +106,7 @@ def test_upgrade_downgrade_upgrade_cycle(temp_database_name: str) -> None:
             current = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-        assert current == "0001_initial"
+        assert current == "0004_remove_email_verification"
 
         command.downgrade(cfg, "base")
         with engine.connect() as connection:
@@ -118,6 +118,82 @@ def test_upgrade_downgrade_upgrade_cycle(temp_database_name: str) -> None:
         command.upgrade(cfg, "head")
         with engine.connect() as connection:
             final = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert final == "0001_initial"
+        assert final == "0004_remove_email_verification"
+    finally:
+        engine.dispose()
+
+
+_AUTH_TABLES = (
+    "auth_users",
+    "auth_sessions",
+    "auth_rate_limit_events",
+    "auth_password_reset_tokens",
+)
+
+
+def _existing_tables(connection: Connection, names: tuple[str, ...]) -> set[str]:
+    inspector = inspect(connection)
+    return {name for name in names if inspector.has_table(name)}
+
+
+def _has_column(connection: Connection, table: str, column: str) -> bool:
+    inspector = inspect(connection)
+    return any(col["name"] == column for col in inspector.get_columns(table))
+
+
+def test_auth_tables_created_on_upgrade_and_dropped_on_downgrade(
+    temp_database_name: str,
+) -> None:
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, "head")
+        with engine.connect() as connection:
+            assert _existing_tables(connection, _AUTH_TABLES) == set(_AUTH_TABLES)
+            assert not _has_column(connection, "auth_users", "email_verified_at")
+            assert _has_column(connection, "auth_users", "created_via")
+            assert not inspect(connection).has_table("auth_email_verification_tokens")
+
+        command.downgrade(cfg, "base")
+        with engine.connect() as connection:
+            assert _existing_tables(connection, _AUTH_TABLES) == set()
+    finally:
+        engine.dispose()
+
+
+def _rate_limit_action_enum_labels(connection: Connection) -> set[str]:
+    rows = connection.execute(
+        text(
+            "SELECT enumlabel FROM pg_enum e "
+            "JOIN pg_type t ON t.oid = e.enumtypid "
+            "WHERE t.typname = 'auth_rate_limit_action'"
+        )
+    ).all()
+    return {row[0] for row in rows}
+
+
+def test_migration_0004_removes_email_verification_artifacts(temp_database_name: str) -> None:
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, "0003_auth_email_flows")
+        with engine.connect() as connection:
+            assert inspect(connection).has_table("auth_email_verification_tokens")
+            assert _has_column(connection, "auth_users", "email_verified_at")
+            assert "RESEND_VERIFICATION" in _rate_limit_action_enum_labels(connection)
+
+        command.upgrade(cfg, "head")
+        with engine.connect() as connection:
+            assert not inspect(connection).has_table("auth_email_verification_tokens")
+            assert not _has_column(connection, "auth_users", "email_verified_at")
+            assert "RESEND_VERIFICATION" not in _rate_limit_action_enum_labels(connection)
+
+        command.downgrade(cfg, "0003_auth_email_flows")
+        with engine.connect() as connection:
+            assert inspect(connection).has_table("auth_email_verification_tokens")
+            assert _has_column(connection, "auth_users", "email_verified_at")
+            assert "RESEND_VERIFICATION" in _rate_limit_action_enum_labels(connection)
     finally:
         engine.dispose()

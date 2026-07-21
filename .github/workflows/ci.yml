@@ -44,6 +44,7 @@ jobs:
       POSTGRES_USER: freyja_ci
       # Same ephemeral CI-only credential as the service container above.
       POSTGRES_PASSWORD: freyja_ci_ephemeral_5f3a9c2b
+      FREYJA_ENVIRONMENT: test
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -74,13 +75,13 @@ jobs:
         working-directory: backend
         run: uv run mypy src tests
 
-      - name: Pytest
-        working-directory: backend
-        run: uv run pytest -v
-
       - name: Apply Alembic migrations (upgrade head)
         working-directory: backend
         run: uv run alembic upgrade head
+
+      - name: Pytest
+        working-directory: backend
+        run: uv run pytest -v
 
       - name: Validate Alembic heads and current revision
         run: |
@@ -117,7 +118,7 @@ jobs:
           validate_alembic_stderr(current.stderr)
           validate_alembic_current(current.stdout)
 
-          print("alembic heads and current validated: 0001_initial (head)")
+          print("alembic heads and current validated: 0004_remove_email_verification (head)")
           PY
 
       - name: Build backend package (isolated temporary directory)

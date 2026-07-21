@@ -8,7 +8,9 @@ EXPECTED_HEALTH_CONTRACT = {
     "status": "ok",
     "service": "Freyja 2.0 Backend",
     "version": "0.1.0",
-    "environment": "development",
+    # The whole suite is forced to FREYJA_ENVIRONMENT=test (see conftest.py's
+    # pytest_configure), regardless of whatever a developer's local .env says.
+    "environment": "test",
 }
 
 

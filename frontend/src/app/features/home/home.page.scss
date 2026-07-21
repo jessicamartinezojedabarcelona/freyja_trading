@@ -1,0 +1,29 @@
+:host {
+  display: block;
+  min-height: 100vh;
+  box-sizing: border-box;
+  padding: 2rem;
+  color: #1a1a1a;
+  background-color: #ffffff;
+  font-family: system-ui, sans-serif;
+}
+
+main {
+  max-width: 40rem;
+  margin: 0 auto;
+}
+
+h1 {
+  font-size: 2rem;
+  margin: 0 0 1rem;
+}
+
+button {
+  font-size: 1rem;
+  padding: 0.6rem 1rem;
+  border: none;
+  border-radius: 0.25rem;
+  background-color: #1a1a1a;
+  color: #ffffff;
+  cursor: pointer;
+}

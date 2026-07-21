@@ -1,0 +1,47 @@
+<div class="auth-page">
+  <header class="brand">
+    <div class="emblem" aria-hidden="true">
+      <svg viewBox="0 0 100 100" class="emblem-svg" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="50" cy="50" r="45" class="emblem-ring" />
+        <path
+          class="emblem-glyph"
+          d="M50 24 L50 76 M50 46 L32 24 M50 46 L68 24"
+          fill="none"
+          stroke-linecap="round"
+        />
+      </svg>
+    </div>
+    <h1 class="wordmark">Freyja</h1>
+    <p class="tagline">Trading inteligente, explicado de forma sencilla</p>
+  </header>
+
+  <section class="card">
+    <span class="corner corner-tl" aria-hidden="true"></span>
+    <span class="corner corner-tr" aria-hidden="true"></span>
+    <span class="corner corner-bl" aria-hidden="true"></span>
+    <span class="corner corner-br" aria-hidden="true"></span>
+
+    <div class="card-inner">
+      @if (heading()) {
+        <h2 class="card-heading">{{ heading() }}</h2>
+      }
+      @if (subtitle()) {
+        <p class="card-subtitle">{{ subtitle() }}</p>
+      }
+
+      <ng-content></ng-content>
+    </div>
+  </section>
+
+  <div class="below-card">
+    <ng-content select="[below-card]"></ng-content>
+  </div>
+
+  <footer class="quote">
+    <span class="quote-glyph" aria-hidden="true">Ψ</span>
+    <p class="quote-text">
+      <em>El primer paso no es invertir.<br />Es entender.</em>
+    </p>
+    <p class="signature">— Freyja —</p>
+  </footer>
+</div>

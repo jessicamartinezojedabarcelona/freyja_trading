@@ -12,7 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 BACKEND_DIR = REPO_ROOT / "backend"
 FRONTEND_DIR = REPO_ROOT / "frontend"
 
-EXPECTED_HEAD = "0001_initial (head)"
+EXPECTED_HEAD = "0004_remove_email_verification (head)"
 _ALEMBIC_INFO_PREFIX = "INFO  [alembic."
 
 
@@ -183,6 +183,8 @@ def run_backend_checks() -> None:
     run_step("mypy", [uv, "run", "mypy", "src", "tests"], BACKEND_DIR)
 
     check_postgres_available()
+
+    run_step("alembic upgrade head", [uv, "run", "alembic", "upgrade", "head"], BACKEND_DIR)
 
     run_step("pytest", [uv, "run", "pytest"], BACKEND_DIR)
 
