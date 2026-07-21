@@ -118,7 +118,7 @@ jobs:
           validate_alembic_stderr(current.stderr)
           validate_alembic_current(current.stdout)
 
-          print("alembic heads and current validated: 0003_auth_email_flows (head)")
+          print("alembic heads and current validated: 0004_remove_email_verification (head)")
           PY
 
       - name: Build backend package (isolated temporary directory)

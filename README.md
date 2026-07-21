@@ -10,11 +10,11 @@ comparten el mismo dominio, el mismo motor y la misma base de código.
 
 **Estado real actual: Fase 0 — Fundación técnica.** Existen scaffolds
 mínimos y operativos de backend, frontend, persistencia, controles de
-calidad (incluida integración continua verde en `main`) y un inicio de
-sesión mínimo para la propietaria (§12), pero **todavía no existe dominio
-funcional de trading ni ejecución DEMO/REAL**. Este README describe cómo
-instalar, arrancar y verificar esa fundación técnica; no describe un
-producto terminado.
+calidad (incluida integración continua verde en `main`) y autenticación
+(registro directo, inicio de sesión, sesión y recuperación de contraseña;
+§12), pero **todavía no existe dominio funcional de trading ni ejecución
+DEMO/REAL**. Este README describe cómo instalar, arrancar y verificar esa
+fundación técnica; no describe un producto terminado.
 
 Consulta el detalle completo y las justificaciones del stack en
 [`docs/adr/0001-stack-y-arquitectura-inicial.md`](docs/adr/0001-stack-y-arquitectura-inicial.md).
@@ -22,8 +22,9 @@ Consulta el detalle completo y las justificaciones del stack en
 ## 2. Componentes actuales
 
 - **Backend**: Python 3.12, FastAPI, gestionado con `uv`. Expone un
-  endpoint de salud (`/api/v1/health`) y un inicio de sesión mínimo para
-  la propietaria (`/api/v1/auth/*`, ver §12).
+  endpoint de salud (`/api/v1/health`) y autenticación completa (registro,
+  login, logout, sesión y recuperación de contraseña; `/api/v1/auth/*`,
+  ver §12).
 - **Frontend**: Angular 22.x, TypeScript, gestionado con `npm`. Aplicación
   base sin vistas funcionales de dominio.
 - **PostgreSQL**: única base de datos del sistema, versión `18.4`,
@@ -190,7 +191,7 @@ Consultar los heads disponibles:
 uv run alembic heads
 ```
 
-Actualmente existe un único head: `0003_auth_email_flows (head)`.
+Actualmente existe un único head: `0004_remove_email_verification (head)`.
 
 Consultar la revisión actual aplicada:
 
@@ -276,14 +277,39 @@ Orden operativo recomendado, con verificación de salud en cada paso:
 Backend y frontend necesitan cada uno su propia terminal, ya que ambos
 procesos permanecen en primer plano hasta que se detienen manualmente.
 
-## 12. Autenticación (propietaria)
+## 12. Autenticación
 
-Inicio de sesión mínimo para la propietaria, sobre un modelo relacional
+Autenticación completa (registro directo, inicio de sesión, sesión, cierre
+de sesión y recuperación de contraseña), sobre un modelo relacional
 persistido mediante Alembic (`auth_users`, `auth_sessions`,
-`auth_login_attempts`). No hay registro público, recuperación de contraseña
-por correo, OAuth ni roles múltiples.
+`auth_password_reset_tokens`, `auth_rate_limit_events`). No hay OAuth ni
+roles múltiples.
 
-### Crear la cuenta inicial de la propietaria
+### Registro
+
+- Cualquier persona puede registrarse: el registro es público, no está
+  restringido a una única cuenta propietaria.
+- El identificador de cuenta es el correo electrónico.
+- La contraseña debe tener entre 12 y 128 caracteres.
+- El frontend exige además un campo de confirmación de contraseña
+  (`confirmPassword`), validado únicamente en el navegador: nunca se envía
+  al backend, que solo recibe `email` y `password`.
+- La cuenta queda **activa inmediatamente** al registrarse: no existe
+  ningún paso de verificación ni activación por correo. No se envía ningún
+  correo de bienvenida ni de confirmación durante el registro.
+- El registro no inicia sesión automáticamente: tras un registro exitoso,
+  la persona debe iniciar sesión explícitamente con las credenciales que
+  acaba de crear.
+- Por razones de seguridad (evitar enumeración de cuentas existentes), la
+  respuesta pública es idéntica si el correo ya estaba registrado o no.
+
+### Crear una cuenta administrativa de bootstrap (opcional)
+
+`freyja-create-owner` es un script de arranque administrativo opcional,
+útil por ejemplo para crear la primera cuenta en un entorno recién
+desplegado; **no es el único mecanismo para crear cuentas**, ya que el
+registro público (`POST /auth/register`) cumple esa función para el resto
+de personas usuarias.
 
 Requiere que PostgreSQL local esté `healthy` y las migraciones aplicadas
 (`uv run alembic upgrade head`). Desde `backend/`:
@@ -294,9 +320,9 @@ uv run freyja-create-owner
 
 El script pide el identificador de acceso y la contraseña de forma
 interactiva (la contraseña se lee con `getpass`, nunca se muestra en
-pantalla ni se registra en ningún log). Es idempotente: si la propietaria
-ya existe, el script falla explícitamente sin modificar nada. La
-contraseña debe tener entre 12 y 128 caracteres.
+pantalla ni se registra en ningún log). Es idempotente: si esa cuenta ya
+existe, el script falla explícitamente sin modificar nada. La contraseña
+debe tener entre 12 y 128 caracteres.
 
 Para automatizaciones controladas (no recomendado para uso interactivo),
 el identificador y la contraseña pueden leerse de las variables de entorno
@@ -305,6 +331,13 @@ aviso explícito en ese caso.
 
 ### Endpoints
 
+- `GET /api/v1/auth/csrf` — emite/renueva la cookie CSRF. No crea ni
+  requiere sesión; puede llamarse de forma anónima antes de cualquier
+  otra operación de autenticación.
+- `POST /api/v1/auth/register` — cuerpo `{"email", "password"}`. Respuesta
+  `200` genérica tanto si la cuenta se crea como si el correo ya existía
+  (previene enumeración); `422` si los datos no son válidos; `429` si se
+  supera el límite de intentos.
 - `POST /api/v1/auth/login` — cuerpo `{"identifier", "password"}`. Respuesta
   `200` con `{"id", "identifier"}` y cookies de sesión; `401` genérico
   (mismo mensaje para identificador inexistente, contraseña incorrecta o
@@ -313,15 +346,28 @@ aviso explícito en ese caso.
   las cookies. Idempotente.
 - `GET /api/v1/auth/me` — `200` con el usuario autenticado; `401` si no hay
   sesión válida.
+- `POST /api/v1/auth/forgot-password` — cuerpo `{"email"}`. Respuesta `202`
+  genérica independientemente de si el correo existe (previene
+  enumeración); `429` si se supera el límite de intentos.
+- `POST /api/v1/auth/reset-password` — cuerpo `{"token", "new_password"}`.
+  Restablece la contraseña usando un token de un solo uso; `400` si el
+  token es inválido o ha expirado; `422` si la nueva contraseña no es
+  válida.
+
+No existe ningún endpoint de verificación de correo (`/verify-email`) ni
+de reenvío de verificación: fueron retirados deliberadamente (véase la
+migración `0004_remove_email_verification`, §8).
 
 ### Sesión, cookies y CSRF
 
 - `freyja_session`: cookie de sesión opaca, `HttpOnly`, `SameSite=Strict`,
   `Secure` únicamente cuando `FREYJA_ENVIRONMENT=production`. Solo se
   persiste su hash (SHA-256) en `auth_sessions`, nunca el valor en claro.
-- `freyja_csrf`: cookie legible por JavaScript, emitida en toda respuesta.
-  Cualquier `POST` a `/auth/login` o `/auth/logout` debe repetir su valor
-  en la cabecera `X-CSRF-Token` (patrón *double-submit*).
+- `freyja_csrf`: cookie legible por JavaScript, emitida por `GET /auth/csrf`
+  y renovada en cada respuesta. Cualquier `POST` a `/auth/login`,
+  `/auth/logout`, `/auth/register`, `/auth/forgot-password` o
+  `/auth/reset-password` debe repetir su valor en la cabecera
+  `X-CSRF-Token` (patrón *double-submit*).
 - Duración de sesión configurable vía `FREYJA_SESSION_TTL_MINUTES`
   (720 minutos / 12 horas por defecto).
 - El origen permitido para CORS con credenciales es configurable vía
@@ -329,10 +375,30 @@ aviso explícito en ese caso.
 
 ### Rate limiting
 
-Los intentos fallidos se cuentan en `auth_login_attempts` (PostgreSQL, no
-en memoria): 5 fallos por identificador o 20 fallos por IP en una ventana
-deslizante de 15 minutos bloquean nuevos intentos con `429` genérico,
-hasta que los fallos más antiguos salen de la ventana.
+Los intentos se cuentan en PostgreSQL (nunca en memoria), con
+identificadores derivados mediante HMAC (nunca en claro), por acción
+(login, registro, solicitud de restablecimiento) y por identificador o por
+IP en una ventana deslizante; al superarse el límite se devuelve `429`
+genérico hasta que los intentos más antiguos salen de la ventana.
+
+### Recuperación de contraseña
+
+- Flujo de dos pasos: `POST /auth/forgot-password` (solicita el enlace) y
+  `POST /auth/reset-password` (aplica la nueva contraseña) mediante un
+  token de un solo uso, entregado como fragmento de URL
+  (`#token=...`), nunca como parte de la línea de petición del servidor.
+- El envío del correo de restablecimiento usa **Mailpit** exclusivamente en
+  desarrollo local (perfil `dev` de Docker Compose, solo accesible en
+  `127.0.0.1:8025`); Mailpit nunca se usa en producción ni sustituye a un
+  proveedor real.
+- Para un futuro entorno online, la recuperación de contraseña requiere un
+  proveedor **SMTP** real, configurado mediante `FREYJA_SMTP_HOST` y
+  variables asociadas (ver `backend/src/freyja_backend/core/config.py`).
+  **Todavía no hay ningún proveedor SMTP contratado**; la configuración de
+  producción falla explícitamente (*fail-closed*) si falta.
+- La ejecución **REAL** de trading permanece suspendida (§17) con
+  independencia del estado de la autenticación; la autenticación no
+  autoriza ni implica ejecución REAL.
 
 ## 13. Calidad y pruebas
 
@@ -480,7 +546,7 @@ freyja_trading/
   `docker compose logs postgres`; normalmente indica que el proceso sigue
   inicializando o que las variables de entorno no son válidas. No borres
   el volumen como primera solución.
-- **`alembic current` aparece vacío o distinto de `0003_auth_email_flows (head)`**:
+- **`alembic current` aparece vacío o distinto de `0004_remove_email_verification (head)`**:
   ejecuta `uv run alembic upgrade head` desde `backend/` con PostgreSQL
   `healthy`. Un valor vacío es normal en una base de datos recién creada
   antes de aplicar migraciones.
@@ -511,9 +577,9 @@ seguridad, usar `trust`, ignorar errores o editar lockfiles manualmente.
 
 ## 17. Limitaciones actuales
 
-- Existe un inicio de sesión mínimo para la propietaria (§12); no hay
-  registro público, recuperación de contraseña por correo, OAuth ni
-  roles múltiples.
+- Existe autenticación completa (§12): registro directo, inicio de sesión,
+  sesión, cierre de sesión y recuperación de contraseña por correo; no hay
+  OAuth ni roles múltiples.
 - No existe dominio funcional de trading.
 - No existe integración con brokers.
 - No existe ejecución DEMO ni REAL.
