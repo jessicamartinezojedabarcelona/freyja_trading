@@ -151,13 +151,21 @@ jobs:
 
       - name: Neon — apply Alembic migrations (direct connection)
         working-directory: backend
+        # PostgresSettings requires DATABASE_URL (or the POSTGRES_* component
+        # fields) before migration_url is even accessible — DATABASE_DIRECT_URL
+        # alone is not sufficient to construct Settings, by design (it is
+        # meaningless without a runtime URL configured too). Both secrets are
+        # therefore required here; migration_url still correctly resolves to
+        # the direct (unpooled) connection because DATABASE_DIRECT_URL is set.
         env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           DATABASE_DIRECT_URL: ${{ secrets.NEON_DATABASE_DIRECT_URL }}
         run: uv run alembic upgrade head
 
       - name: Neon — verify current revision matches heads
         working-directory: backend
         env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           DATABASE_DIRECT_URL: ${{ secrets.NEON_DATABASE_DIRECT_URL }}
         run: |
           heads_output="$(uv run alembic heads)"
@@ -177,8 +185,6 @@ jobs:
           FREYJA_ENVIRONMENT: production
           FREYJA_FRONTEND_ORIGIN: https://placeholder.invalid
           FREYJA_ALLOWED_HOSTS: placeholder.invalid
-          FREYJA_SMTP_HOST: placeholder.invalid
-          FREYJA_SMTP_FROM_ADDRESS: placeholder@placeholder.invalid
           FREYJA_RATE_LIMIT_HMAC_KEY: workflow-connectivity-check-only
         # A pre-deploy sanity check independent of the migration connection:
         # if the pooled URL the backend will actually use at runtime cannot
@@ -186,7 +192,10 @@ jobs:
         # not something the deploy hooks below should be triggered against.
         # The FREYJA_* placeholders above only satisfy Settings' own
         # fail-closed production validation for this one-off check — they
-        # are never used to serve real traffic.
+        # are never used to serve real traffic. No SMTP placeholders here:
+        # SMTP is no longer required for Settings to construct (see
+        # core/config.py) — no provider is approved yet, and inventing one
+        # even for this check would contradict that.
         run: |
           uv run python -c "
           from freyja_backend.db.deps import is_database_ready
@@ -195,14 +204,23 @@ jobs:
           print('Neon DATABASE_URL (pooled) is reachable')
           "
 
-      # --- Only now, trigger Render's deploy hooks ---
+      # --- Only now, trigger Render's deploy hooks, pinned to this exact
+      # validated commit (never "whatever is latest on main") ---
 
-      - name: Trigger Render backend deploy hook
+      - name: Trigger Render backend deploy hook (pinned to this commit)
         env:
           RENDER_BACKEND_DEPLOY_HOOK: ${{ secrets.RENDER_BACKEND_DEPLOY_HOOK }}
-        run: curl --fail --silent --show-error -X POST "$RENDER_BACKEND_DEPLOY_HOOK"
+        # Render's deploy hook URLs already carry a `?key=...` query
+        # parameter (per Render's own documentation); appending `&ref=<sha>`
+        # deploys that exact commit instead of the latest one on the
+        # service's tracked branch. GITHUB_SHA is the full 40-character SHA
+        # of the commit this workflow is running against — the same one
+        # backend quality controls, the Neon migration, and the readiness
+        # check above all just validated. Never echoed: curl receives it
+        # only via shell variable expansion, never printed or logged.
+        run: curl --fail --silent --show-error -X POST "${RENDER_BACKEND_DEPLOY_HOOK}&ref=${GITHUB_SHA}"
 
-      - name: Trigger Render frontend deploy hook
+      - name: Trigger Render frontend deploy hook (pinned to this commit)
         env:
           RENDER_FRONTEND_DEPLOY_HOOK: ${{ secrets.RENDER_FRONTEND_DEPLOY_HOOK }}
-        run: curl --fail --silent --show-error -X POST "$RENDER_FRONTEND_DEPLOY_HOOK"
+        run: curl --fail --silent --show-error -X POST "${RENDER_FRONTEND_DEPLOY_HOOK}&ref=${GITHUB_SHA}"

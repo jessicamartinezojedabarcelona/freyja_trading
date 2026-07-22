@@ -73,19 +73,42 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _require_consistent_smtp_configuration(self) -> "Settings":
+        # Applies in every environment, not just production: a partial SMTP
+        # configuration is nonsensical regardless of where it runs. SMTP
+        # itself stays fully optional — there is no provider approved yet
+        # (see README, "SMTP pendiente"), and production must be able to
+        # start with none of it set at all. What is never acceptable is
+        # *half* a configuration (e.g. a host with no sender address, or a
+        # username with no password) — those fail closed everywhere.
+        # Never includes any configured value in the error message.
+        missing = []
+        if self.smtp_host and not self.smtp_from_address:
+            missing.append("FREYJA_SMTP_FROM_ADDRESS (requerido si se define FREYJA_SMTP_HOST)")
+        if self.smtp_from_address and not self.smtp_host:
+            missing.append("FREYJA_SMTP_HOST (requerido si se define FREYJA_SMTP_FROM_ADDRESS)")
+        if self.smtp_username and not self.smtp_password:
+            missing.append("FREYJA_SMTP_PASSWORD (requerido si se define FREYJA_SMTP_USERNAME)")
+
+        if missing:
+            raise ValueError(
+                "Configuración SMTP incompleta/inconsistente, faltan: " + ", ".join(missing)
+            )
+        return self
+
+    @model_validator(mode="after")
     def _require_production_configuration(self) -> "Settings":
         if self.environment != "production":
             return self
 
+        # SMTP is deliberately NOT required here: no provider is approved yet
+        # (see README, "SMTP pendiente"). Production must be able to start
+        # (registration, login, sessions) with password recovery simply
+        # left non-operational until a real provider is configured later —
+        # never by inventing placeholder SMTP values to satisfy this check.
         missing = []
-        if not self.smtp_host:
-            missing.append("FREYJA_SMTP_HOST")
-        if not self.smtp_from_address:
-            missing.append("FREYJA_SMTP_FROM_ADDRESS")
         if not self.rate_limit_hmac_key:
             missing.append("FREYJA_RATE_LIMIT_HMAC_KEY")
-        if self.smtp_username and not self.smtp_password:
-            missing.append("FREYJA_SMTP_PASSWORD")
         if self.frontend_origin == _DEV_FRONTEND_ORIGIN:
             missing.append("FREYJA_FRONTEND_ORIGIN (no puede quedar en el valor de desarrollo)")
         if self.allowed_hosts == _DEV_ALLOWED_HOSTS:

@@ -625,10 +625,13 @@ sola vez.
 **Léase con honestidad, no como un anuncio de producto:** esto es, como
 mucho, una vista previa gratuita del *shell* autenticado (registro, login,
 sesión, recuperación de contraseña) — no es infraestructura de trading
-disponible 24/7. Tanto el plan gratuito de Render como el de Neon
-suspenden el servicio por inactividad; la primera petición tras un
-periodo sin uso tardará más de lo normal en responder (*cold start*) en
-ambos.
+disponible 24/7. El **Web Service** gratuito de Render puede suspenderse
+por inactividad, y el cómputo de **Neon Free** también puede suspenderse
+por inactividad; la primera petición tras un periodo sin uso puede tardar
+más de lo normal en responder (*cold start*) en cualquiera de los dos, y
+potencialmente en ambos a la vez si coincide. El **Static Site** de Render
+(el frontend) **no** tiene este comportamiento: se sirve desde un CDN
+global, no desde un proceso que se suspenda por inactividad.
 
 ### 19.1 Arquitectura y componentes
 
@@ -688,8 +691,13 @@ plan gratuito de Neon).
 | `FREYJA_ALLOWED_HOSTS` | Hosts aceptados en la cabecera `Host` | Secreto gestionado — hostname real del backend |
 | `FREYJA_RATE_LIMIT_HMAC_KEY` | Clave HMAC para *rate limiting* | Secreto gestionado — generado una vez |
 | `FREYJA_SESSION_TTL_MINUTES` | Duración de la cookie de sesión | Valor literal (`720`) |
-| `FREYJA_SMTP_*` (6 variables) | Transporte SMTP de producción | Secretos gestionados — **pendientes**, sin proveedor aprobado (§19.7) |
 | `DATABASE_URL` | Cadena de conexión **pooled** de Neon (consultas en tiempo de ejecución) | Secreto gestionado — debe incluir `sslmode=require` |
+
+Las seis variables `FREYJA_SMTP_*` **no aparecen en `render.yaml`**:
+`Settings` ya no las exige para arrancar en producción (§19.7), así que
+aplicar este Blueprint no obliga a Jessica a rellenarlas sin tener todavía
+un proveedor. Se añadirán directamente en el panel de Render el día que
+haya un proveedor SMTP real aprobado.
 
 **Render (Static Site `freyja-frontend`)**:
 
@@ -701,8 +709,8 @@ plan gratuito de Neon).
 
 | Secreto | Propósito |
 |---|---|
-| `NEON_DATABASE_URL` | Verificación de conectividad de la conexión *pooled* antes de disparar los deploy hooks |
-| `NEON_DATABASE_DIRECT_URL` | Conexión **directa** (sin *pooling*) de Neon, usada exclusivamente para `alembic upgrade head` |
+| `NEON_DATABASE_URL` | Conexión **pooled** de Neon — requerida por `PostgresSettings` para poder construirse en absoluto (aunque las migraciones usen la directa), y usada además para la verificación de conectividad antes de disparar los deploy hooks |
+| `NEON_DATABASE_DIRECT_URL` | Conexión **directa** (sin *pooling*) de Neon — cuando está presente junto a `NEON_DATABASE_URL`, `migration_url` resuelve a esta para `alembic upgrade head` |
 | `RENDER_BACKEND_DEPLOY_HOOK` | URL del deploy hook del Web Service |
 | `RENDER_FRONTEND_DEPLOY_HOOK` | URL del deploy hook del Static Site |
 
@@ -715,12 +723,17 @@ Ninguno de estos valores aparece de forma literal en `render.yaml`, en
 adaptación (se retiró deliberadamente de `render.yaml`). En su lugar, el
 workflow manual de GitHub Actions (§19.10):
 
-1. Aplica `uv run alembic upgrade head` contra `DATABASE_DIRECT_URL` de
-   Neon (conexión directa, sin *pooling* — ver §19.8 para el porqué).
+1. Aplica `uv run alembic upgrade head` con **ambos** secretos de Neon
+   presentes (`NEON_DATABASE_URL` y `NEON_DATABASE_DIRECT_URL`):
+   `PostgresSettings` exige `DATABASE_URL` (o las variables `POSTGRES_*`)
+   para poder construirse en absoluto, y con `DATABASE_DIRECT_URL` también
+   presente, `migration_url` resuelve a la conexión directa (sin
+   *pooling* — ver §19.8 para el porqué).
 2. Verifica explícitamente que `alembic current` coincide con
    `alembic heads` tras el `upgrade`.
 3. Solo si ambos pasos anteriores tienen éxito, dispara los deploy hooks
-   de Render.
+   de Render — pinchados al SHA exacto de este `workflow_dispatch` (ver
+   §19.10), nunca a "lo último disponible" en la rama del servicio.
 
 Esto separa "migrar el esquema" de "desplegar código" en dos pasos
 verificados de forma independiente, en vez de acoplarlos a un
@@ -759,15 +772,36 @@ Sin cambios respecto a la preparación anterior:
 
 ### 19.7 SMTP y recuperación de contraseña
 
-Sin cambios de producto. **No hay proveedor SMTP de producción
-aprobado.** Mailpit sigue siendo exclusivamente de desarrollo local;
-`SmtpEmailSender` sigue siendo el único transporte de producción. Las seis
-variables `FREYJA_SMTP_*` quedan como secretos pendientes en
-`render.yaml`. Si el envío falla, el token ya se comprometió en
-PostgreSQL (*fail-closed*), pero el correo se degrada explícitamente sin
-fingir una entrega que no ocurrió (`core/email.py`, `EmailDeliveryError`).
-**La recuperación de contraseña en línea no debe considerarse operativa
-hasta que Jessica apruebe y configure un proveedor SMTP real.**
+**Decisión de producto vigente**: no hay proveedor SMTP de producción
+aprobado todavía, y el backend **debe poder arrancar en producción sin
+SMTP configurado en absoluto**. En consecuencia:
+
+- `Settings` ya **no exige** `FREYJA_SMTP_HOST` ni `FREYJA_SMTP_FROM_ADDRESS`
+  para arrancar en producción (antes sí lo exigía; ver commit correctivo).
+  Con las seis variables `FREYJA_SMTP_*` ausentes, el backend arranca con
+  normalidad.
+- Lo que **sigue fallando cerrado**, en cualquier entorno, es una
+  configuración SMTP **parcial**: si se define `FREYJA_SMTP_HOST` debe
+  existir `FREYJA_SMTP_FROM_ADDRESS` (y viceversa), y si se define
+  `FREYJA_SMTP_USERNAME` debe existir `FREYJA_SMTP_PASSWORD`. Nunca se
+  inventan valores para satisfacer esta validación — o se configuran los
+  seis juntos con un proveedor real, o no se configura ninguno.
+- **Qué funciona sin SMTP**: registro, inicio de sesión y sesión — el
+  backend completo funciona con normalidad.
+- **Qué no funciona sin SMTP**: la recuperación de contraseña en línea no
+  debe considerarse operativa hasta que Jessica apruebe y configure un
+  proveedor real; el token de restablecimiento se compromete igualmente en
+  PostgreSQL (*fail-closed*), pero el correo nunca se envía y eso se
+  degrada explícitamente, sin fingir una entrega que no ocurrió
+  (`core/email.py`, `EmailDeliveryError`).
+- **No existe verificación de correo** en el flujo vigente (retirada
+  deliberadamente, véase §12 y la migración `0004_remove_email_verification`)
+  — esto es independiente de si hay o no proveedor SMTP.
+- Mailpit sigue siendo exclusivamente de desarrollo local;
+  `SmtpEmailSender` sigue siendo el único transporte de producción.
+  `render.yaml` ya no declara ninguna variable `FREYJA_SMTP_*` (ver §19.3):
+  se añadirán directamente en el panel de Render cuando haya un proveedor
+  real, no al aplicar el Blueprint.
 
 ### 19.8 PostgreSQL (Neon) — conexión, TLS, backups y qué está pendiente
 
@@ -844,11 +878,23 @@ migración ya no está acoplada al despliegue de Render:
   una migración en curso.
 - Permisos mínimos: `contents: read` únicamente.
 - Orden: controles de calidad de backend y frontend (contra un PostgreSQL
-  efímero de CI, nunca contra Neon) → migración de Neon vía
-  `NEON_DATABASE_DIRECT_URL` → verificación `current == heads` →
-  comprobación de conectividad de `NEON_DATABASE_URL` (la conexión
-  *pooled* que el backend usará en producción) → disparo de los dos
-  deploy hooks de Render, leídos exclusivamente de GitHub Secrets.
+  efímero de CI, nunca contra Neon) → migración de Neon con
+  `NEON_DATABASE_URL` + `NEON_DATABASE_DIRECT_URL` ambas presentes
+  (`migration_url` resuelve a la directa) → verificación `current ==
+  heads` → comprobación de conectividad de `NEON_DATABASE_URL` (la
+  conexión *pooled* que el backend usará en producción) → disparo de los
+  dos deploy hooks de Render, leídos exclusivamente de GitHub Secrets.
+- **Los deploy hooks despliegan el commit exacto**, no "lo último
+  disponible": ambos se invocan con `&ref=$GITHUB_SHA` añadido a la URL
+  del hook (parámetro `ref` documentado oficialmente por Render para
+  desplegar un commit específico), usando la variable `GITHUB_SHA` que
+  GitHub Actions inyecta automáticamente — el mismo commit que los
+  controles de calidad y la migración de este mismo *run* acaban de
+  validar. Backend y frontend reciben idéntico SHA.
+- **`autoDeployTrigger: off` en ambos servicios de `render.yaml`**: sin
+  esto, Render usaría su comportamiento por defecto (`commit`) y
+  desplegaría automáticamente cada push a la rama enlazada, saltándose por
+  completo la migración controlada de este workflow.
 
 ### 19.11 Checklist previo a producción
 
@@ -868,8 +914,8 @@ migración ya no está acoplada al despliegue de Render:
 - [ ] `FREYJA_ALLOWED_HOSTS` actualizado con el hostname real del backend.
 - [ ] `GET /api/v1/health/ready` verificado manualmente.
 - [ ] `alembic current` verificado igual a `alembic heads` en Neon.
-- [ ] Confirmar el comportamiento real del *cold start* combinado
-      (Render + Neon) tras un periodo de inactividad.
+- [ ] Confirmar el comportamiento real del *cold start* combinado (Web
+      Service de Render + Neon) tras un periodo de inactividad.
 - [ ] Confirmar si el *health check* de Render llega con un `Host`
       distinto al configurado en `FREYJA_ALLOWED_HOSTS`.
 
@@ -878,10 +924,12 @@ migración ya no está acoplada al despliegue de Render:
 - **Esto es una vista previa gratuita del shell autenticado, no
   infraestructura de trading disponible 24/7.** Registro, login, sesión y
   recuperación de contraseña — nada más.
-- Tanto Render Free como Neon Free **suspenden el servicio por
-  inactividad**: espera *cold starts* perceptibles (varios segundos) en la
-  primera petición tras un rato sin uso, en el backend y en la base de
-  datos, potencialmente encadenados.
+- El **Web Service** gratuito de Render y el cómputo de **Neon Free**
+  pueden **suspenderse por inactividad**: espera *cold starts* perceptibles
+  (varios segundos) en la primera petición tras un rato sin uso, en el
+  backend y en la base de datos, potencialmente encadenados. El **Static
+  Site** de Render (frontend) no tiene este comportamiento: se sirve desde
+  CDN, no desde un proceso que se suspenda.
 - **No hay proveedor SMTP de producción** — la recuperación de contraseña
   en línea no es funcional hasta que se apruebe uno (§19.7).
 - El reenvío de IP de cliente no se confía todavía (§19.6).

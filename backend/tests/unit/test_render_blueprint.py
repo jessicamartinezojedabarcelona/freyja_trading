@@ -118,3 +118,23 @@ def test_no_localhost_or_placeholder_hardcoded_anywhere_in_render_yaml() -> None
     code_only = _code_only_content()
     assert "localhost" not in code_only
     assert "REPLACE_WITH" not in code_only
+
+
+def test_no_smtp_variables_declared_at_all() -> None:
+    """No SMTP provider is approved yet, and Settings no longer requires any
+    FREYJA_SMTP_* variable to start in production — none should be declared
+    as an actual envVar entry here (a `key: FREYJA_SMTP_*` line), so applying
+    this Blueprint never prompts Jessica to fill in values she does not
+    have. Explanatory comments are allowed to mention the variable name
+    when documenting its deliberate absence."""
+    code_only = _code_only_content()
+    assert "FREYJA_SMTP" not in code_only
+
+
+def test_both_services_disable_auto_deploy_on_commit() -> None:
+    """Deploys must only happen through deploy-preview.yml's controlled
+    sequence (quality -> Neon migration -> verification -> deploy hooks).
+    Without autoDeployTrigger: off, Render's default ("commit") would deploy
+    every push to main on its own, bypassing the migration entirely."""
+    content = _code_only_content()
+    assert content.count("autoDeployTrigger: off") == 2

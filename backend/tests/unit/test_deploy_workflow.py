@@ -95,6 +95,54 @@ def test_no_line_looks_like_a_literal_high_entropy_secret_value() -> None:
             )
 
 
+def test_both_neon_migration_steps_set_pooled_and_direct_urls() -> None:
+    """PostgresSettings requires DATABASE_URL (or the POSTGRES_* component
+    fields) before migration_url is even accessible — DATABASE_DIRECT_URL
+    alone cannot construct Settings. Both the 'apply' and 'verify' steps
+    must therefore set both secrets, with migration_url still resolving to
+    the direct connection because DATABASE_DIRECT_URL is present."""
+    content = _content()
+    # Split on step boundaries ("- name:") to inspect each Neon migration
+    # step's own env block in isolation.
+    steps = content.split("- name:")
+    neon_migration_steps = [
+        step
+        for step in steps
+        if "Neon" in step.splitlines()[0] and "alembic" in step and "reachable" not in step
+    ]
+    assert len(neon_migration_steps) == 2, "expected exactly the apply + verify Neon steps"
+    for step in neon_migration_steps:
+        assert "secrets.NEON_DATABASE_URL" in step
+        assert "secrets.NEON_DATABASE_DIRECT_URL" in step
+
+
+def test_deploy_hooks_pin_the_exact_validated_commit() -> None:
+    """Deploy hooks must never deploy 'whatever is latest' — they deploy the
+    exact commit this workflow run validated, via Render's documented `ref`
+    query parameter appended to the hook URL, using GitHub's own
+    GITHUB_SHA (no separate declaration needed — GitHub Actions provides it
+    automatically to every step)."""
+    code_only = _code_only_content()
+    assert "&ref=${GITHUB_SHA}" in code_only or "&ref=$GITHUB_SHA" in code_only
+    backend_hook_line = next(
+        line for line in code_only.splitlines() if "RENDER_BACKEND_DEPLOY_HOOK}" in line
+    )
+    frontend_hook_line = next(
+        line for line in code_only.splitlines() if "RENDER_FRONTEND_DEPLOY_HOOK}" in line
+    )
+    assert "ref=" in backend_hook_line
+    assert "ref=" in frontend_hook_line
+
+
+def test_readiness_check_step_declares_no_smtp_placeholders() -> None:
+    """SMTP is no longer required for Settings to construct in production —
+    no provider is approved yet, and this workflow's one-off connectivity
+    check must not invent placeholder SMTP values it no longer needs."""
+    content = _content()
+    reachable_step = next(step for step in content.split("- name:") if "reachable" in step)
+    assert "FREYJA_SMTP" not in reachable_step
+
+
 def test_never_runs_pytest_or_migrations_against_neon_pooled_url_directly() -> None:
     """The quality-control phase (pytest, alembic upgrade for validation) runs
     only against the ephemeral CI Postgres service container — never against

@@ -239,6 +239,33 @@ def test_migration_url_falls_back_to_database_url_when_direct_url_absent(
     assert settings.migration_url.host == settings.url.host == "ep-only-one.neon.tech"
 
 
+def test_neither_password_leaks_when_both_pooled_and_direct_are_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With both a pooled DATABASE_URL and a direct DATABASE_DIRECT_URL
+    configured together (the real Neon workflow scenario), url resolves to
+    the pooled connection and migration_url to the direct one — and neither
+    URL's password ever appears in either safe representation."""
+    _clear_postgres_env(monkeypatch)
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://neon_user:pooled-secret-value@ep-pooled.neon.tech/freyja?sslmode=require",
+    )
+    monkeypatch.setenv(
+        "DATABASE_DIRECT_URL",
+        "postgresql://neon_user:direct-secret-value@ep-direct.neon.tech/freyja?sslmode=require",
+    )
+
+    settings = _settings()
+
+    assert settings.url.host == "ep-pooled.neon.tech"
+    assert settings.migration_url.host == "ep-direct.neon.tech"
+    assert "pooled-secret-value" not in settings.safe_url
+    assert "pooled-secret-value" not in settings.safe_migration_url
+    assert "direct-secret-value" not in settings.safe_url
+    assert "direct-secret-value" not in settings.safe_migration_url
+
+
 def test_migration_url_falls_back_to_components_in_local_development(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -43,6 +43,12 @@ services:
     # request (see README). Fine for an authenticated-shell preview; revisit
     # before any real user-facing launch.
     plan: free
+    # Disables Render's default auto-deploy-on-commit behavior. Deploys must
+    # only happen via deploy-preview.yml's controlled sequence (quality →
+    # Neon migration → verification → deploy hooks) — without this, Render
+    # would deploy every push to main's linked branch on its own, bypassing
+    # the migration entirely.
+    autoDeployTrigger: off
     rootDir: backend
     # `pip install uv` first: whether Render's Python runtime image ships uv
     # preinstalled is not confirmed by official docs, so the build command
@@ -81,24 +87,15 @@ services:
         # directly in the Render dashboard. Never versioned, never logged.
       - key: FREYJA_SESSION_TTL_MINUTES
         value: "720"
-      - key: FREYJA_SMTP_HOST
-        sync: false
-      - key: FREYJA_SMTP_PORT
-        sync: false
-      - key: FREYJA_SMTP_USE_TLS
-        sync: false
-      - key: FREYJA_SMTP_USERNAME
-        sync: false
-      - key: FREYJA_SMTP_PASSWORD
-        sync: false
-      - key: FREYJA_SMTP_FROM_ADDRESS
-        sync: false
-        # All FREYJA_SMTP_* above are PENDING a real provider: no SMTP
-        # provider is approved yet (see README, "SMTP pendiente"). Until
-        # these are filled in with real values, password-recovery email
-        # delivery will fail closed/degrade explicitly — see
-        # core/email.py's EmailDeliveryError handling. Do not fill these
-        # with placeholder-looking values that resemble real credentials.
+        # No FREYJA_SMTP_* variables here at all: no SMTP provider is
+        # approved yet (see README, "SMTP pendiente"), and Settings no
+        # longer requires any of them to start in production (see
+        # core/config.py) — omitting them entirely means applying this
+        # Blueprint never prompts Jessica to fill in SMTP values she does
+        # not have yet. Registration, login, and sessions work without
+        # SMTP; only password recovery stays non-operational until a real
+        # provider's six FREYJA_SMTP_* variables are added later, directly
+        # in the Render dashboard (not required at Blueprint creation).
       - key: DATABASE_URL
         sync: false
         # Neon's pooled connection string (runtime queries), entered
@@ -118,6 +115,9 @@ services:
     # than a single compute region, so the "coherent EU region" requirement
     # applies to the Web Service above (the only resource in this Blueprint
     # that has a region concept) — documented, not silently omitted.
+    # Same reasoning as the backend: deploys must only happen via
+    # deploy-preview.yml's controlled sequence, never automatically on push.
+    autoDeployTrigger: off
     rootDir: frontend
     # Runs the environment generator before the Angular build: it reads
     # FREYJA_BACKEND_URL (below), validates it, and rewrites
