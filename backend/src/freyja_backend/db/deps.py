@@ -2,7 +2,9 @@ from collections.abc import Iterator
 from functools import lru_cache
 
 from fastapi import HTTPException
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from freyja_backend.core.database import create_database_engine
@@ -25,6 +27,20 @@ def set_engine_override(engine: Engine | None) -> None:
     """Test-only hook: point the API layer's DB dependency at a different engine."""
     global _engine_override
     _engine_override = engine
+
+
+def is_database_ready() -> bool:
+    """Readiness check: a real connection attempt + trivial query, independent
+    of the ORM session lifecycle used by get_db() (no commit/rollback dance
+    to reason about when the connection itself is the thing that might be
+    broken). Never raises — a failure here means "not ready", not a bug."""
+    engine = _engine_override if _engine_override is not None else _default_engine()
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+        return True
+    except SQLAlchemyError:
+        return False
 
 
 def get_db() -> Iterator[Session]:

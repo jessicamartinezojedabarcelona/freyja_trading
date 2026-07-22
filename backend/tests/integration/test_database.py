@@ -33,6 +33,7 @@ def test_url_uses_psycopg_dialect() -> None:
 
 def test_safe_url_hides_password() -> None:
     settings = get_postgres_settings()
+    assert settings.postgres_password is not None
     assert settings.postgres_password not in settings.safe_url
     assert "***" in settings.safe_url
 

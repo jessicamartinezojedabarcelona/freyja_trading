@@ -53,7 +53,10 @@ def pytest_configure(config: pytest.Config) -> None:
 @pytest.fixture
 def client() -> Iterator[TestClient]:
     app = create_app()
-    with TestClient(app) as test_client:
+    # base_url="http://localhost": TestClient defaults to Host "testserver",
+    # which TrustedHostMiddleware (allowed_hosts defaults to
+    # "localhost,127.0.0.1") would otherwise reject with 400 on every request.
+    with TestClient(app, base_url="http://localhost") as test_client:
         yield test_client
 
 

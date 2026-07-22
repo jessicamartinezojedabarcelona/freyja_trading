@@ -1,0 +1,147 @@
+# Render Blueprint — DEPLOY-ONLINE-001 (Render Free + Neon Free adaptation)
+#
+# This file describes, but does NOT create, two Render resources:
+#   - a Static Site serving the Angular frontend build,
+#   - a Web Service running the FastAPI backend.
+# PostgreSQL is NOT provisioned by this Blueprint: it is an external Neon
+# project (free tier), created separately and referenced only via secrets
+# (NEON_DATABASE_URL / NEON_DATABASE_DIRECT_URL) that Render prompts for
+# when the Blueprint is applied.
+#
+# Applying this Blueprint in the Render dashboard, and creating the Neon
+# project, are decisions reserved for Jessica. This file alone creates no
+# service, connects no GitHub account, and generates no cost — both plans
+# below are Render's free tier. Every `sync: false` variable is a value
+# Render prompts for interactively; none of them are, or should ever
+# become, literal values in this file or in Git.
+#
+# Sourced from Render's official documentation (render.com/docs/blueprint-spec,
+# render.com/docs/infrastructure-as-code, render.com/docs/deploy-fastapi,
+# render.com/docs/environment-variables, render.com/docs/python-version,
+# render.com/docs/monorepo-support, render.com/docs/static-sites) and Neon's
+# official documentation (neon.com/docs/connect/connect-securely,
+# neon.com/docs/guides/sqlalchemy-migrations), not blog posts. See README.md,
+# section "Despliegue en Render (arquitectura provisional)" for the full
+# narrative, what is confirmed vs. still pending verification on a real
+# deployment, and the pre/post-deploy checklists.
+#
+# Migrations are NOT run as a Render preDeployCommand in this adaptation:
+# they run from the separate, manually-triggered GitHub Actions workflow
+# (.github/workflows/deploy-preview.yml), which applies Alembic against Neon
+# and only then calls Render's deploy hooks. There is deliberately no
+# automatic database provisioning or migration step tied to a Render
+# deploy itself.
+
+services:
+  - type: web
+    name: freyja-backend
+    runtime: python
+    region: frankfurt
+    # Render's only EU region (see DEPLOY-ONLINE-001 architecture comparison).
+    # PENDING DECISION (Jessica): "free" avoids automatic charge, but free
+    # web services spin down after inactivity and cold-start on the next
+    # request (see README). Fine for an authenticated-shell preview; revisit
+    # before any real user-facing launch.
+    plan: free
+    rootDir: backend
+    # `pip install uv` first: whether Render's Python runtime image ships uv
+    # preinstalled is not confirmed by official docs, so the build command
+    # installs it explicitly rather than assuming.
+    buildCommand: pip install uv && uv sync --locked
+    startCommand: uv run uvicorn freyja_backend.main:app --host 0.0.0.0 --port $PORT
+    # No preDeployCommand: migrations run from the manual GitHub Actions
+    # workflow before this service's deploy hook is triggered, not as part
+    # of the Render deploy itself (see workflow file for why: it needs to
+    # run against Neon's direct/unpooled connection, verify current==heads,
+    # and only then fan out to both Render deploy hooks in one place).
+    # Points at the readiness endpoint (checks PostgreSQL connectivity), not
+    # the plain liveness endpoint — a backend that is up but cannot reach its
+    # database should not receive traffic.
+    healthCheckPath: /api/v1/health/ready
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.10
+        # Matches backend/pyproject.toml's `requires-python = "==3.12.*"` and
+        # the exact patch version verified in README's prerequisites table.
+      - key: FREYJA_ENVIRONMENT
+        value: production
+      - key: FREYJA_FRONTEND_ORIGIN
+        sync: false
+        # PENDING: the Static Site's exact HTTPS URL, known only after that
+        # service is created. Must never be left at the localhost default —
+        # Settings fails closed in production if it is (see core/config.py).
+      - key: FREYJA_ALLOWED_HOSTS
+        sync: false
+        # PENDING: this Web Service's own exact hostname, known only after
+        # creation (plus any custom domain, comma-separated). Must never be
+        # left at the localhost default — Settings fails closed if it is.
+      - key: FREYJA_RATE_LIMIT_HMAC_KEY
+        sync: false
+        # Real secret, generated once (e.g. `openssl rand -hex 32`), entered
+        # directly in the Render dashboard. Never versioned, never logged.
+      - key: FREYJA_SESSION_TTL_MINUTES
+        value: "720"
+      - key: FREYJA_SMTP_HOST
+        sync: false
+      - key: FREYJA_SMTP_PORT
+        sync: false
+      - key: FREYJA_SMTP_USE_TLS
+        sync: false
+      - key: FREYJA_SMTP_USERNAME
+        sync: false
+      - key: FREYJA_SMTP_PASSWORD
+        sync: false
+      - key: FREYJA_SMTP_FROM_ADDRESS
+        sync: false
+        # All FREYJA_SMTP_* above are PENDING a real provider: no SMTP
+        # provider is approved yet (see README, "SMTP pendiente"). Until
+        # these are filled in with real values, password-recovery email
+        # delivery will fail closed/degrade explicitly — see
+        # core/email.py's EmailDeliveryError handling. Do not fill these
+        # with placeholder-looking values that resemble real credentials.
+      - key: DATABASE_URL
+        sync: false
+        # Neon's pooled connection string (runtime queries), entered
+        # directly in the Render dashboard once the Neon project exists.
+        # Must include ?sslmode=require (or verify-ca/verify-full) — Settings
+        # fails closed at startup otherwise (see core/database.py). Neon's
+        # own connection strings already include sslmode=require by default.
+        # This is NOT the same secret as NEON_DATABASE_DIRECT_URL, and NOT
+        # the same as the GitHub Actions secret NEON_DATABASE_URL below —
+        # both ultimately hold the same Neon-issued value, entered in two
+        # separate places (Render dashboard here; GitHub secret for the
+        # workflow's own connectivity check).
+
+  - type: static
+    name: freyja-frontend
+    # No "region" field: Render serves static sites over a global CDN rather
+    # than a single compute region, so the "coherent EU region" requirement
+    # applies to the Web Service above (the only resource in this Blueprint
+    # that has a region concept) — documented, not silently omitted.
+    rootDir: frontend
+    # Runs the environment generator before the Angular build: it reads
+    # FREYJA_BACKEND_URL (below), validates it, and rewrites
+    # src/environments/environment.prod.ts with the real API URL before
+    # `npm run build` picks it up via Angular's fileReplacements. Fails the
+    # whole build (non-zero exit) if the URL is missing, non-HTTPS, points
+    # at localhost, or still contains placeholder text — see
+    # frontend/scripts/generate-production-environment.mjs.
+    buildCommand: npm ci && npm run generate:prod-environment && npm run build
+    staticPublishPath: dist/freyja-frontend/browser
+    envVars:
+      - key: FREYJA_BACKEND_URL
+        fromService:
+          type: web
+          name: freyja-backend
+          envVarKey: RENDER_EXTERNAL_URL
+        # RENDER_EXTERNAL_URL is Render's own auto-injected variable on the
+        # backend service — its full public HTTPS onrender.com URL (e.g.
+        # "https://freyja-backend.onrender.com"). Referencing it here means
+        # this value updates automatically if the backend's URL ever
+        # changes, with no manual edit to this file or to the frontend
+        # environment files ever required.
+    routes:
+      - path: /*
+        destination: /index.html
+        # SPA rewrite: any path not matching a real static asset falls back
+        # to index.html so Angular's client-side router can handle it.

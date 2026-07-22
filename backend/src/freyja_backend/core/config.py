@@ -8,6 +8,11 @@ Environment = Literal["development", "test", "production"]
 
 _ROOT_ENV_FILE = Path(__file__).resolve().parents[4] / ".env"
 
+# Development-only defaults. Also used to detect a production deployment that
+# forgot to override them (see _require_production_configuration below).
+_DEV_FRONTEND_ORIGIN = "http://localhost:4200"
+_DEV_ALLOWED_HOSTS = "localhost,127.0.0.1"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -25,7 +30,11 @@ class Settings(BaseSettings):
     # misconfigured deployment run with development-grade security by accident.
     environment: Environment
     api_v1_prefix: str = "/api/v1"
-    frontend_origin: str = "http://localhost:4200"
+    frontend_origin: str = _DEV_FRONTEND_ORIGIN
+    # Comma-separated Host header allow-list for TrustedHostMiddleware. A
+    # plain string (not a list) so it can be set from a single dashboard env
+    # var without relying on JSON parsing of complex pydantic-settings types.
+    allowed_hosts: str = _DEV_ALLOWED_HOSTS
     session_ttl_minutes: int = 720
     password_reset_ttl_minutes: int = 30
 
@@ -45,6 +54,24 @@ class Settings(BaseSettings):
     def cookie_secure(self) -> bool:
         return self.environment == "production"
 
+    @property
+    def allowed_hosts_list(self) -> list[str]:
+        return [host.strip() for host in self.allowed_hosts.split(",") if host.strip()]
+
+    @model_validator(mode="after")
+    def _reject_wildcard_frontend_origin(self) -> "Settings":
+        # Never valid regardless of environment: allow_credentials=True combined
+        # with a wildcard origin is rejected by browsers anyway, but failing
+        # closed here means a misconfiguration is caught at startup, not
+        # discovered later as a silently broken (or worse, tolerated-by-some-
+        # client) CORS setup.
+        if self.frontend_origin.strip() == "*":
+            raise ValueError(
+                "FREYJA_FRONTEND_ORIGIN no puede ser '*': CORS con credenciales exige "
+                "un origen exacto."
+            )
+        return self
+
     @model_validator(mode="after")
     def _require_production_configuration(self) -> "Settings":
         if self.environment != "production":
@@ -59,6 +86,10 @@ class Settings(BaseSettings):
             missing.append("FREYJA_RATE_LIMIT_HMAC_KEY")
         if self.smtp_username and not self.smtp_password:
             missing.append("FREYJA_SMTP_PASSWORD")
+        if self.frontend_origin == _DEV_FRONTEND_ORIGIN:
+            missing.append("FREYJA_FRONTEND_ORIGIN (no puede quedar en el valor de desarrollo)")
+        if self.allowed_hosts == _DEV_ALLOWED_HOSTS:
+            missing.append("FREYJA_ALLOWED_HOSTS (no puede quedar en el valor de desarrollo)")
 
         if missing:
             raise ValueError(

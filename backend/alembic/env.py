@@ -20,7 +20,7 @@ target_metadata = Base.metadata
 
 def _get_database_url() -> URL:
     if "database_url" not in config.attributes:
-        return get_postgres_settings().url
+        return get_postgres_settings().migration_url
 
     override = config.attributes["database_url"]
     if not isinstance(override, URL):

@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from freyja_backend.api.v1.router import router as api_v1_router
 from freyja_backend.core.config import get_settings
@@ -8,6 +9,10 @@ from freyja_backend.core.config import get_settings
 def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(title=settings.app_name, version=settings.app_version)
+    # Rejects requests whose Host header isn't in the explicit allow-list,
+    # independent of and prior to any forwarded-header trust decision (this
+    # app does not trust X-Forwarded-* — see get_client_ip in api/deps.py).
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts_list)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[settings.frontend_origin],
