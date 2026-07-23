@@ -12,7 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 BACKEND_DIR = REPO_ROOT / "backend"
 FRONTEND_DIR = REPO_ROOT / "frontend"
 
-EXPECTED_HEAD = "0004_remove_email_verification (head)"
+EXPECTED_HEAD = "0005_catalog (head)"
 _ALEMBIC_INFO_PREFIX = "INFO  [alembic."
 
 

@@ -32,6 +32,12 @@ Consulta el detalle completo y las justificaciones del stack en
 - **SQLAlchemy / Alembic**: capa de persistencia y migraciones del
   backend. La base de datos se crea exclusivamente mediante migraciones de
   Alembic.
+- **Catálogo canónico** (`POINT1-DB-001`): seis tablas (`freyja2_underlying_markets`,
+  `freyja2_product_types`, `freyja2_assets`, `freyja2_instruments`,
+  `freyja2_timeframes`, `freyja2_instrument_timeframes`) que modelan identidad
+  de mercado, producto, activo, instrumento y timeframe. Sin datos sembrados,
+  sin proveedores/venues, sin capacidades operativas y sin endpoints todavía
+  (ver `POINT1-PROVIDER-001`, `POINT1-CAPABILITY-001`, `POINT1-API-001`).
 - **Orquestador de calidad** (`scripts/quality.py`): punto de entrada
   único, reproducible y multiplataforma para ejecutar todos los controles
   locales de backend y frontend.
@@ -191,7 +197,7 @@ Consultar los heads disponibles:
 uv run alembic heads
 ```
 
-Actualmente existe un único head: `0004_remove_email_verification (head)`.
+Actualmente existe un único head: `0005_catalog (head)`.
 
 Consultar la revisión actual aplicada:
 
@@ -552,7 +558,7 @@ freyja_trading/
   `docker compose logs postgres`; normalmente indica que el proceso sigue
   inicializando o que las variables de entorno no son válidas. No borres
   el volumen como primera solución.
-- **`alembic current` aparece vacío o distinto de `0004_remove_email_verification (head)`**:
+- **`alembic current` aparece vacío o distinto de `0005_catalog (head)`**:
   ejecuta `uv run alembic upgrade head` desde `backend/` con PostgreSQL
   `healthy`. Un valor vacío es normal en una base de datos recién creada
   antes de aplicar migraciones.

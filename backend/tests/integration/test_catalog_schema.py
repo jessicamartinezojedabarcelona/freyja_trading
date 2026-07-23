@@ -1,0 +1,376 @@
+import uuid
+from pathlib import Path
+
+import pytest
+from alembic.config import Config
+from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from alembic import command
+from freyja_backend.core.database import get_postgres_settings
+from freyja_backend.db.models.catalog import (
+    Asset,
+    Instrument,
+    InstrumentTimeframe,
+    ProductType,
+    Timeframe,
+    UnderlyingMarket,
+)
+
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+
+_CATALOG_TABLES = frozenset(
+    {
+        "freyja2_underlying_markets",
+        "freyja2_product_types",
+        "freyja2_assets",
+        "freyja2_timeframes",
+        "freyja2_instruments",
+        "freyja2_instrument_timeframes",
+    }
+)
+
+
+def _alembic_config() -> Config:
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    return cfg
+
+
+@pytest.fixture(autouse=True)
+def _truncate_catalog_tables(auth_test_engine: Engine) -> None:
+    with auth_test_engine.connect() as connection:
+        connection.execute(
+            text(f"TRUNCATE {', '.join(sorted(_CATALOG_TABLES))} RESTART IDENTITY CASCADE")
+        )
+        connection.commit()
+
+
+def _make_market(session: Session, code: str = "CRYPTO") -> UnderlyingMarket:
+    market = UnderlyingMarket(code=code)
+    session.add(market)
+    session.flush()
+    return market
+
+
+def _make_product(session: Session, code: str = "SPOT") -> ProductType:
+    product = ProductType(code=code)
+    session.add(product)
+    session.flush()
+    return product
+
+
+def _make_asset(session: Session, code: str) -> Asset:
+    asset = Asset(code=code)
+    session.add(asset)
+    session.flush()
+    return asset
+
+
+def test_upgrade_creates_exactly_the_six_catalog_tables(auth_test_engine: Engine) -> None:
+    inspector = inspect(auth_test_engine)
+    catalog_tables = {name for name in inspector.get_table_names() if name.startswith("freyja2_")}
+    assert catalog_tables == _CATALOG_TABLES
+
+
+def test_no_data_is_seeded_by_the_migration(db_session: Session) -> None:
+    assert db_session.query(UnderlyingMarket).count() == 0
+    assert db_session.query(ProductType).count() == 0
+    assert db_session.query(Asset).count() == 0
+    assert db_session.query(Instrument).count() == 0
+
+
+def test_downgrade_removes_only_the_catalog_tables_and_upgrade_restores_them() -> None:
+    """Uses its own isolated temp database (never the shared auth_test_engine)
+    so downgrading mid-suite cannot affect any other test."""
+    settings = get_postgres_settings()
+    admin_url = settings.url.set(database="postgres")
+    admin_engine = create_engine(admin_url, isolation_level="AUTOCOMMIT")
+    db_name = f"freyja_test_{uuid.uuid4().hex[:12]}"
+
+    with admin_engine.connect() as connection:
+        connection.execute(text(f'CREATE DATABASE "{db_name}"'))
+
+    try:
+        temp_url = settings.url.set(database=db_name)
+        cfg = _alembic_config()
+        cfg.attributes["database_url"] = temp_url
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(temp_url)
+        try:
+            inspector = inspect(engine)
+            before = set(inspector.get_table_names())
+            assert before >= _CATALOG_TABLES
+            assert "auth_users" in before
+
+            command.downgrade(cfg, "-1")
+            inspector = inspect(engine)
+            after_downgrade = set(inspector.get_table_names())
+            assert not (after_downgrade & _CATALOG_TABLES)
+            assert "auth_users" in after_downgrade
+
+            command.upgrade(cfg, "head")
+            inspector = inspect(engine)
+            after_upgrade = set(inspector.get_table_names())
+            assert after_upgrade >= _CATALOG_TABLES
+            assert "auth_users" in after_upgrade
+        finally:
+            engine.dispose()
+    finally:
+        with admin_engine.connect() as connection:
+            connection.execute(
+                text(
+                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                    "WHERE datname = :db_name AND pid <> pg_backend_pid()"
+                ),
+                {"db_name": db_name},
+            )
+            connection.execute(text(f'DROP DATABASE IF EXISTS "{db_name}"'))
+        admin_engine.dispose()
+
+
+def test_pair_instrument_can_be_created(db_session: Session) -> None:
+    market = _make_market(db_session, "CRYPTO")
+    product = _make_product(db_session, "SPOT")
+    base = _make_asset(db_session, "BTC")
+    quote = _make_asset(db_session, "USDT")
+
+    instrument = Instrument(
+        underlying_market_id=market.id,
+        product_type_id=product.id,
+        canonical_symbol="BTC/USDT",
+        base_asset_id=base.id,
+        quote_asset_id=quote.id,
+    )
+    db_session.add(instrument)
+    db_session.flush()
+
+    assert instrument.instrument_id is not None
+
+
+def test_asset_underlying_instrument_can_be_created(db_session: Session) -> None:
+    market = _make_market(db_session, "CRYPTO")
+    product = _make_product(db_session, "BINARY_OPTION")
+    underlying = _make_asset(db_session, "BTC")
+
+    instrument = Instrument(
+        underlying_market_id=market.id,
+        product_type_id=product.id,
+        canonical_symbol="BTC",
+        underlying_asset_id=underlying.id,
+    )
+    db_session.add(instrument)
+    db_session.flush()
+
+    assert instrument.instrument_id is not None
+
+
+def test_instrument_underlying_instrument_can_be_created(db_session: Session) -> None:
+    market = _make_market(db_session, "FOREX")
+    spot = _make_product(db_session, "SPOT")
+    binary = _make_product(db_session, "BINARY_OPTION")
+    base = _make_asset(db_session, "EUR")
+    quote = _make_asset(db_session, "USD")
+
+    spot_instrument = Instrument(
+        underlying_market_id=market.id,
+        product_type_id=spot.id,
+        canonical_symbol="EUR/USD",
+        base_asset_id=base.id,
+        quote_asset_id=quote.id,
+    )
+    db_session.add(spot_instrument)
+    db_session.flush()
+
+    binary_instrument = Instrument(
+        underlying_market_id=market.id,
+        product_type_id=binary.id,
+        canonical_symbol="EUR/USD",
+        underlying_instrument_id=spot_instrument.instrument_id,
+    )
+    db_session.add(binary_instrument)
+    db_session.flush()
+
+    assert binary_instrument.underlying_instrument_id == spot_instrument.instrument_id
+
+
+def test_instrument_cannot_mix_two_shapes(db_session: Session) -> None:
+    market = _make_market(db_session, "CRYPTO")
+    product = _make_product(db_session, "SPOT")
+    base = _make_asset(db_session, "BTC")
+    quote = _make_asset(db_session, "USDT")
+    underlying = _make_asset(db_session, "ETH")
+
+    instrument = Instrument(
+        underlying_market_id=market.id,
+        product_type_id=product.id,
+        canonical_symbol="INVALID/MIX",
+        base_asset_id=base.id,
+        quote_asset_id=quote.id,
+        underlying_asset_id=underlying.id,
+    )
+    db_session.add(instrument)
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+def test_instrument_base_asset_must_differ_from_quote_asset(db_session: Session) -> None:
+    market = _make_market(db_session, "CRYPTO")
+    product = _make_product(db_session, "SPOT")
+    same_asset = _make_asset(db_session, "BTC")
+
+    instrument = Instrument(
+        underlying_market_id=market.id,
+        product_type_id=product.id,
+        canonical_symbol="BTC/BTC",
+        base_asset_id=same_asset.id,
+        quote_asset_id=same_asset.id,
+    )
+    db_session.add(instrument)
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+def test_instrument_cannot_reference_itself_as_underlying(db_session: Session) -> None:
+    market = _make_market(db_session, "FOREX")
+    product = _make_product(db_session, "BINARY_OPTION")
+    fixed_id = uuid.uuid4()
+
+    instrument = Instrument(
+        instrument_id=fixed_id,
+        underlying_market_id=market.id,
+        product_type_id=product.id,
+        canonical_symbol="SELF/REF",
+        underlying_instrument_id=fixed_id,
+    )
+    db_session.add(instrument)
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+def test_duplicate_market_product_symbol_combination_is_rejected(db_session: Session) -> None:
+    market = _make_market(db_session, "CRYPTO")
+    product = _make_product(db_session, "SPOT")
+    base = _make_asset(db_session, "BTC")
+    quote = _make_asset(db_session, "USDT")
+
+    db_session.add(
+        Instrument(
+            underlying_market_id=market.id,
+            product_type_id=product.id,
+            canonical_symbol="BTC/USDT",
+            base_asset_id=base.id,
+            quote_asset_id=quote.id,
+        )
+    )
+    db_session.flush()
+
+    db_session.add(
+        Instrument(
+            underlying_market_id=market.id,
+            product_type_id=product.id,
+            canonical_symbol="BTC/USDT",
+            base_asset_id=base.id,
+            quote_asset_id=quote.id,
+        )
+    )
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+def test_instrument_requires_an_existing_market(db_session: Session) -> None:
+    product = _make_product(db_session, "SPOT")
+    base = _make_asset(db_session, "BTC")
+    quote = _make_asset(db_session, "USDT")
+
+    instrument = Instrument(
+        underlying_market_id=uuid.uuid4(),
+        product_type_id=product.id,
+        canonical_symbol="BTC/USDT",
+        base_asset_id=base.id,
+        quote_asset_id=quote.id,
+    )
+    db_session.add(instrument)
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+def test_new_market_code_is_a_data_insertion_not_a_schema_change(db_session: Session) -> None:
+    """MODELO EXISTENTE regla 8: adding a market/asset is a data insertion,
+    never a schema/enum change — no code list is baked into the schema."""
+    market = _make_market(db_session, "COMMODITY")
+    assert market.code == "COMMODITY"
+
+
+def test_instrument_supports_multiple_timeframes(db_session: Session) -> None:
+    market = _make_market(db_session, "CRYPTO")
+    product = _make_product(db_session, "SPOT")
+    base = _make_asset(db_session, "BTC")
+    quote = _make_asset(db_session, "USDT")
+    instrument = Instrument(
+        underlying_market_id=market.id,
+        product_type_id=product.id,
+        canonical_symbol="BTC/USDT",
+        base_asset_id=base.id,
+        quote_asset_id=quote.id,
+    )
+    db_session.add(instrument)
+    db_session.flush()
+
+    one_minute = Timeframe(code="1m", duration_seconds=60)
+    one_hour = Timeframe(code="1h", duration_seconds=3600)
+    db_session.add_all([one_minute, one_hour])
+    db_session.flush()
+
+    db_session.add_all(
+        [
+            InstrumentTimeframe(instrument_id=instrument.instrument_id, timeframe_id=one_minute.id),
+            InstrumentTimeframe(instrument_id=instrument.instrument_id, timeframe_id=one_hour.id),
+        ]
+    )
+    db_session.flush()
+
+    linked = (
+        db_session.query(InstrumentTimeframe)
+        .filter(InstrumentTimeframe.instrument_id == instrument.instrument_id)
+        .count()
+    )
+    assert linked == 2
+
+
+def test_duplicate_instrument_timeframe_link_is_rejected(db_session: Session) -> None:
+    market = _make_market(db_session, "CRYPTO")
+    product = _make_product(db_session, "SPOT")
+    base = _make_asset(db_session, "BTC")
+    quote = _make_asset(db_session, "USDT")
+    instrument = Instrument(
+        underlying_market_id=market.id,
+        product_type_id=product.id,
+        canonical_symbol="BTC/USDT",
+        base_asset_id=base.id,
+        quote_asset_id=quote.id,
+    )
+    db_session.add(instrument)
+    timeframe = Timeframe(code="1m", duration_seconds=60)
+    db_session.add(timeframe)
+    db_session.flush()
+
+    db_session.add(
+        InstrumentTimeframe(instrument_id=instrument.instrument_id, timeframe_id=timeframe.id)
+    )
+    db_session.flush()
+
+    db_session.add(
+        InstrumentTimeframe(instrument_id=instrument.instrument_id, timeframe_id=timeframe.id)
+    )
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
