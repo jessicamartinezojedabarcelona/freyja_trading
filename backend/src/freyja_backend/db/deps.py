@@ -2,6 +2,7 @@ from collections.abc import Iterator
 from functools import lru_cache
 
 from fastapi import HTTPException
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -25,6 +26,27 @@ def set_engine_override(engine: Engine | None) -> None:
     """Test-only hook: point the API layer's DB dependency at a different engine."""
     global _engine_override
     _engine_override = engine
+
+
+def is_database_ready() -> bool:
+    """Readiness check: a real connection attempt + trivial query, independent
+    of the ORM session lifecycle used by get_db() (no commit/rollback dance
+    to reason about when the connection itself is the thing that might be
+    broken). Never raises — a failure here means "not ready", not a bug.
+
+    Resolving the engine happens inside the try block too: a missing/malformed
+    DATABASE_URL raises from Settings construction (pydantic ValidationError,
+    or sqlalchemy ArgumentError for a malformed URL string), not from the
+    connection attempt — that must mean "not ready" just as much as a refused
+    connection does, never an unhandled 500 from the readiness endpoint
+    itself."""
+    try:
+        engine = _engine_override if _engine_override is not None else _default_engine()
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+        return True
+    except Exception:
+        return False
 
 
 def get_db() -> Iterator[Session]:

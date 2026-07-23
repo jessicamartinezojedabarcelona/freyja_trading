@@ -166,4 +166,11 @@ jobs:
 
       - name: Production build
         working-directory: frontend
+        # Non-sensitive, reserved (.invalid — RFC 2606) placeholder domain,
+        # supplied only as an env var for this CI step, never hardcoded as a
+        # fallback inside the generator script itself: the build must stay
+        # fail-closed on a real deploy where this variable is genuinely
+        # missing or invalid (see scripts/generate-production-environment.mjs).
+        env:
+          FREYJA_BACKEND_URL: https://ci-build-check.invalid
         run: npm run build

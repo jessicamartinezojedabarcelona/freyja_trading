@@ -1,0 +1,226 @@
+# Manual deploy workflow — Render Free + Neon Free preview.
+#
+# NEVER runs automatically: no `pull_request` trigger, no `push` trigger,
+# only `workflow_dispatch` (someone must explicitly click "Run workflow" in
+# the GitHub UI, choosing the `main` branch). This file being present in the
+# repository does not execute anything by itself, and has not been run as
+# part of preparing this adaptation — see the DEPLOY-ONLINE-001 report for
+# confirmation.
+#
+# What it does, in order: runs the same quality controls as ci.yml (backend
+# + frontend, against an ephemeral CI-only Postgres — never against Neon),
+# then applies Alembic migrations against Neon's *direct* (unpooled)
+# connection and verifies `current` == `heads`, and only if all of that
+# succeeds, triggers Render's deploy hooks for both services. It provisions
+# nothing, creates no Render/Neon resources, and reads no secret value into
+# logs.
+name: Deploy Preview (manual)
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  # Fixed group name (not tied to a ref/run) so two manually triggered runs
+  # can never execute at the same time; the second one queues instead of
+  # running concurrently. cancel-in-progress is deliberately false: cancelling
+  # a run mid-migration is worse than making the next one wait.
+  group: deploy-preview
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Quality gate, migrate, then deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: preview
+    # Belt-and-suspenders with the "Verify triggering ref is main" step below:
+    # workflow_dispatch lets any branch be picked from the GitHub UI, and this
+    # workflow must never apply migrations or trigger a deploy from anything
+    # other than main.
+    if: github.ref == 'refs/heads/main'
+    services:
+      postgres:
+        image: postgres:18.4
+        env:
+          POSTGRES_DB: freyja_ci
+          POSTGRES_USER: freyja_ci
+          # Deterministic, ephemeral CI-only credential — same pattern as
+          # ci.yml. Not a real secret, never reused, never Neon.
+          POSTGRES_PASSWORD: freyja_ci_ephemeral_5f3a9c2b
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U freyja_ci -d freyja_ci"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+          --health-start-period=15s
+    steps:
+      - name: Verify triggering ref is main
+        run: |
+          if [ "${{ github.ref }}" != "refs/heads/main" ]; then
+            echo "::error::This workflow only deploys from main, got ${{ github.ref }}"
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.6"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "backend/uv.lock"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.17.0"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # --- Backend quality controls (same checks as ci.yml, ephemeral CI Postgres only) ---
+
+      - name: Backend — install dependencies (uv sync --locked)
+        working-directory: backend
+        run: uv sync --locked
+
+      - name: Backend — Ruff format check
+        working-directory: backend
+        run: uv run ruff format --check .
+
+      - name: Backend — Ruff lint
+        working-directory: backend
+        run: uv run ruff check .
+
+      - name: Backend — Mypy strict type-check
+        working-directory: backend
+        run: uv run mypy src tests
+
+      - name: Backend — apply migrations against the ephemeral CI Postgres
+        working-directory: backend
+        env:
+          POSTGRES_HOST: 127.0.0.1
+          POSTGRES_PORT: "5432"
+          POSTGRES_DB: freyja_ci
+          POSTGRES_USER: freyja_ci
+          POSTGRES_PASSWORD: freyja_ci_ephemeral_5f3a9c2b
+        run: uv run alembic upgrade head
+
+      - name: Backend — pytest
+        working-directory: backend
+        env:
+          POSTGRES_HOST: 127.0.0.1
+          POSTGRES_PORT: "5432"
+          POSTGRES_DB: freyja_ci
+          POSTGRES_USER: freyja_ci
+          POSTGRES_PASSWORD: freyja_ci_ephemeral_5f3a9c2b
+          FREYJA_ENVIRONMENT: test
+        run: uv run pytest -v
+
+      # --- Frontend quality controls (same checks as ci.yml) ---
+
+      - name: Frontend — install dependencies (npm ci)
+        working-directory: frontend
+        run: npm ci
+
+      - name: Frontend — Prettier format check
+        working-directory: frontend
+        run: npm run format:check
+
+      - name: Frontend — ESLint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Frontend — TypeScript type-check
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Frontend — unit tests (non-interactive)
+        working-directory: frontend
+        run: npm run test:ci
+
+      # --- Migrate Neon (direct/unpooled connection), then verify ---
+
+      - name: Neon — apply Alembic migrations (direct connection)
+        working-directory: backend
+        # PostgresSettings requires DATABASE_URL (or the POSTGRES_* component
+        # fields) before migration_url is even accessible — DATABASE_DIRECT_URL
+        # alone is not sufficient to construct Settings, by design (it is
+        # meaningless without a runtime URL configured too). Both secrets are
+        # therefore required here; migration_url still correctly resolves to
+        # the direct (unpooled) connection because DATABASE_DIRECT_URL is set.
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          DATABASE_DIRECT_URL: ${{ secrets.NEON_DATABASE_DIRECT_URL }}
+        run: uv run alembic upgrade head
+
+      - name: Neon — verify current revision matches heads
+        working-directory: backend
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          DATABASE_DIRECT_URL: ${{ secrets.NEON_DATABASE_DIRECT_URL }}
+        run: |
+          heads_output="$(uv run alembic heads)"
+          current_output="$(uv run alembic current)"
+          heads_revision="$(echo "$heads_output" | grep -o '^[0-9A-Za-z_]*' | head -n1)"
+          current_revision="$(echo "$current_output" | tail -n1 | grep -o '^[0-9A-Za-z_]*' | head -n1)"
+          if [ -z "$heads_revision" ] || [ "$heads_revision" != "$current_revision" ]; then
+            echo "::error::Neon current ($current_revision) does not match heads ($heads_revision) after upgrade"
+            exit 1
+          fi
+          echo "Neon current == heads: $current_revision"
+
+      - name: Neon — verify the runtime (pooled) connection is reachable
+        working-directory: backend
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          FREYJA_ENVIRONMENT: production
+          FREYJA_FRONTEND_ORIGIN: https://placeholder.invalid
+          FREYJA_ALLOWED_HOSTS: placeholder.invalid
+          FREYJA_RATE_LIMIT_HMAC_KEY: workflow-connectivity-check-only
+        # A pre-deploy sanity check independent of the migration connection:
+        # if the pooled URL the backend will actually use at runtime cannot
+        # even open a connection, a freshly migrated Neon database is still
+        # not something the deploy hooks below should be triggered against.
+        # The FREYJA_* placeholders above only satisfy Settings' own
+        # fail-closed production validation for this one-off check — they
+        # are never used to serve real traffic. No SMTP placeholders here:
+        # SMTP is no longer required for Settings to construct (see
+        # core/config.py) — no provider is approved yet, and inventing one
+        # even for this check would contradict that.
+        run: |
+          uv run python -c "
+          from freyja_backend.db.deps import is_database_ready
+          if not is_database_ready():
+              raise SystemExit('Neon DATABASE_URL (pooled) is not reachable')
+          print('Neon DATABASE_URL (pooled) is reachable')
+          "
+
+      # --- Only now, trigger Render's deploy hooks, pinned to this exact
+      # validated commit (never "whatever is latest on main") ---
+
+      - name: Trigger Render backend deploy hook (pinned to this commit)
+        env:
+          RENDER_BACKEND_DEPLOY_HOOK: ${{ secrets.RENDER_BACKEND_DEPLOY_HOOK }}
+        # Render's deploy hook URLs already carry a `?key=...` query
+        # parameter (per Render's own documentation); appending `&ref=<sha>`
+        # deploys that exact commit instead of the latest one on the
+        # service's tracked branch. GITHUB_SHA is the full 40-character SHA
+        # of the commit this workflow is running against — the same one
+        # backend quality controls, the Neon migration, and the readiness
+        # check above all just validated. Never echoed: curl receives it
+        # only via shell variable expansion, never printed or logged.
+        run: curl --fail --silent --show-error -X POST "${RENDER_BACKEND_DEPLOY_HOOK}&ref=${GITHUB_SHA}"
+
+      - name: Trigger Render frontend deploy hook (pinned to this commit)
+        env:
+          RENDER_FRONTEND_DEPLOY_HOOK: ${{ secrets.RENDER_FRONTEND_DEPLOY_HOOK }}
+        run: curl --fail --silent --show-error -X POST "${RENDER_FRONTEND_DEPLOY_HOOK}&ref=${GITHUB_SHA}"

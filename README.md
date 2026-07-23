@@ -488,6 +488,9 @@ Para reproducir localmente todos los controles equivalentes:
 uv run --python 3.12 scripts/quality.py
 ```
 
+`.github/workflows/deploy-preview.yml` es un workflow **independiente y
+manual** (ver §19.10): nunca se activa por push ni por Pull Request.
+
 ## 15. Estructura del repositorio
 
 ```text
@@ -501,6 +504,7 @@ freyja_trading/
 │   └── uv.lock
 ├── frontend/
 │   ├── src/                   # aplicación Angular
+│   ├── scripts/                # generador de environment.prod.ts en build de Render
 │   ├── angular.json
 │   ├── package.json
 │   └── package-lock.json
@@ -508,10 +512,12 @@ freyja_trading/
 │   └── quality.py             # orquestador local de controles de calidad
 ├── .github/
 │   └── workflows/
-│       └── ci.yml             # integración continua (GitHub Actions)
+│       ├── ci.yml              # integración continua (GitHub Actions)
+│       └── deploy-preview.yml  # despliegue manual (Render Free + Neon Free)
 ├── docs/
 │   └── adr/                   # decisiones de arquitectura
 ├── docker-compose.yml         # PostgreSQL local
+├── render.yaml                # Blueprint de Render (Static Site + Web Service)
 ├── .env.example
 ├── README.md
 └── CLAUDE.md
@@ -589,7 +595,8 @@ seguridad, usar `trust`, ignorar errores o editar lockfiles manualmente.
 - Los scaffolds de backend y frontend son fundación técnica verificada,
   no un producto terminado.
 - El entorno documentado en este README está orientado exclusivamente a
-  desarrollo local.
+  desarrollo local, salvo la sección 19 (arquitectura de despliegue
+  provisional, no desplegada).
 
 ## 18. Seguridad operativa
 
@@ -603,3 +610,330 @@ seguridad, usar `trust`, ignorar errores o editar lockfiles manualmente.
   explícitamente destructiva de eliminar todos los datos locales.
 - No habilites `POSTGRES_HOST_AUTH_METHOD=trust` ni ningún mecanismo de
   autenticación sin contraseña.
+
+## 19. Despliegue en Render Free + Neon Free (arquitectura provisional — DEPLOY-ONLINE-001)
+
+**Estado: preparación técnica únicamente. No existe ningún servicio de
+Render ni ningún proyecto de Neon creados.** Esta sección describe una
+arquitectura provisional y gratuita, preparada por Claude actuando como
+desarrolladora, pendiente de revisión de Codex y de una decisión explícita
+de Jessica antes de crear cualquier recurso real. Nada de lo descrito aquí
+ha sido ejecutado contra un servicio de Render o un proyecto de Neon
+reales, y el workflow de despliegue (§19.10) no se ha ejecutado ni una
+sola vez.
+
+**Léase con honestidad, no como un anuncio de producto:** esto es, como
+mucho, una vista previa gratuita del *shell* autenticado (registro, login,
+sesión, recuperación de contraseña) — no es infraestructura de trading
+disponible 24/7. El **Web Service** gratuito de Render puede suspenderse
+por inactividad, y el cómputo de **Neon Free** también puede suspenderse
+por inactividad; la primera petición tras un periodo sin uso puede tardar
+más de lo normal en responder (*cold start*) en cualquiera de los dos, y
+potencialmente en ambos a la vez si coincide. El **Static Site** de Render
+(el frontend) **no** tiene este comportamiento: se sirve desde un CDN
+global, no desde un proceso que se suspenda por inactividad.
+
+### 19.1 Arquitectura y componentes
+
+Dos recursos de Render, descritos (no creados) en `render.yaml`, más un
+proyecto externo de Neon (tampoco creado):
+
+- **Static Site** (`freyja-frontend`, Render, plan `free`): sirve el build
+  de producción de Angular sobre el CDN global de Render. Sin campo de
+  región propio: Render no ofrece selección de región para Static Sites.
+- **Web Service** (`freyja-backend`, Render, plan `free`): ejecuta FastAPI
+  mediante `uv`+`uvicorn`, región `frankfurt` (única región europea de
+  Render).
+- **PostgreSQL — Neon (externo, plan gratuito)**: **no** es un recurso de
+  Render. Se crea como proyecto independiente en Neon; Render solo recibe
+  sus cadenas de conexión como secretos (`DATABASE_URL`,
+  `DATABASE_DIRECT_URL`). La región del proyecto Neon queda **pendiente de
+  selección** al crearlo: no se afirma aquí que Neon ofrezca Frankfurt
+  hasta poder confirmarlo con la configuración oficial disponible en ese
+  momento — elegir la región europea disponible más cercana es una
+  decisión a tomar al crear el proyecto, no algo que este repositorio
+  pueda declarar de antemano.
+
+Coste total de esta arquitectura: **0 €** (ambos planes de Render y el
+plan gratuito de Neon).
+
+### 19.2 Comandos reales (verificados en este repositorio)
+
+- Backend — instalación: `uv sync --locked` (desde `backend/`).
+- Backend — arranque real verificado en local:
+  `uv run uvicorn freyja_backend.main:app --host 127.0.0.1 --port 8000`;
+  en Render, el mismo comando cambia host/puerto:
+  `uv run uvicorn freyja_backend.main:app --host 0.0.0.0 --port $PORT`
+  (`$PORT` lo inyecta Render).
+- Frontend — instalación: `npm ci`. Build local: `npm run build`. En
+  Render, el `buildCommand` del Static Site ejecuta primero
+  `npm run generate:prod-environment` (ver §19.3) y solo entonces
+  `npm run build`.
+- Artefactos reales del frontend tras `npm run build`: verificado en este
+  repositorio que quedan en `frontend/dist/freyja-frontend/browser/`. No
+  hay SSR ni prerender activos — es una SPA pura.
+- Migraciones: `uv run alembic upgrade head` (desde `backend/`) — en esta
+  adaptación se ejecuta desde el workflow manual de GitHub Actions (§19.10)
+  contra Neon, no como paso de despliegue de Render.
+- Requisitos verificados: Node 24.17.0, Python 3.12.10, `uv` 0.11.6
+  (sección 3). En Render, el Python exacto se fija con
+  `PYTHON_VERSION=3.12.10`.
+
+### 19.3 Variables de entorno (solo nombres y propósito — ningún valor real)
+
+**Render (Web Service `freyja-backend`)**, entradas de `render.yaml`:
+
+| Variable | Propósito | Origen |
+|---|---|---|
+| `PYTHON_VERSION` | Fija la versión exacta de Python | Valor literal |
+| `FREYJA_ENVIRONMENT` | Activa las validaciones de producción *fail-closed* | Valor literal (`production`) |
+| `FREYJA_FRONTEND_ORIGIN` | Único origen permitido para CORS con credenciales | Secreto gestionado — URL real del Static Site |
+| `FREYJA_ALLOWED_HOSTS` | Hosts aceptados en la cabecera `Host` | Secreto gestionado — hostname real del backend |
+| `FREYJA_RATE_LIMIT_HMAC_KEY` | Clave HMAC para *rate limiting* | Secreto gestionado — generado una vez |
+| `FREYJA_SESSION_TTL_MINUTES` | Duración de la cookie de sesión | Valor literal (`720`) |
+| `DATABASE_URL` | Cadena de conexión **pooled** de Neon (consultas en tiempo de ejecución) | Secreto gestionado — debe incluir `sslmode=require` |
+
+Las seis variables `FREYJA_SMTP_*` **no aparecen en `render.yaml`**:
+`Settings` ya no las exige para arrancar en producción (§19.7), así que
+aplicar este Blueprint no obliga a Jessica a rellenarlas sin tener todavía
+un proveedor. Se añadirán directamente en el panel de Render el día que
+haya un proveedor SMTP real aprobado.
+
+**Render (Static Site `freyja-frontend`)**:
+
+| Variable | Propósito | Origen |
+|---|---|---|
+| `FREYJA_BACKEND_URL` | URL pública HTTPS real del backend, usada para generar `environment.prod.ts` en el build | `fromService` → `RENDER_EXTERNAL_URL` del Web Service (automático, sin edición manual) |
+
+**GitHub Secrets** (usados únicamente por `deploy-preview.yml`, §19.10):
+
+| Secreto | Propósito |
+|---|---|
+| `NEON_DATABASE_URL` | Conexión **pooled** de Neon — requerida por `PostgresSettings` para poder construirse en absoluto (aunque las migraciones usen la directa), y usada además para la verificación de conectividad antes de disparar los deploy hooks |
+| `NEON_DATABASE_DIRECT_URL` | Conexión **directa** (sin *pooling*) de Neon — cuando está presente junto a `NEON_DATABASE_URL`, `migration_url` resuelve a esta para `alembic upgrade head` |
+| `RENDER_BACKEND_DEPLOY_HOOK` | URL del deploy hook del Web Service |
+| `RENDER_FRONTEND_DEPLOY_HOOK` | URL del deploy hook del Static Site |
+
+Ninguno de estos valores aparece de forma literal en `render.yaml`, en
+`deploy-preview.yml`, en este README ni en ningún archivo versionado.
+
+### 19.4 Migraciones
+
+**Ya no se ejecutan mediante `preDeployCommand` de Render** en esta
+adaptación (se retiró deliberadamente de `render.yaml`). En su lugar, el
+workflow manual de GitHub Actions (§19.10):
+
+1. Aplica `uv run alembic upgrade head` con **ambos** secretos de Neon
+   presentes (`NEON_DATABASE_URL` y `NEON_DATABASE_DIRECT_URL`):
+   `PostgresSettings` exige `DATABASE_URL` (o las variables `POSTGRES_*`)
+   para poder construirse en absoluto, y con `DATABASE_DIRECT_URL` también
+   presente, `migration_url` resuelve a la conexión directa (sin
+   *pooling* — ver §19.8 para el porqué).
+2. Verifica explícitamente que `alembic current` coincide con
+   `alembic heads` tras el `upgrade`.
+3. Solo si ambos pasos anteriores tienen éxito, dispara los deploy hooks
+   de Render — pinchados al SHA exacto de este `workflow_dispatch` (ver
+   §19.10), nunca a "lo último disponible" en la rama del servicio.
+
+Esto separa "migrar el esquema" de "desplegar código" en dos pasos
+verificados de forma independiente, en vez de acoplarlos a un
+`preDeployCommand` de Render que no distingue entre ambos. No se usa
+`create_all`, no se usa `alembic stamp`, no se edita ninguna migración ya
+integrada, no se ejecuta `downgrade` sobre datos reales.
+
+### 19.5 Health y readiness
+
+Sin cambios respecto a la preparación anterior:
+
+- `GET /api/v1/health` — *liveness*: nunca depende de PostgreSQL.
+- `GET /api/v1/health/ready` — *readiness*: ejecuta un `SELECT 1` real
+  contra PostgreSQL (Neon, en producción) a través de una conexión
+  dedicada, sin revelar detalles de conexión si falla. Es el
+  `healthCheckPath` configurado en `render.yaml`.
+
+### 19.6 CORS, cookies, CSRF y HTTPS
+
+- **CORS**: origen exacto único (`FREYJA_FRONTEND_ORIGIN`), nunca comodín
+  — `Settings` rechaza `FREYJA_FRONTEND_ORIGIN=*` en cualquier entorno, y
+  en producción no puede quedarse en el valor de desarrollo.
+- **Hosts**: `TrustedHostMiddleware` (Starlette) usando
+  `FREYJA_ALLOWED_HOSTS`; en producción tampoco puede quedarse en el valor
+  de desarrollo. **Pendiente de verificar en un despliegue real**: qué
+  cabecera `Host` reciben las peticiones de la comprobación de salud
+  interna de Render.
+- **Cookies**: `Secure` ligado a `environment == "production"`, `HttpOnly`
+  y `SameSite=Strict` sin cambios.
+- **Reenvío de IP (`X-Forwarded-For`)**: **deliberadamente sin cambios**.
+  `get_client_ip()` sigue leyendo únicamente `request.client.host` — no
+  hay confirmación oficial (solo de comunidad, expresamente no admitida
+  como autoridad en esta tarea) de cómo Render sanea esa cabecera en su
+  borde de red.
+- **HTTPS**: gestionado por Render de forma automática en ambos recursos.
+
+### 19.7 SMTP y recuperación de contraseña
+
+**Decisión de producto vigente**: no hay proveedor SMTP de producción
+aprobado todavía, y el backend **debe poder arrancar en producción sin
+SMTP configurado en absoluto**. En consecuencia:
+
+- `Settings` ya **no exige** `FREYJA_SMTP_HOST` ni `FREYJA_SMTP_FROM_ADDRESS`
+  para arrancar en producción (antes sí lo exigía; ver commit correctivo).
+  Con las seis variables `FREYJA_SMTP_*` ausentes, el backend arranca con
+  normalidad.
+- Lo que **sigue fallando cerrado**, en cualquier entorno, es una
+  configuración SMTP **parcial**: si se define `FREYJA_SMTP_HOST` debe
+  existir `FREYJA_SMTP_FROM_ADDRESS` (y viceversa), y si se define
+  `FREYJA_SMTP_USERNAME` debe existir `FREYJA_SMTP_PASSWORD`. Nunca se
+  inventan valores para satisfacer esta validación — o se configuran los
+  seis juntos con un proveedor real, o no se configura ninguno.
+- **Qué funciona sin SMTP**: registro, inicio de sesión y sesión — el
+  backend completo funciona con normalidad.
+- **Qué no funciona sin SMTP**: la recuperación de contraseña en línea no
+  debe considerarse operativa hasta que Jessica apruebe y configure un
+  proveedor real; el token de restablecimiento se compromete igualmente en
+  PostgreSQL (*fail-closed*), pero el correo nunca se envía y eso se
+  degrada explícitamente, sin fingir una entrega que no ocurrió
+  (`core/email.py`, `EmailDeliveryError`).
+- **No existe verificación de correo** en el flujo vigente (retirada
+  deliberadamente, véase §12 y la migración `0004_remove_email_verification`)
+  — esto es independiente de si hay o no proveedor SMTP.
+- Mailpit sigue siendo exclusivamente de desarrollo local;
+  `SmtpEmailSender` sigue siendo el único transporte de producción.
+  `render.yaml` ya no declara ninguna variable `FREYJA_SMTP_*` (ver §19.3):
+  se añadirán directamente en el panel de Render cuando haya un proveedor
+  real, no al aplicar el Blueprint.
+
+### 19.8 PostgreSQL (Neon) — conexión, TLS, backups y qué está pendiente
+
+- **TLS obligatorio, verificado en código**: `PostgresSettings` rechaza
+  (fail-closed, al arrancar) cualquier `DATABASE_URL`/`DATABASE_DIRECT_URL`
+  que no declare `sslmode=require`, `verify-ca` o `verify-full` en su
+  cadena de conexión. Neon exige TLS en todas sus conexiones según su
+  propia documentación oficial ("Neon requires that all connections use
+  SSL/TLS encryption... rejects connections that do not use SSL/TLS").
+- **Dos conexiones distintas, con propósito distinto** (patrón
+  documentado oficialmente por Neon): `DATABASE_URL` es la conexión
+  **pooled** (PgBouncer en modo transacción), usada por el backend en
+  tiempo de ejecución; `DATABASE_DIRECT_URL` es la conexión **directa**
+  (sin *pooling*), usada exclusivamente por Alembic — Neon documenta que
+  el modo transacción de PgBouncer no soporta las funciones de sesión
+  (`SET`, `LISTEN/NOTIFY`, `PREPARE`) que las herramientas de migración
+  necesitan. `PostgresSettings.migration_url` usa `DATABASE_DIRECT_URL`
+  cuando está definida, y si no, cae de vuelta a `DATABASE_URL` (correcto
+  para desarrollo local, donde ambas coinciden).
+- **Desarrollo local no cambia**: sigue usando `POSTGRES_DB`/`POSTGRES_USER`/
+  `POSTGRES_PASSWORD` sin TLS (Docker Compose local, sin cambios); la
+  exigencia de TLS solo aplica cuando se usa `DATABASE_URL`/
+  `DATABASE_DIRECT_URL` (es decir, un proveedor externo como Neon).
+- **Sin fallback SQLite en producción**: no existe, y no puede existir,
+  ningún camino en `PostgresSettings.url`/`migration_url` que produzca una
+  URL SQLite — verificado con test dedicado.
+- **Límites vigentes del plan gratuito de Neon** (documentación oficial,
+  no blogs): 100 CU-horas/mes y 0.5 GB de almacenamiento por proyecto,
+  computación con auto-suspensión tras 5 minutos de inactividad
+  (obligatoria en el plan gratuito, no se puede desactivar), hasta 10
+  ramas por proyecto. La recuperación a un punto en el tiempo del plan
+  gratuito está limitada a una ventana de 6 horas de historial (no una
+  limitación de horas de uso mensual, que es un concepto distinto: las
+  100 CU-horas/mes).
+- **Pendiente de probar en el proyecto real**: la región efectiva del
+  proyecto Neon (§19.1); el comportamiento exacto del *cold start* de
+  Neon combinado con el *cold start* del propio Web Service de Render
+  (dos posibles arranques en frío encadenados en la primera petición tras
+  inactividad).
+
+**No se ejecutó ninguna restauración, ni destructiva ni de prueba, contra
+la base de datos local en esta tarea.**
+
+### 19.9 Rollback
+
+Sin cambios sustanciales respecto a la preparación anterior, salvo que la
+migración ya no está acoplada al despliegue de Render:
+
+- **Rollback del frontend/backend**: redeploy del commit/versión anterior
+  en Render (Static Site y Web Service, independientes entre sí).
+- **Migraciones hacia adelante**: cada nueva migración se prueba en una
+  base temporal aislada antes de tocar Neon (mismo procedimiento que en
+  local, sección 8), nunca con `downgrade` sobre datos reales.
+- **Restauración de PostgreSQL**: usar la recuperación a un punto en el
+  tiempo de Neon (crea una instancia separada para validar antes de
+  conmutar, según su documentación oficial) — no borrar ni recrear el
+  proyecto existente como primer recurso.
+- **Incompatibilidades código/esquema**: si un rollback de código deja el
+  esquema "por delante" de lo que ese código espera, no ejecutar un
+  `downgrade` de emergencia sin revisión explícita.
+
+### 19.10 GitHub Actions — workflow manual de despliegue
+
+`.github/workflows/deploy-preview.yml`, **nunca ejecutado en esta tarea**:
+
+- Disparador único: `workflow_dispatch` (botón manual en la UI de
+  GitHub). Sin `push`, sin `pull_request`.
+- `environment: preview`.
+- Guarda explícita: se detiene si el ref disparado no es `refs/heads/main`
+  (dos capas: condición a nivel de job y verificación explícita en el
+  primer paso).
+- `concurrency` con grupo fijo (`deploy-preview`) y `cancel-in-progress:
+  false`: una segunda ejecución manual espera en cola en vez de cancelar
+  una migración en curso.
+- Permisos mínimos: `contents: read` únicamente.
+- Orden: controles de calidad de backend y frontend (contra un PostgreSQL
+  efímero de CI, nunca contra Neon) → migración de Neon con
+  `NEON_DATABASE_URL` + `NEON_DATABASE_DIRECT_URL` ambas presentes
+  (`migration_url` resuelve a la directa) → verificación `current ==
+  heads` → comprobación de conectividad de `NEON_DATABASE_URL` (la
+  conexión *pooled* que el backend usará en producción) → disparo de los
+  dos deploy hooks de Render, leídos exclusivamente de GitHub Secrets.
+- **Los deploy hooks despliegan el commit exacto**, no "lo último
+  disponible": ambos se invocan con `&ref=$GITHUB_SHA` añadido a la URL
+  del hook (parámetro `ref` documentado oficialmente por Render para
+  desplegar un commit específico), usando la variable `GITHUB_SHA` que
+  GitHub Actions inyecta automáticamente — el mismo commit que los
+  controles de calidad y la migración de este mismo *run* acaban de
+  validar. Backend y frontend reciben idéntico SHA.
+- **`autoDeployTrigger: off` en ambos servicios de `render.yaml`**: sin
+  esto, Render usaría su comportamiento por defecto (`commit`) y
+  desplegaría automáticamente cada push a la rama enlazada, saltándose por
+  completo la migración controlada de este workflow.
+
+### 19.11 Checklist previo a producción
+
+- [ ] Jessica ha revisado y aprobado `render.yaml` y `deploy-preview.yml`.
+- [ ] Codex ha revisado esta implementación.
+- [ ] Proyecto de Neon creado, con región europea seleccionada
+      explícitamente (§19.1).
+- [ ] Los cuatro GitHub Secrets (`NEON_DATABASE_URL`,
+      `NEON_DATABASE_DIRECT_URL`, `RENDER_BACKEND_DEPLOY_HOOK`,
+      `RENDER_FRONTEND_DEPLOY_HOOK`) configurados en el entorno `preview`.
+- [ ] Proveedor SMTP de producción elegido y aprobado (no antes).
+- [ ] `FREYJA_RATE_LIMIT_HMAC_KEY` generado de forma segura.
+
+### 19.12 Checklist posterior al despliegue
+
+- [ ] `FREYJA_FRONTEND_ORIGIN` actualizado con la URL real del Static Site.
+- [ ] `FREYJA_ALLOWED_HOSTS` actualizado con el hostname real del backend.
+- [ ] `GET /api/v1/health/ready` verificado manualmente.
+- [ ] `alembic current` verificado igual a `alembic heads` en Neon.
+- [ ] Confirmar el comportamiento real del *cold start* combinado (Web
+      Service de Render + Neon) tras un periodo de inactividad.
+- [ ] Confirmar si el *health check* de Render llega con un `Host`
+      distinto al configurado en `FREYJA_ALLOWED_HOSTS`.
+
+### 19.13 Limitaciones conocidas (léase antes de compartir cualquier URL)
+
+- **Esto es una vista previa gratuita del shell autenticado, no
+  infraestructura de trading disponible 24/7.** Registro, login, sesión y
+  recuperación de contraseña — nada más.
+- El **Web Service** gratuito de Render y el cómputo de **Neon Free**
+  pueden **suspenderse por inactividad**: espera *cold starts* perceptibles
+  (varios segundos) en la primera petición tras un rato sin uso, en el
+  backend y en la base de datos, potencialmente encadenados. El **Static
+  Site** de Render (frontend) no tiene este comportamiento: se sirve desde
+  CDN, no desde un proceso que se suspenda.
+- **No hay proveedor SMTP de producción** — la recuperación de contraseña
+  en línea no es funcional hasta que se apruebe uno (§19.7).
+- El reenvío de IP de cliente no se confía todavía (§19.6).
+- Ningún procedimiento de esta sección ha sido probado contra un Render o
+  un Neon reales; el workflow de despliegue no se ha ejecutado.
+- No existe dominio funcional de trading, ni ejecución DEMO/REAL, con
+  independencia de este despliegue (§17).

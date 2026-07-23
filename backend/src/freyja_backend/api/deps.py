@@ -9,11 +9,12 @@ from freyja_backend.core import security
 from freyja_backend.core.config import Settings, get_settings
 from freyja_backend.core.cookies import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, SESSION_COOKIE_NAME
 from freyja_backend.core.email import EmailSender, SmtpConfig, get_email_sender
-from freyja_backend.db.deps import get_db
+from freyja_backend.db.deps import get_db, is_database_ready
 from freyja_backend.db.models import AuthUser
 
 DbSession = Annotated[Session, Depends(get_db)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
+DatabaseReady = Annotated[bool, Depends(is_database_ready)]
 
 
 def get_email_sender_dep(settings: SettingsDep) -> EmailSender:
