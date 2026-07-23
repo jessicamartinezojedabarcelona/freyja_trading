@@ -49,21 +49,21 @@ def _truncate_catalog_tables(auth_test_engine: Engine) -> None:
 
 
 def _make_market(session: Session, code: str = "CRYPTO") -> UnderlyingMarket:
-    market = UnderlyingMarket(code=code)
+    market = UnderlyingMarket(code=code, display_name=code.title())
     session.add(market)
     session.flush()
     return market
 
 
 def _make_product(session: Session, code: str = "SPOT") -> ProductType:
-    product = ProductType(code=code)
+    product = ProductType(code=code, display_name=code.title())
     session.add(product)
     session.flush()
     return product
 
 
 def _make_asset(session: Session, code: str) -> Asset:
-    asset = Asset(code=code)
+    asset = Asset(code=code, display_name=code.title())
     session.add(asset)
     session.flush()
     return asset
@@ -75,16 +75,10 @@ def test_upgrade_creates_exactly_the_six_catalog_tables(auth_test_engine: Engine
     assert catalog_tables == _CATALOG_TABLES
 
 
-def test_no_data_is_seeded_by_the_migration(db_session: Session) -> None:
-    assert db_session.query(UnderlyingMarket).count() == 0
-    assert db_session.query(ProductType).count() == 0
-    assert db_session.query(Asset).count() == 0
-    assert db_session.query(Instrument).count() == 0
-
-
-def test_downgrade_removes_only_the_catalog_tables_and_upgrade_restores_them() -> None:
-    """Uses its own isolated temp database (never the shared auth_test_engine)
-    so downgrading mid-suite cannot affect any other test."""
+def test_0005_catalog_seeds_no_data() -> None:
+    """POINT1-DB-001's own acceptance criterion ("no hay datos sembrados
+    todavía") is pinned to its exact revision, not to a moving "head" — later
+    revisions (POINT1-SEED-001) are expected to add seed data on top."""
     settings = get_postgres_settings()
     admin_url = settings.url.set(database="postgres")
     admin_engine = create_engine(admin_url, isolation_level="AUTOCOMMIT")
@@ -97,7 +91,48 @@ def test_downgrade_removes_only_the_catalog_tables_and_upgrade_restores_them() -
         temp_url = settings.url.set(database=db_name)
         cfg = _alembic_config()
         cfg.attributes["database_url"] = temp_url
-        command.upgrade(cfg, "head")
+        command.upgrade(cfg, "0005_catalog")
+
+        engine = create_engine(temp_url)
+        try:
+            with engine.connect() as connection:
+                for table in _CATALOG_TABLES:
+                    count = connection.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
+                    assert count == 0, f"{table} should be empty at revision 0005_catalog"
+        finally:
+            engine.dispose()
+    finally:
+        with admin_engine.connect() as connection:
+            connection.execute(
+                text(
+                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                    "WHERE datname = :db_name AND pid <> pg_backend_pid()"
+                ),
+                {"db_name": db_name},
+            )
+            connection.execute(text(f'DROP DATABASE IF EXISTS "{db_name}"'))
+        admin_engine.dispose()
+
+
+def test_downgrade_removes_only_the_catalog_tables_and_upgrade_restores_them() -> None:
+    """Uses its own isolated temp database (never the shared auth_test_engine)
+    so downgrading mid-suite cannot affect any other test. Targets the exact
+    revision 0005_catalog (not relative "head"/"-1"), so this test keeps
+    proving what POINT1-DB-001 itself delivered regardless of how many
+    migrations get layered on top later."""
+    settings = get_postgres_settings()
+    admin_url = settings.url.set(database="postgres")
+    admin_engine = create_engine(admin_url, isolation_level="AUTOCOMMIT")
+    db_name = f"freyja_test_{uuid.uuid4().hex[:12]}"
+
+    with admin_engine.connect() as connection:
+        connection.execute(text(f'CREATE DATABASE "{db_name}"'))
+
+    try:
+        temp_url = settings.url.set(database=db_name)
+        cfg = _alembic_config()
+        cfg.attributes["database_url"] = temp_url
+        command.upgrade(cfg, "0005_catalog")
 
         engine = create_engine(temp_url)
         try:
@@ -106,13 +141,13 @@ def test_downgrade_removes_only_the_catalog_tables_and_upgrade_restores_them() -
             assert before >= _CATALOG_TABLES
             assert "auth_users" in before
 
-            command.downgrade(cfg, "-1")
+            command.downgrade(cfg, "0004_remove_email_verification")
             inspector = inspect(engine)
             after_downgrade = set(inspector.get_table_names())
             assert not (after_downgrade & _CATALOG_TABLES)
             assert "auth_users" in after_downgrade
 
-            command.upgrade(cfg, "head")
+            command.upgrade(cfg, "0005_catalog")
             inspector = inspect(engine)
             after_upgrade = set(inspector.get_table_names())
             assert after_upgrade >= _CATALOG_TABLES
@@ -325,8 +360,8 @@ def test_instrument_supports_multiple_timeframes(db_session: Session) -> None:
     db_session.add(instrument)
     db_session.flush()
 
-    one_minute = Timeframe(code="1m", duration_seconds=60)
-    one_hour = Timeframe(code="1h", duration_seconds=3600)
+    one_minute = Timeframe(code="1m", duration_seconds=60, display_name="1 minute")
+    one_hour = Timeframe(code="1h", duration_seconds=3600, display_name="1 hour")
     db_session.add_all([one_minute, one_hour])
     db_session.flush()
 
@@ -359,7 +394,7 @@ def test_duplicate_instrument_timeframe_link_is_rejected(db_session: Session) ->
         quote_asset_id=quote.id,
     )
     db_session.add(instrument)
-    timeframe = Timeframe(code="1m", duration_seconds=60)
+    timeframe = Timeframe(code="1m", duration_seconds=60, display_name="1 minute")
     db_session.add(timeframe)
     db_session.flush()
 
