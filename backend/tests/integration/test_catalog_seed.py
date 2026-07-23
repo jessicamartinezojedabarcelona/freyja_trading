@@ -48,16 +48,18 @@ def seeded_engine() -> Iterator[Engine]:
     with admin_engine.connect() as connection:
         connection.execute(text(f'CREATE DATABASE "{db_name}"'))
 
-    temp_url = settings.url.set(database=db_name)
-    cfg = _alembic_config()
-    cfg.attributes["database_url"] = temp_url
-    command.upgrade(cfg, "head")
-
-    engine = create_engine(temp_url)
     try:
-        yield engine
+        temp_url = settings.url.set(database=db_name)
+        cfg = _alembic_config()
+        cfg.attributes["database_url"] = temp_url
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(temp_url)
+        try:
+            yield engine
+        finally:
+            engine.dispose()
     finally:
-        engine.dispose()
         with admin_engine.connect() as connection:
             connection.execute(
                 text(
@@ -83,17 +85,19 @@ def isolated_seeded_connection() -> Iterator[Connection]:
     with admin_engine.connect() as connection:
         connection.execute(text(f'CREATE DATABASE "{db_name}"'))
 
-    temp_url = settings.url.set(database=db_name)
-    cfg = _alembic_config()
-    cfg.attributes["database_url"] = temp_url
-    command.upgrade(cfg, "head")
-
-    engine = create_engine(temp_url)
     try:
-        with engine.connect() as connection:
-            yield connection
+        temp_url = settings.url.set(database=db_name)
+        cfg = _alembic_config()
+        cfg.attributes["database_url"] = temp_url
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(temp_url)
+        try:
+            with engine.connect() as connection:
+                yield connection
+        finally:
+            engine.dispose()
     finally:
-        engine.dispose()
         with admin_engine.connect() as connection:
             connection.execute(
                 text(
@@ -234,7 +238,7 @@ def test_reapplying_the_seed_block_is_idempotent(
         {"id": seed._market_id(code), "code": code, "display_name": name}
         for code, name in seed._MARKETS
     ]
-    seed._seed_rows(connection, seed._markets_t, "id", market_rows, ("code", "display_name"))
+    seed._seed_rows(connection, seed._markets_t, "id", ("code",), market_rows, ("display_name",))
     connection.commit()
 
     after = connection.execute(
@@ -265,7 +269,9 @@ def test_reapplying_the_seed_block_detects_divergence_and_aborts(
         for code, name in seed._MARKETS
     ]
     with pytest.raises(RuntimeError, match="divergencia"):
-        seed._seed_rows(connection, seed._markets_t, "id", market_rows, ("code", "display_name"))
+        seed._seed_rows(
+            connection, seed._markets_t, "id", ("code",), market_rows, ("display_name",)
+        )
 
     connection.rollback()
 
@@ -276,6 +282,71 @@ def test_reapplying_the_seed_block_detects_divergence_and_aborts(
         {"id": crypto_id},
     ).scalar_one()
     assert display_name == "Corrupted"
+
+
+def test_seed_detects_divergence_by_natural_key_not_only_by_id() -> None:
+    """A row already present under the seed's natural key (code) but a
+    DIFFERENT id must be caught as a divergence, not silently missed by an
+    id-only lookup (which would instead hit the table's own UNIQUE(code)
+    constraint and raise a raw IntegrityError with a far worse message)."""
+    settings = get_postgres_settings()
+    admin_url = settings.url.set(database="postgres")
+    admin_engine = create_engine(admin_url, isolation_level="AUTOCOMMIT")
+    db_name = f"freyja_test_{uuid.uuid4().hex[:12]}"
+
+    with admin_engine.connect() as connection:
+        connection.execute(text(f'CREATE DATABASE "{db_name}"'))
+
+    try:
+        temp_url = settings.url.set(database=db_name)
+        cfg = _alembic_config()
+        cfg.attributes["database_url"] = temp_url
+        # Migrate only up to the schema (display_name added, no seed yet).
+        command.upgrade(cfg, "0006_catalog_display_names")
+
+        engine = create_engine(temp_url)
+        try:
+            seed = _load_seed_module()
+            with engine.connect() as connection:
+                # A pre-existing row under the same natural key ("CRYPTO")
+                # but a random, non-deterministic id — never produced by the
+                # seed itself.
+                connection.execute(
+                    text(
+                        "INSERT INTO freyja2_underlying_markets (id, code, display_name) "
+                        "VALUES (:id, 'CRYPTO', 'Hand-inserted')"
+                    ),
+                    {"id": uuid.uuid4()},
+                )
+                connection.commit()
+
+                market_rows = [
+                    {"id": seed._market_id(code), "code": code, "display_name": name}
+                    for code, name in seed._MARKETS
+                ]
+                with pytest.raises(RuntimeError, match="clave natural"):
+                    seed._seed_rows(
+                        connection,
+                        seed._markets_t,
+                        "id",
+                        ("code",),
+                        market_rows,
+                        ("display_name",),
+                    )
+                connection.rollback()
+        finally:
+            engine.dispose()
+    finally:
+        with admin_engine.connect() as connection:
+            connection.execute(
+                text(
+                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                    "WHERE datname = :db_name AND pid <> pg_backend_pid()"
+                ),
+                {"db_name": db_name},
+            )
+            connection.execute(text(f'DROP DATABASE IF EXISTS "{db_name}"'))
+        admin_engine.dispose()
 
 
 def test_downgrade_seed_removes_only_seeded_rows_keeps_schema_and_legacy_intact() -> None:
@@ -300,8 +371,12 @@ def test_downgrade_seed_removes_only_seeded_rows_keeps_schema_and_legacy_intact(
 
             command.downgrade(cfg, "0006_catalog_display_names")
             with engine.connect() as connection:
-                # Schema (including display_name) survives; only the rows go.
+                # Schema (including display_name) survives; only the rows go —
+                # every one of the six catalog tables, not just a subset.
                 assert _count(connection, "freyja2_underlying_markets") == 0
+                assert _count(connection, "freyja2_product_types") == 0
+                assert _count(connection, "freyja2_assets") == 0
+                assert _count(connection, "freyja2_timeframes") == 0
                 assert _count(connection, "freyja2_instruments") == 0
                 assert _count(connection, "freyja2_instrument_timeframes") == 0
                 connection.execute(

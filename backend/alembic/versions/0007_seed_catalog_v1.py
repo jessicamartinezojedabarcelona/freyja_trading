@@ -163,20 +163,29 @@ def _seed_rows(
     connection: Connection,
     table: sa.TableClause,
     id_column: str,
+    natural_key_columns: tuple[str, ...],
     rows: list[dict[str, object]],
     compare_columns: tuple[str, ...],
 ) -> None:
     """Idempotent, fail-closed seed: inserts a row that doesn't exist yet;
-    for a row that already exists, verifies every compare_columns value
-    matches exactly and raises (aborting the whole migration transaction)
+    for a row that already exists, verifies its id and every compare_columns
+    value match exactly and raises (aborting the whole migration transaction)
     on any divergence — never overwrites, repairs, renames, or silently
-    completes a changed seed."""
-    id_col = table.c[id_column]
+    completes a changed seed.
+
+    Looks up the existing row by natural_key_columns, not by id: id is only
+    ever a deterministic function of the natural key, so a row already
+    present under the same natural key but a *different* id (e.g. inserted
+    by hand, or by any pre-seed code path) is exactly the kind of divergence
+    this must catch — looking up by id alone would miss it (find nothing,
+    then attempt a duplicate INSERT that fails on the natural key's own
+    UNIQUE constraint with a much less useful error)."""
     for row in rows:
+        natural_key_filter = [table.c[name] == row[name] for name in natural_key_columns]
         existing = (
             connection.execute(
-                sa.select(*[table.c[name] for name in compare_columns]).where(
-                    id_col == row[id_column]
+                sa.select(*[table.c[name] for name in (id_column, *compare_columns)]).where(
+                    *natural_key_filter
                 )
             )
             .mappings()
@@ -185,6 +194,13 @@ def _seed_rows(
         if existing is None:
             connection.execute(sa.insert(table).values(**row))
             continue
+        if existing[id_column] != row[id_column]:
+            raise RuntimeError(
+                f"POINT1-SEED-001: divergencia detectada en {table.name} "
+                f"clave natural {natural_key_columns}="
+                f"{tuple(row[name] for name in natural_key_columns)!r}: "
+                f"id existente={existing[id_column]!r} esperado={row[id_column]!r}"
+            )
         for name in compare_columns:
             if existing[name] != row[name]:
                 raise RuntimeError(
@@ -212,17 +228,17 @@ def upgrade() -> None:
     market_rows: list[dict[str, object]] = [
         {"id": _market_id(code), "code": code, "display_name": name} for code, name in _MARKETS
     ]
-    _seed_rows(connection, _markets_t, "id", market_rows, ("code", "display_name"))
+    _seed_rows(connection, _markets_t, "id", ("code",), market_rows, ("display_name",))
 
     product_rows: list[dict[str, object]] = [
         {"id": _product_id(code), "code": code, "display_name": name} for code, name in _PRODUCTS
     ]
-    _seed_rows(connection, _products_t, "id", product_rows, ("code", "display_name"))
+    _seed_rows(connection, _products_t, "id", ("code",), product_rows, ("display_name",))
 
     asset_rows: list[dict[str, object]] = [
         {"id": _asset_id(code), "code": code, "display_name": name} for code, name in _ASSETS
     ]
-    _seed_rows(connection, _assets_t, "id", asset_rows, ("code", "display_name"))
+    _seed_rows(connection, _assets_t, "id", ("code",), asset_rows, ("display_name",))
 
     timeframe_rows: list[dict[str, object]] = [
         {
@@ -237,40 +253,37 @@ def upgrade() -> None:
         connection,
         _timeframes_t,
         "id",
+        ("code",),
         timeframe_rows,
-        ("code", "duration_seconds", "display_name"),
+        ("duration_seconds", "display_name"),
     )
 
-    instrument_rows: list[dict[str, object]] = []
-    for spec in _INSTRUMENTS:
-        underlying_instrument = spec.get("underlying_instrument")
-        instrument_rows.append(
-            {
-                "instrument_id": _instrument_id_from_spec(spec),
-                "underlying_market_id": _market_id(str(spec["market"])),
-                "product_type_id": _product_id(str(spec["product"])),
-                "canonical_symbol": spec["symbol"],
-                "base_asset_id": _asset_id(str(spec["base"])) if "base" in spec else None,
-                "quote_asset_id": _asset_id(str(spec["quote"])) if "quote" in spec else None,
-                "underlying_asset_id": (
-                    _asset_id(str(spec["underlying_asset"])) if "underlying_asset" in spec else None
-                ),
-                "underlying_instrument_id": (
-                    _instrument_id_from_spec(underlying_instrument)  # type: ignore[arg-type]
-                    if underlying_instrument
-                    else None
-                ),
-            }
-        )
+    instrument_rows: list[dict[str, object]] = [
+        {
+            "instrument_id": _instrument_id_from_spec(spec),
+            "underlying_market_id": _market_id(str(spec["market"])),
+            "product_type_id": _product_id(str(spec["product"])),
+            "canonical_symbol": spec["symbol"],
+            "base_asset_id": _asset_id(str(spec["base"])) if "base" in spec else None,
+            "quote_asset_id": _asset_id(str(spec["quote"])) if "quote" in spec else None,
+            "underlying_asset_id": (
+                _asset_id(str(spec["underlying_asset"])) if "underlying_asset" in spec else None
+            ),
+            "underlying_instrument_id": (
+                _instrument_id_from_spec(spec["underlying_instrument"])  # type: ignore[arg-type]
+                if "underlying_instrument" in spec
+                else None
+            ),
+        }
+        for spec in _INSTRUMENTS
+    ]
     _seed_rows(
         connection,
         _instruments_t,
         "instrument_id",
+        ("underlying_market_id", "product_type_id", "canonical_symbol"),
         instrument_rows,
         (
-            "underlying_market_id",
-            "product_type_id",
-            "canonical_symbol",
             "base_asset_id",
             "quote_asset_id",
             "underlying_asset_id",
