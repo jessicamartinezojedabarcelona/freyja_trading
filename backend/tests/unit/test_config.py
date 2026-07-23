@@ -98,6 +98,29 @@ def test_production_fails_closed_if_allowed_hosts_left_at_dev_default(
         _settings()
 
 
+def test_production_fails_closed_if_frontend_origin_is_blank(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Blank is not equal to the dev-default sentinel by strict `==`, but is
+    just as broken: it must still be caught, not silently accepted."""
+    _set_env(monkeypatch, {"FREYJA_FRONTEND_ORIGIN": "   "})
+    _clear_smtp_env(monkeypatch)
+    with pytest.raises(ValidationError):
+        _settings()
+
+
+def test_production_fails_closed_if_allowed_hosts_is_blank(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty/whitespace-only value parses to an empty allowed_hosts_list,
+    which would make TrustedHostMiddleware reject every request (including
+    Render's own health check) — must fail closed at startup instead."""
+    _set_env(monkeypatch, {"FREYJA_ALLOWED_HOSTS": " , "})
+    _clear_smtp_env(monkeypatch)
+    with pytest.raises(ValidationError):
+        _settings()
+
+
 def test_wildcard_frontend_origin_rejected_in_any_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -133,4 +133,9 @@ def create_database_engine(settings: PostgresSettings | None = None) -> Engine:
         if resolved.postgres_sslmode and not resolved.database_url
         else {}
     )
-    return create_engine(resolved.url, connect_args=connect_args)
+    # Render Free and Neon Free both suspend on inactivity (see README §19),
+    # closing connections sitting idle in the pool. pool_pre_ping issues a
+    # cheap "SELECT 1" before handing out a pooled connection and transparently
+    # reconnects if it's dead, instead of surfacing the first post-resume
+    # request as a raw OperationalError.
+    return create_engine(resolved.url, connect_args=connect_args, pool_pre_ping=True)

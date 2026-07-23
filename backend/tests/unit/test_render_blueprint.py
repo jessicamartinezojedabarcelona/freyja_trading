@@ -135,6 +135,14 @@ def test_both_services_disable_auto_deploy_on_commit() -> None:
     """Deploys must only happen through deploy-preview.yml's controlled
     sequence (quality -> Neon migration -> verification -> deploy hooks).
     Without autoDeployTrigger: off, Render's default ("commit") would deploy
-    every push to main on its own, bypassing the migration entirely."""
+    every push to main on its own, bypassing the migration entirely.
+
+    The value must be the quoted string "off", not the bare word: unquoted
+    `off` is a YAML 1.1 boolean (`false`), not the string enum value Render's
+    Blueprint schema expects for this field. This check requires the quotes
+    specifically, so a regression back to the unquoted (ambiguous) form fails
+    the test even though the substring "autoDeployTrigger: off" would still
+    technically appear in the file."""
     content = _code_only_content()
-    assert content.count("autoDeployTrigger: off") == 2
+    assert content.count('autoDeployTrigger: "off"') == 2
+    assert "autoDeployTrigger: off\n" not in content

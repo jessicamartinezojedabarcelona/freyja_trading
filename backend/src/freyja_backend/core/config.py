@@ -109,10 +109,19 @@ class Settings(BaseSettings):
         missing = []
         if not self.rate_limit_hmac_key:
             missing.append("FREYJA_RATE_LIMIT_HMAC_KEY")
-        if self.frontend_origin == _DEV_FRONTEND_ORIGIN:
-            missing.append("FREYJA_FRONTEND_ORIGIN (no puede quedar en el valor de desarrollo)")
-        if self.allowed_hosts == _DEV_ALLOWED_HOSTS:
-            missing.append("FREYJA_ALLOWED_HOSTS (no puede quedar en el valor de desarrollo)")
+        # Blank/whitespace-only is checked separately from the dev-default
+        # sentinel: neither is byte-for-byte equal to it, but both are just as
+        # broken — an empty allowed_hosts makes TrustedHostMiddleware reject
+        # every request (including Render's own health check), and an empty
+        # frontend_origin silently breaks CORS for every browser request.
+        if not self.frontend_origin.strip() or self.frontend_origin.strip() == _DEV_FRONTEND_ORIGIN:
+            missing.append(
+                "FREYJA_FRONTEND_ORIGIN (no puede quedar vacío ni en el valor de desarrollo)"
+            )
+        if not self.allowed_hosts_list or self.allowed_hosts.strip() == _DEV_ALLOWED_HOSTS:
+            missing.append(
+                "FREYJA_ALLOWED_HOSTS (no puede quedar vacío ni en el valor de desarrollo)"
+            )
 
         if missing:
             raise ValueError(

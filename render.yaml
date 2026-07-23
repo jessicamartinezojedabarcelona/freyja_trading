@@ -47,8 +47,11 @@ services:
     # only happen via deploy-preview.yml's controlled sequence (quality →
     # Neon migration → verification → deploy hooks) — without this, Render
     # would deploy every push to main's linked branch on its own, bypassing
-    # the migration entirely.
-    autoDeployTrigger: off
+    # the migration entirely. Quoted deliberately: an unquoted `off` is
+    # resolved as the YAML boolean `false` by YAML 1.1 parsers (confirmed
+    # with PyYAML), not the string enum value "off" Render's Blueprint schema
+    # documents — quoting removes that ambiguity regardless of parser.
+    autoDeployTrigger: "off"
     rootDir: backend
     # `pip install uv` first: whether Render's Python runtime image ships uv
     # preinstalled is not confirmed by official docs, so the build command
@@ -117,7 +120,9 @@ services:
     # that has a region concept) — documented, not silently omitted.
     # Same reasoning as the backend: deploys must only happen via
     # deploy-preview.yml's controlled sequence, never automatically on push.
-    autoDeployTrigger: off
+    # Quoted for the same reason as the backend service above: an unquoted
+    # `off` parses as the YAML boolean `false`, not the string Render expects.
+    autoDeployTrigger: "off"
     rootDir: frontend
     # Runs the environment generator before the Angular build: it reads
     # FREYJA_BACKEND_URL (below), validates it, and rewrites
