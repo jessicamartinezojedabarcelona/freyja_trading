@@ -35,9 +35,14 @@ Consulta el detalle completo y las justificaciones del stack en
 - **Catálogo canónico** (`POINT1-DB-001`): seis tablas (`freyja2_underlying_markets`,
   `freyja2_product_types`, `freyja2_assets`, `freyja2_instruments`,
   `freyja2_timeframes`, `freyja2_instrument_timeframes`) que modelan identidad
-  de mercado, producto, activo, instrumento y timeframe. Sin datos sembrados,
-  sin proveedores/venues, sin capacidades operativas y sin endpoints todavía
-  (ver `POINT1-PROVIDER-001`, `POINT1-CAPABILITY-001`, `POINT1-API-001`).
+  de mercado, producto, activo, instrumento y timeframe. Sin proveedores/venues,
+  sin capacidades operativas y sin endpoints todavía (ver `POINT1-PROVIDER-001`,
+  `POINT1-CAPABILITY-001`, `POINT1-API-001`).
+- **Semilla v1** (`POINT1-SEED-001`): 2 mercados, 2 productos, 7 activos,
+  10 instrumentos y 5 timeframes (50 asociaciones instrumento-timeframe) del
+  alcance aprobado, con identidad UUIDv5 determinista (idéntica en local, CI
+  y producción). Siembra idempotente y fail-closed: reaplicarla no cambia
+  filas, y una divergencia de contenido aborta la migración entera.
 - **Orquestador de calidad** (`scripts/quality.py`): punto de entrada
   único, reproducible y multiplataforma para ejecutar todos los controles
   locales de backend y frontend.
@@ -197,7 +202,7 @@ Consultar los heads disponibles:
 uv run alembic heads
 ```
 
-Actualmente existe un único head: `0005_catalog (head)`.
+Actualmente existe un único head: `0007_seed_catalog_v1 (head)`.
 
 Consultar la revisión actual aplicada:
 
@@ -558,7 +563,7 @@ freyja_trading/
   `docker compose logs postgres`; normalmente indica que el proceso sigue
   inicializando o que las variables de entorno no son válidas. No borres
   el volumen como primera solución.
-- **`alembic current` aparece vacío o distinto de `0005_catalog (head)`**:
+- **`alembic current` aparece vacío o distinto de `0007_seed_catalog_v1 (head)`**:
   ejecuta `uv run alembic upgrade head` desde `backend/` con PostgreSQL
   `healthy`. Un valor vacío es normal en una base de datos recién creada
   antes de aplicar migraciones.
