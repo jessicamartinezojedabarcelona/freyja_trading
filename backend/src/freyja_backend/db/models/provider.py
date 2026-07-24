@@ -135,8 +135,14 @@ class VenueInstrument(Base):
     the instrument's identity, never an account, credential, or activation
     state. A venue may expose several contracts/listings for the same
     instrument (e.g. different expiries), so (venue_id, instrument_id) is
-    deliberately NOT unique — only (venue_id, provider_symbol) is, since a
-    venue cannot use the same symbol for two different listings."""
+    deliberately NOT unique. Uniqueness of the symbol itself instead
+    follows two rules, enforced by the two partial unique indexes below:
+    without a provider_contract_id, a row is unique per
+    (venue_id, provider_symbol); with one, it's unique per
+    (venue_id, provider_symbol, provider_contract_id) — so a venue can
+    reuse the same provider_symbol across several contracts as long as
+    each carries a distinct provider_contract_id (e.g. the same BTCUSDT
+    ticker at two different binary-option expiries)."""
 
     __tablename__ = "freyja2_venue_instruments"
     __table_args__ = (
