@@ -69,10 +69,46 @@ def _make_asset(session: Session, code: str) -> Asset:
     return asset
 
 
-def test_upgrade_creates_exactly_the_six_catalog_tables(auth_test_engine: Engine) -> None:
-    inspector = inspect(auth_test_engine)
-    catalog_tables = {name for name in inspector.get_table_names() if name.startswith("freyja2_")}
-    assert catalog_tables == _CATALOG_TABLES
+def test_upgrade_creates_exactly_the_six_catalog_tables() -> None:
+    """Pinned to the exact revision 0005_catalog (not the shared, head-
+    migrated auth_test_engine): POINT1-PROVIDER-001's own freyja2_-prefixed
+    provider tables are added later, on top, by 0010_provider_mappings —
+    this test must keep proving what POINT1-DB-001 itself created,
+    regardless of how many migrations get layered on top afterward."""
+    settings = get_postgres_settings()
+    admin_url = settings.url.set(database="postgres")
+    admin_engine = create_engine(admin_url, isolation_level="AUTOCOMMIT")
+    db_name = f"freyja_test_{uuid.uuid4().hex[:12]}"
+
+    with admin_engine.connect() as connection:
+        connection.execute(text(f'CREATE DATABASE "{db_name}"'))
+
+    try:
+        temp_url = settings.url.set(database=db_name)
+        cfg = _alembic_config()
+        cfg.attributes["database_url"] = temp_url
+        command.upgrade(cfg, "0005_catalog")
+
+        engine = create_engine(temp_url)
+        try:
+            inspector = inspect(engine)
+            catalog_tables = {
+                name for name in inspector.get_table_names() if name.startswith("freyja2_")
+            }
+            assert catalog_tables == _CATALOG_TABLES
+        finally:
+            engine.dispose()
+    finally:
+        with admin_engine.connect() as connection:
+            connection.execute(
+                text(
+                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                    "WHERE datname = :db_name AND pid <> pg_backend_pid()"
+                ),
+                {"db_name": db_name},
+            )
+            connection.execute(text(f'DROP DATABASE IF EXISTS "{db_name}"'))
+        admin_engine.dispose()
 
 
 def test_0005_catalog_seeds_no_data() -> None:

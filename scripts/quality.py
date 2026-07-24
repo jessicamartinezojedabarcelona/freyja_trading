@@ -12,7 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 BACKEND_DIR = REPO_ROOT / "backend"
 FRONTEND_DIR = REPO_ROOT / "frontend"
 
-EXPECTED_HEAD = "0009_seed_integrity_guard (head)"
+EXPECTED_HEAD = "0010_provider_mappings (head)"
 _ALEMBIC_INFO_PREFIX = "INFO  [alembic."
 
 

@@ -1008,7 +1008,7 @@ def test_downgrade_aborts_on_modified_canonical_row_and_deletes_nothing(
         assert _count(connection, "freyja2_timeframes") == 5
         assert _count(connection, "freyja2_instruments") == 10
         assert _count(connection, "freyja2_instrument_timeframes") == 50
-        assert _current_revision(connection) == "0009_seed_integrity_guard"
+        assert _current_revision(connection) == "0010_provider_mappings"
 
 
 def test_downgrade_aborts_on_inactive_canonical_row_and_deletes_nothing(
@@ -1029,7 +1029,7 @@ def test_downgrade_aborts_on_inactive_canonical_row_and_deletes_nothing(
     with engine.connect() as connection:
         assert _count(connection, "freyja2_instruments") == 10
         assert _count(connection, "freyja2_instrument_timeframes") == 50
-        assert _current_revision(connection) == "0009_seed_integrity_guard"
+        assert _current_revision(connection) == "0010_provider_mappings"
 
 
 def test_downgrade_blocked_by_external_reference_without_cascade_or_partial_loss(
@@ -1079,7 +1079,7 @@ def test_downgrade_blocked_by_external_reference_without_cascade_or_partial_loss
         assert _count(connection, "freyja2_timeframes") == 5
         assert _count(connection, "freyja2_instruments") == 11  # 10 canonical + 1 custom
         assert _count(connection, "freyja2_instrument_timeframes") == 51  # 50 + 1 custom
-        assert _current_revision(connection) == "0009_seed_integrity_guard"
+        assert _current_revision(connection) == "0010_provider_mappings"
 
 
 # --- POINT1-DB-001: 0007 <-> 0008 preserve the seed (unchanged behavior) ----
@@ -1160,6 +1160,53 @@ def test_downgrade_0008_to_0007_and_back_preserves_seed_data() -> None:
             with engine.connect() as connection:
                 after_upgrade = _snapshot_catalog(connection)
             assert after_upgrade == before
+        finally:
+            engine.dispose()
+    finally:
+        with admin_engine.connect() as connection:
+            connection.execute(
+                text(
+                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                    "WHERE datname = :db_name AND pid <> pg_backend_pid()"
+                ),
+                {"db_name": db_name},
+            )
+            connection.execute(text(f'DROP DATABASE IF EXISTS "{db_name}"'))
+        admin_engine.dispose()
+
+
+# --- POINT1-PROVIDER-001: 0010 must never touch the approved v1 seed -------
+
+
+def test_upgrade_from_0009_to_0010_preserves_existing_seed() -> None:
+    """0010_provider_mappings only creates new, empty provider tables — it
+    must not add, remove, or modify a single seeded catalog row, and the
+    approved 2/2/7/10/5/50 scope must remain byte-identical."""
+    settings = get_postgres_settings()
+    admin_url = settings.url.set(database="postgres")
+    admin_engine = create_engine(admin_url, isolation_level="AUTOCOMMIT")
+    db_name = f"freyja_test_{uuid.uuid4().hex[:12]}"
+
+    with admin_engine.connect() as connection:
+        connection.execute(text(f'CREATE DATABASE "{db_name}"'))
+
+    try:
+        temp_url = settings.url.set(database=db_name)
+        cfg = _alembic_config()
+        cfg.attributes["database_url"] = temp_url
+        command.upgrade(cfg, "0009_seed_integrity_guard")
+
+        engine = create_engine(temp_url)
+        try:
+            with engine.connect() as connection:
+                before = _snapshot_catalog(connection)
+
+            command.upgrade(cfg, "0010_provider_mappings")
+
+            with engine.connect() as connection:
+                after = _snapshot_catalog(connection)
+
+            assert before == after
         finally:
             engine.dispose()
     finally:
