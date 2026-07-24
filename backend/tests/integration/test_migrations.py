@@ -7,6 +7,7 @@ import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import URL, Connection, create_engine, inspect, text
+from sqlalchemy.exc import IntegrityError
 
 from alembic import command
 from freyja_backend.core.database import get_postgres_settings
@@ -106,7 +107,7 @@ def test_upgrade_downgrade_upgrade_cycle(temp_database_name: str) -> None:
             current = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-        assert current == "0008_catalog_integrity"
+        assert current == "0009_seed_integrity_guard"
 
         command.downgrade(cfg, "base")
         with engine.connect() as connection:
@@ -118,7 +119,7 @@ def test_upgrade_downgrade_upgrade_cycle(temp_database_name: str) -> None:
         command.upgrade(cfg, "head")
         with engine.connect() as connection:
             final = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert final == "0008_catalog_integrity"
+        assert final == "0009_seed_integrity_guard"
     finally:
         engine.dispose()
 
@@ -195,5 +196,109 @@ def test_migration_0004_removes_email_verification_artifacts(temp_database_name:
             assert inspect(connection).has_table("auth_email_verification_tokens")
             assert _has_column(connection, "auth_users", "email_verified_at")
             assert "RESEND_VERIFICATION" in _rate_limit_action_enum_labels(connection)
+    finally:
+        engine.dispose()
+
+
+_CATALOG_TABLES = (
+    "freyja2_underlying_markets",
+    "freyja2_product_types",
+    "freyja2_assets",
+    "freyja2_timeframes",
+    "freyja2_instruments",
+    "freyja2_instrument_timeframes",
+)
+
+_CANONICAL_COUNTS = {
+    "freyja2_underlying_markets": 2,
+    "freyja2_product_types": 2,
+    "freyja2_assets": 7,
+    "freyja2_timeframes": 5,
+    "freyja2_instruments": 10,
+    "freyja2_instrument_timeframes": 50,
+}
+
+
+def test_upgrade_from_empty_to_0009_reaches_expected_head_with_exact_seed(
+    temp_database_name: str,
+) -> None:
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, "head")
+        with engine.connect() as connection:
+            current = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+            assert current == "0009_seed_integrity_guard"
+            counts = {
+                table: connection.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
+                for table in _CATALOG_TABLES
+            }
+        assert counts == _CANONICAL_COUNTS
+    finally:
+        engine.dispose()
+
+
+def test_upgrade_from_0008_to_0009_succeeds_with_correct_seed(temp_database_name: str) -> None:
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, "0008_catalog_integrity")
+        command.upgrade(cfg, "0009_seed_integrity_guard")  # must not raise
+
+        with engine.connect() as connection:
+            current = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+            assert current == "0009_seed_integrity_guard"
+    finally:
+        engine.dispose()
+
+
+def test_manual_row_at_0005_blocks_upgrade_to_0006_and_is_preserved(
+    temp_database_name: str,
+) -> None:
+    """POINT1-SEED-001 fail-closed decision: 0006_catalog_display_names adds
+    display_name as NOT NULL with no server_default, because it presupposes
+    the four catalog tables are still empty (it precedes the official
+    seed). PostgreSQL itself enforces that assumption: ADD COLUMN ... NOT
+    NULL without a default fails immediately against a non-empty table. A
+    manually-inserted row at 0005 therefore blocks the upgrade, is left
+    untouched, and Alembic never advances past 0005_catalog — there is no
+    backfill and no code-as-display-name fallback."""
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, "0005_catalog")
+
+        manual_id = uuid.uuid4()
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO freyja2_underlying_markets (id, code, is_active) "
+                    "VALUES (:id, 'MANUAL', true)"
+                ),
+                {"id": manual_id},
+            )
+
+        with pytest.raises(IntegrityError):
+            command.upgrade(cfg, "0006_catalog_display_names")
+
+        with engine.connect() as connection:
+            current = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+            assert current == "0005_catalog"
+
+            row = connection.execute(
+                text("SELECT code FROM freyja2_underlying_markets WHERE id = :id"),
+                {"id": manual_id},
+            ).first()
+            assert row is not None
+            assert row[0] == "MANUAL"
     finally:
         engine.dispose()
