@@ -14,6 +14,15 @@ from freyja_backend.db.models.catalog import (
     Timeframe,
     UnderlyingMarket,
 )
+from freyja_backend.db.models.provider import (
+    DataSource,
+    DataSourceInstrument,
+    DataSourceInstrumentPurpose,
+    DataSourceType,
+    Venue,
+    VenueInstrument,
+    VenueType,
+)
 
 __all__ = [
     "Asset",
@@ -21,6 +30,10 @@ __all__ = [
     "AuthRateLimitEvent",
     "AuthSession",
     "AuthUser",
+    "DataSource",
+    "DataSourceInstrument",
+    "DataSourceInstrumentPurpose",
+    "DataSourceType",
     "Instrument",
     "InstrumentTimeframe",
     "ProductType",
@@ -28,4 +41,7 @@ __all__ = [
     "Timeframe",
     "UnderlyingMarket",
     "UserOrigin",
+    "Venue",
+    "VenueInstrument",
+    "VenueType",
 ]

@@ -43,6 +43,15 @@ Consulta el detalle completo y las justificaciones del stack en
   alcance aprobado, con identidad UUIDv5 determinista (idéntica en local, CI
   y producción). Siembra idempotente y fail-closed: reaplicarla no cambia
   filas, y una divergencia de contenido aborta la migración entera.
+- **Mappings de proveedor** (`POINT1-PROVIDER-001`): cuatro tablas
+  (`freyja2_venues`, `freyja2_data_sources`, `freyja2_venue_instruments`,
+  `freyja2_data_source_instruments`) que modelan por separado dónde se
+  negocia (`Venue`) o se publican datos (`DataSource`) de un `Instrument`
+  canónico, y el símbolo/contrato concreto de cada proveedor —
+  `canonical_symbol` nunca cambia por ello. Sin credenciales, cuentas,
+  entorno DEMO/REAL ni autorización (ver `ExecutionContext`, pendiente de
+  `POINT1-CAPABILITY-001`); esta tarea no siembra proveedores reales, solo
+  crea el esquema y sus restricciones.
 - **Orquestador de calidad** (`scripts/quality.py`): punto de entrada
   único, reproducible y multiplataforma para ejecutar todos los controles
   locales de backend y frontend.
@@ -202,7 +211,7 @@ Consultar los heads disponibles:
 uv run alembic heads
 ```
 
-Actualmente existe un único head: `0009_seed_integrity_guard (head)`.
+Actualmente existe un único head: `0010_provider_mappings (head)`.
 
 Consultar la revisión actual aplicada:
 
@@ -588,7 +597,7 @@ freyja_trading/
   `docker compose logs postgres`; normalmente indica que el proceso sigue
   inicializando o que las variables de entorno no son válidas. No borres
   el volumen como primera solución.
-- **`alembic current` aparece vacío o distinto de `0009_seed_integrity_guard (head)`**:
+- **`alembic current` aparece vacío o distinto de `0010_provider_mappings (head)`**:
   ejecuta `uv run alembic upgrade head` desde `backend/` con PostgreSQL
   `healthy`. Un valor vacío es normal en una base de datos recién creada
   antes de aplicar migraciones.

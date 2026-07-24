@@ -107,7 +107,7 @@ def test_upgrade_downgrade_upgrade_cycle(temp_database_name: str) -> None:
             current = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-        assert current == "0009_seed_integrity_guard"
+        assert current == "0010_provider_mappings"
 
         command.downgrade(cfg, "base")
         with engine.connect() as connection:
@@ -119,7 +119,7 @@ def test_upgrade_downgrade_upgrade_cycle(temp_database_name: str) -> None:
         command.upgrade(cfg, "head")
         with engine.connect() as connection:
             final = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert final == "0009_seed_integrity_guard"
+        assert final == "0010_provider_mappings"
     finally:
         engine.dispose()
 
@@ -219,7 +219,7 @@ _CANONICAL_COUNTS = {
 }
 
 
-def test_upgrade_from_empty_to_0009_reaches_expected_head_with_exact_seed(
+def test_upgrade_from_empty_to_0010_reaches_expected_head_with_exact_seed(
     temp_database_name: str,
 ) -> None:
     temp_url = get_postgres_settings().url.set(database=temp_database_name)
@@ -231,7 +231,7 @@ def test_upgrade_from_empty_to_0009_reaches_expected_head_with_exact_seed(
             current = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            assert current == "0009_seed_integrity_guard"
+            assert current == "0010_provider_mappings"
             counts = {
                 table: connection.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
                 for table in _CATALOG_TABLES
@@ -254,6 +254,62 @@ def test_upgrade_from_0008_to_0009_succeeds_with_correct_seed(temp_database_name
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
             assert current == "0009_seed_integrity_guard"
+    finally:
+        engine.dispose()
+
+
+_PROVIDER_TABLES = (
+    "freyja2_venues",
+    "freyja2_data_sources",
+    "freyja2_venue_instruments",
+    "freyja2_data_source_instruments",
+)
+
+
+def test_upgrade_from_0009_to_0010_succeeds(temp_database_name: str) -> None:
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, "0009_seed_integrity_guard")
+        command.upgrade(cfg, "0010_provider_mappings")  # must not raise
+
+        with engine.connect() as connection:
+            current = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+            assert current == "0010_provider_mappings"
+            assert _existing_tables(connection, _PROVIDER_TABLES) == set(_PROVIDER_TABLES)
+    finally:
+        engine.dispose()
+
+
+def test_0010_downgrade_upgrade_is_reversible(temp_database_name: str) -> None:
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, "head")
+        with engine.connect() as connection:
+            assert _existing_tables(connection, _PROVIDER_TABLES) == set(_PROVIDER_TABLES)
+
+        command.downgrade(cfg, "0009_seed_integrity_guard")
+        with engine.connect() as connection:
+            assert _existing_tables(connection, _PROVIDER_TABLES) == set()
+            # Downgrading 0010 must not touch the catalog seed at all.
+            counts = {
+                table: connection.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
+                for table in _CATALOG_TABLES
+            }
+            assert counts == _CANONICAL_COUNTS
+
+        command.upgrade(cfg, "head")
+        with engine.connect() as connection:
+            assert _existing_tables(connection, _PROVIDER_TABLES) == set(_PROVIDER_TABLES)
+            current = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+            assert current == "0010_provider_mappings"
     finally:
         engine.dispose()
 
