@@ -106,7 +106,7 @@ def test_upgrade_downgrade_upgrade_cycle(temp_database_name: str) -> None:
             current = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-        assert current == "0007_seed_catalog_v1"
+        assert current == "0008_catalog_integrity"
 
         command.downgrade(cfg, "base")
         with engine.connect() as connection:
@@ -118,7 +118,7 @@ def test_upgrade_downgrade_upgrade_cycle(temp_database_name: str) -> None:
         command.upgrade(cfg, "head")
         with engine.connect() as connection:
             final = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert final == "0007_seed_catalog_v1"
+        assert final == "0008_catalog_integrity"
     finally:
         engine.dispose()
 

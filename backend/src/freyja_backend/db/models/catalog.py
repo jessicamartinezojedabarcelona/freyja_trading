@@ -6,6 +6,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Integer,
     String,
     UniqueConstraint,
@@ -16,17 +17,45 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from freyja_backend.db.base import Base
 
-# Catalog identity tables (POINT1-DB-001). Extensible catalogs — per MODELO
-# EXISTENTE regla 8/10, adding a market/product/asset/timeframe is a data
-# insertion, never a schema change, so none of these use a native Postgres
-# enum: `code` is a unique natural key, the UUID `id` is the stable primary
-# key. This module answers only *what* an instrument is — venue, data
-# source, broker symbol, credentials, activation status, and regulatory
-# permissions belong to POINT1-PROVIDER-001 / POINT1-CAPABILITY-001, not here.
+# Catalog identity tables (POINT1-DB-001, integrity hardened in
+# POINT1-DB-001 2026-07-24). Extensible catalogs — per MODELO EXISTENTE regla
+# 8/10, adding a market/product/asset/timeframe is a data insertion, never a
+# schema change, so none of these use a native Postgres enum: `code` is a
+# unique natural key, the UUID `id` is the stable primary key. This module
+# answers only *what* an instrument is — venue, data source, broker symbol,
+# credentials, activation status, and regulatory permissions belong to
+# POINT1-PROVIDER-001 / POINT1-CAPABILITY-001, not here.
+#
+# Semantic limits PostgreSQL cannot enforce physically (POINT1-DB-001
+# 2026-07-24 correction): FKs prove a referenced row exists; CHECK
+# constraints prove textual/numeric shape; the composite FK below proves an
+# underlying instrument belongs to the same market as its referencer. None
+# of that lets PostgreSQL deduce or validate market/product/asset semantics
+# from a symbol — e.g. nothing here stops a row claiming BTC as the base
+# asset of a FOREX instrument. Which market/product/asset/instrument
+# combinations are authorized for v1 is proven exclusively by the canonical
+# seed (`0007_seed_catalog_v1`) and its tests, never by parsing
+# `canonical_symbol` or by schema-level enums. Any future write endpoint
+# must validate catalog policy in the application layer before persisting;
+# no such endpoint exists yet.
 
 
 class UnderlyingMarket(Base):
     __tablename__ = "freyja2_underlying_markets"
+    __table_args__ = (
+        CheckConstraint(
+            "char_length(btrim(code)) > 0", name="ck_freyja2_underlying_markets_code_not_blank"
+        ),
+        CheckConstraint("code = btrim(code)", name="ck_freyja2_underlying_markets_code_trimmed"),
+        CheckConstraint(
+            "char_length(btrim(display_name)) > 0",
+            name="ck_freyja2_underlying_markets_display_name_not_blank",
+        ),
+        CheckConstraint(
+            "display_name = btrim(display_name)",
+            name="ck_freyja2_underlying_markets_display_name_trimmed",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     code: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)
@@ -45,6 +74,20 @@ class UnderlyingMarket(Base):
 
 class ProductType(Base):
     __tablename__ = "freyja2_product_types"
+    __table_args__ = (
+        CheckConstraint(
+            "char_length(btrim(code)) > 0", name="ck_freyja2_product_types_code_not_blank"
+        ),
+        CheckConstraint("code = btrim(code)", name="ck_freyja2_product_types_code_trimmed"),
+        CheckConstraint(
+            "char_length(btrim(display_name)) > 0",
+            name="ck_freyja2_product_types_display_name_not_blank",
+        ),
+        CheckConstraint(
+            "display_name = btrim(display_name)",
+            name="ck_freyja2_product_types_display_name_trimmed",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     code: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)
@@ -63,6 +106,17 @@ class ProductType(Base):
 
 class Asset(Base):
     __tablename__ = "freyja2_assets"
+    __table_args__ = (
+        CheckConstraint("char_length(btrim(code)) > 0", name="ck_freyja2_assets_code_not_blank"),
+        CheckConstraint("code = btrim(code)", name="ck_freyja2_assets_code_trimmed"),
+        CheckConstraint(
+            "char_length(btrim(display_name)) > 0",
+            name="ck_freyja2_assets_display_name_not_blank",
+        ),
+        CheckConstraint(
+            "display_name = btrim(display_name)", name="ck_freyja2_assets_display_name_trimmed"
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     code: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)
@@ -86,6 +140,22 @@ class Timeframe(Base):
     points (7-14), never here."""
 
     __tablename__ = "freyja2_timeframes"
+    __table_args__ = (
+        CheckConstraint(
+            "char_length(btrim(code)) > 0", name="ck_freyja2_timeframes_code_not_blank"
+        ),
+        CheckConstraint("code = btrim(code)", name="ck_freyja2_timeframes_code_trimmed"),
+        CheckConstraint(
+            "char_length(btrim(display_name)) > 0",
+            name="ck_freyja2_timeframes_display_name_not_blank",
+        ),
+        CheckConstraint(
+            "display_name = btrim(display_name)",
+            name="ck_freyja2_timeframes_display_name_trimmed",
+        ),
+        CheckConstraint("duration_seconds > 0", name="ck_freyja2_timeframes_duration_positive"),
+        UniqueConstraint("duration_seconds", name="uq_freyja2_timeframes_duration_seconds"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     code: Mapped[str] = mapped_column(String(16), nullable=False, unique=True)
@@ -127,6 +197,15 @@ class Instrument(Base):
             "canonical_symbol",
             name="uq_freyja2_instruments_market_product_symbol",
         ),
+        # Candidate key that lets the composite FK below prove an underlying
+        # instrument belongs to the same market as its referencer — instrument_id
+        # alone is already globally unique, so this widening is never violated
+        # by existing rows, it only exists to be the target of that FK.
+        UniqueConstraint(
+            "underlying_market_id",
+            "instrument_id",
+            name="uq_freyja2_instruments_market_instrument",
+        ),
         CheckConstraint(
             "base_asset_id <> quote_asset_id", name="ck_freyja2_instruments_base_ne_quote"
         ),
@@ -149,6 +228,31 @@ class Instrument(Base):
             ")",
             name="ck_freyja2_instruments_exactly_one_shape",
         ),
+        CheckConstraint(
+            "char_length(btrim(canonical_symbol)) > 0",
+            name="ck_freyja2_instruments_canonical_symbol_not_blank",
+        ),
+        CheckConstraint(
+            "canonical_symbol = btrim(canonical_symbol)",
+            name="ck_freyja2_instruments_canonical_symbol_trimmed",
+        ),
+        # Composite, self-referential FK: an underlying_instrument_id (when
+        # set) must belong to the SAME underlying_market_id as the row that
+        # references it — enforced physically via MATCH SIMPLE against
+        # uq_freyja2_instruments_market_instrument above, without ever
+        # parsing or inspecting canonical_symbol. Rows where
+        # underlying_instrument_id IS NULL (PAIR, ASSET_UNDERLYING) are
+        # unaffected: MATCH SIMPLE skips the check whenever any referencing
+        # column is NULL. This replaces the single-column FK that POINT1-DB-001
+        # originally declared inline on underlying_instrument_id (see
+        # 0008_catalog_integrity) — keeping both would create two competing FK
+        # paths between freyja2_instruments and itself, which is exactly the
+        # foreign-key ambiguity this correction removes.
+        ForeignKeyConstraint(
+            ["underlying_market_id", "underlying_instrument_id"],
+            ["freyja2_instruments.underlying_market_id", "freyja2_instruments.instrument_id"],
+            name="fk_freyja2_instruments_underlying_same_market",
+        ),
     )
 
     instrument_id: Mapped[uuid.UUID] = mapped_column(
@@ -170,9 +274,11 @@ class Instrument(Base):
     underlying_asset_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("freyja2_assets.id")
     )
-    underlying_instrument_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("freyja2_instruments.instrument_id")
-    )
+    # No inline ForeignKey here: the composite, same-market FK is declared
+    # in __table_args__ (fk_freyja2_instruments_underlying_same_market) —
+    # a single-column FK on this column alone would duplicate that path and
+    # create ambiguous foreign keys between freyja2_instruments and itself.
+    underlying_instrument_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
