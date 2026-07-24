@@ -381,6 +381,202 @@ def test_instrument_supports_multiple_timeframes(db_session: Session) -> None:
     assert linked == 2
 
 
+_BLANK_OR_PADDED = ["", "   ", " X", "X "]
+
+
+@pytest.mark.parametrize("invalid_value", _BLANK_OR_PADDED)
+def test_underlying_market_code_rejects_blank_or_padded(
+    db_session: Session, invalid_value: str
+) -> None:
+    db_session.add(UnderlyingMarket(code=invalid_value, display_name="Crypto"))
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+@pytest.mark.parametrize("invalid_value", _BLANK_OR_PADDED)
+def test_underlying_market_display_name_rejects_blank_or_padded(
+    db_session: Session, invalid_value: str
+) -> None:
+    db_session.add(UnderlyingMarket(code="CRYPTO", display_name=invalid_value))
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+@pytest.mark.parametrize("invalid_value", _BLANK_OR_PADDED)
+def test_product_type_code_rejects_blank_or_padded(db_session: Session, invalid_value: str) -> None:
+    db_session.add(ProductType(code=invalid_value, display_name="Spot"))
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+@pytest.mark.parametrize("invalid_value", _BLANK_OR_PADDED)
+def test_product_type_display_name_rejects_blank_or_padded(
+    db_session: Session, invalid_value: str
+) -> None:
+    db_session.add(ProductType(code="SPOT", display_name=invalid_value))
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+@pytest.mark.parametrize("invalid_value", _BLANK_OR_PADDED)
+def test_asset_code_rejects_blank_or_padded(db_session: Session, invalid_value: str) -> None:
+    db_session.add(Asset(code=invalid_value, display_name="Bitcoin"))
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+@pytest.mark.parametrize("invalid_value", _BLANK_OR_PADDED)
+def test_asset_display_name_rejects_blank_or_padded(
+    db_session: Session, invalid_value: str
+) -> None:
+    db_session.add(Asset(code="BTC", display_name=invalid_value))
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+@pytest.mark.parametrize("invalid_value", _BLANK_OR_PADDED)
+def test_timeframe_code_rejects_blank_or_padded(db_session: Session, invalid_value: str) -> None:
+    db_session.add(Timeframe(code=invalid_value, duration_seconds=60, display_name="1 minute"))
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+@pytest.mark.parametrize("invalid_value", _BLANK_OR_PADDED)
+def test_timeframe_display_name_rejects_blank_or_padded(
+    db_session: Session, invalid_value: str
+) -> None:
+    db_session.add(Timeframe(code="1m", duration_seconds=60, display_name=invalid_value))
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+@pytest.mark.parametrize("invalid_value", _BLANK_OR_PADDED)
+def test_instrument_canonical_symbol_rejects_blank_or_padded(
+    db_session: Session, invalid_value: str
+) -> None:
+    market = _make_market(db_session, "CRYPTO")
+    product = _make_product(db_session, "SPOT")
+    base = _make_asset(db_session, "BTC")
+    quote = _make_asset(db_session, "USDT")
+
+    instrument = Instrument(
+        underlying_market_id=market.id,
+        product_type_id=product.id,
+        canonical_symbol=invalid_value,
+        base_asset_id=base.id,
+        quote_asset_id=quote.id,
+    )
+    db_session.add(instrument)
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+def test_timeframe_duration_rejects_zero(db_session: Session) -> None:
+    db_session.add(Timeframe(code="0s", duration_seconds=0, display_name="Zero seconds"))
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+def test_timeframe_duration_rejects_negative(db_session: Session) -> None:
+    db_session.add(Timeframe(code="NEG", duration_seconds=-60, display_name="Negative"))
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+def test_timeframe_duration_must_be_unique_across_codes(db_session: Session) -> None:
+    """Decisión vinculante POINT1-DB-001: dos códigos distintos no pueden
+    representar la misma duración canónica. Alias de proveedor pertenecerán a
+    mappings de proveedor, no a Timeframe."""
+    db_session.add(Timeframe(code="30s", duration_seconds=30, display_name="30 seconds"))
+    db_session.flush()
+
+    db_session.add(Timeframe(code="30s-alias", duration_seconds=30, display_name="Alias"))
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+def test_timeframe_accepts_two_distinct_durations(db_session: Session) -> None:
+    db_session.add(Timeframe(code="30s", duration_seconds=30, display_name="30 seconds"))
+    db_session.add(Timeframe(code="45s", duration_seconds=45, display_name="45 seconds"))
+    db_session.flush()
+
+    count = db_session.query(Timeframe).filter(Timeframe.duration_seconds.in_([30, 45])).count()
+    assert count == 2
+
+
+def test_underlying_instrument_from_a_different_market_is_rejected(db_session: Session) -> None:
+    """FK compuesta (underlying_market_id, underlying_instrument_id) ->
+    (underlying_market_id, instrument_id): un instrumento subyacente debe
+    pertenecer al mismo mercado que quien lo referencia, sin parsear
+    canonical_symbol."""
+    crypto = _make_market(db_session, "CRYPTO")
+    forex = _make_market(db_session, "FOREX")
+    spot = _make_product(db_session, "SPOT")
+    binary = _make_product(db_session, "BINARY_OPTION")
+    eur = _make_asset(db_session, "EUR")
+    usd = _make_asset(db_session, "USD")
+
+    forex_spot = Instrument(
+        underlying_market_id=forex.id,
+        product_type_id=spot.id,
+        canonical_symbol="EUR/USD",
+        base_asset_id=eur.id,
+        quote_asset_id=usd.id,
+    )
+    db_session.add(forex_spot)
+    db_session.flush()
+
+    cross_market_binary = Instrument(
+        underlying_market_id=crypto.id,
+        product_type_id=binary.id,
+        canonical_symbol="CROSS/MARKET",
+        underlying_instrument_id=forex_spot.instrument_id,
+    )
+    db_session.add(cross_market_binary)
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+def test_postgres_does_not_validate_market_asset_semantics(db_session: Session) -> None:
+    """POINT1-DB-001, corrección de auditoría independiente (2026-07-24): las
+    FKs prueban existencia, las CHECK prueban forma, y la FK compuesta prueba
+    que un instrumento subyacente pertenece al mismo mercado — pero
+    PostgreSQL no deduce ni valida semántica de mercado/producto/activo desde
+    un símbolo. Nada aquí impide que una fila declare BTC como base de un
+    instrumento del mercado FOREX: qué combinaciones están autorizadas en v1
+    lo prueba exclusivamente el seed canónico (0007_seed_catalog_v1), nunca
+    un CHECK ni un enum de esquema."""
+    forex = _make_market(db_session, "FOREX")
+    product = _make_product(db_session, "SPOT")
+    btc = _make_asset(db_session, "BTC")
+    usdt = _make_asset(db_session, "USDT")
+
+    semantically_wrong_but_physically_valid = Instrument(
+        underlying_market_id=forex.id,
+        product_type_id=product.id,
+        canonical_symbol="BTC/USDT",
+        base_asset_id=btc.id,
+        quote_asset_id=usdt.id,
+    )
+    db_session.add(semantically_wrong_but_physically_valid)
+    db_session.flush()
+
+    assert semantically_wrong_but_physically_valid.instrument_id is not None
+
+
 def test_duplicate_instrument_timeframe_link_is_rejected(db_session: Session) -> None:
     market = _make_market(db_session, "CRYPTO")
     product = _make_product(db_session, "SPOT")

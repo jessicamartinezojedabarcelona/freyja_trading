@@ -1,12 +1,13 @@
 import importlib.util
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
 from alembic.config import Config
-from sqlalchemy import create_engine, text
+from sqlalchemy import Row, create_engine, text
 from sqlalchemy.engine import Connection, Engine
 
 from alembic import command
@@ -14,6 +15,15 @@ from freyja_backend.core.database import get_postgres_settings
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 _SEED_MODULE_PATH = BACKEND_DIR / "alembic" / "versions" / "0007_seed_catalog_v1.py"
+
+_CATALOG_TABLES = (
+    "freyja2_underlying_markets",
+    "freyja2_product_types",
+    "freyja2_assets",
+    "freyja2_timeframes",
+    "freyja2_instruments",
+    "freyja2_instrument_timeframes",
+)
 
 
 def _alembic_config() -> Config:
@@ -390,6 +400,105 @@ def test_downgrade_seed_removes_only_seeded_rows_keeps_schema_and_legacy_intact(
             command.upgrade(cfg, "head")
             with engine.connect() as connection:
                 assert _count(connection, "freyja2_instruments") == 10
+        finally:
+            engine.dispose()
+    finally:
+        with admin_engine.connect() as connection:
+            connection.execute(
+                text(
+                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                    "WHERE datname = :db_name AND pid <> pg_backend_pid()"
+                ),
+                {"db_name": db_name},
+            )
+            connection.execute(text(f'DROP DATABASE IF EXISTS "{db_name}"'))
+        admin_engine.dispose()
+
+
+def _snapshot_catalog(connection: Connection) -> dict[str, Sequence[Row[Any]]]:
+    return {
+        table: connection.execute(text(f"SELECT * FROM {table} ORDER BY 1")).all()
+        for table in _CATALOG_TABLES
+    }
+
+
+def test_upgrade_from_0007_to_0008_preserves_existing_seed() -> None:
+    """POINT1-DB-001 correction: 0008_catalog_integrity adds only constraints
+    (never DML), so upgrading past it must not add, remove, or modify a
+    single row seeded at 0007_seed_catalog_v1."""
+    settings = get_postgres_settings()
+    admin_url = settings.url.set(database="postgres")
+    admin_engine = create_engine(admin_url, isolation_level="AUTOCOMMIT")
+    db_name = f"freyja_test_{uuid.uuid4().hex[:12]}"
+
+    with admin_engine.connect() as connection:
+        connection.execute(text(f'CREATE DATABASE "{db_name}"'))
+
+    try:
+        temp_url = settings.url.set(database=db_name)
+        cfg = _alembic_config()
+        cfg.attributes["database_url"] = temp_url
+        command.upgrade(cfg, "0007_seed_catalog_v1")
+
+        engine = create_engine(temp_url)
+        try:
+            with engine.connect() as connection:
+                before = _snapshot_catalog(connection)
+
+            command.upgrade(cfg, "0008_catalog_integrity")
+
+            with engine.connect() as connection:
+                after = _snapshot_catalog(connection)
+
+            assert before == after
+        finally:
+            engine.dispose()
+    finally:
+        with admin_engine.connect() as connection:
+            connection.execute(
+                text(
+                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                    "WHERE datname = :db_name AND pid <> pg_backend_pid()"
+                ),
+                {"db_name": db_name},
+            )
+            connection.execute(text(f'DROP DATABASE IF EXISTS "{db_name}"'))
+        admin_engine.dispose()
+
+
+def test_downgrade_0008_to_0007_and_back_preserves_seed_data() -> None:
+    """0008's downgrade must retire exclusively the constraints it added and
+    restore the 0007 schema — never delete or alter seeded rows. Round-trips
+    head (0008) -> 0007 -> 0008 and asserts every catalog table is
+    byte-for-byte identical at each step."""
+    settings = get_postgres_settings()
+    admin_url = settings.url.set(database="postgres")
+    admin_engine = create_engine(admin_url, isolation_level="AUTOCOMMIT")
+    db_name = f"freyja_test_{uuid.uuid4().hex[:12]}"
+
+    with admin_engine.connect() as connection:
+        connection.execute(text(f'CREATE DATABASE "{db_name}"'))
+
+    try:
+        temp_url = settings.url.set(database=db_name)
+        cfg = _alembic_config()
+        cfg.attributes["database_url"] = temp_url
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(temp_url)
+        try:
+            with engine.connect() as connection:
+                before = _snapshot_catalog(connection)
+
+            command.downgrade(cfg, "0007_seed_catalog_v1")
+            with engine.connect() as connection:
+                after_downgrade = _snapshot_catalog(connection)
+            assert after_downgrade == before
+
+            command.upgrade(cfg, "0008_catalog_integrity")
+            with engine.connect() as connection:
+                after_upgrade = _snapshot_catalog(connection)
+            assert after_upgrade == before
         finally:
             engine.dispose()
     finally:
