@@ -32,9 +32,18 @@ depends_on: str | Sequence[str] | None = None
 # operator or test added separately are never touched: verification only
 # looks up the specific canonical natural keys defined in
 # freyja_backend.db.catalog_seed_v1, never enumerates the tables.
+#
+# This migration does not trust that live module blindly either: the
+# SHA-256 fingerprint below is this migration's own frozen anchor — the
+# exact same v1 contract 0007_seed_catalog_v1 pins, duplicated here only as
+# a short historical anchor, never as a second copy of the full catalog
+# lists. Any accidental drift in catalog_seed_v1.py fails this migration
+# closed before it verifies (or fails to verify) a single row.
+_EXPECTED_V1_CONTRACT_SHA256 = "5237ca2d9870c80402e2738ffe4e58492061b8c63d11ee165a64aa6d9b089f08"
 
 
 def upgrade() -> None:
+    seed_spec.verify_contract_fingerprint(_EXPECTED_V1_CONTRACT_SHA256)
     connection = op.get_bind()
 
     for table_spec in seed_spec.CATALOG_ROW_SPECS:
@@ -49,7 +58,7 @@ def upgrade() -> None:
             )
 
     for row in seed_spec.INSTRUMENT_TIMEFRAME_ROWS:
-        seed_spec.require_association_present(connection, row["instrument_id"], row["timeframe_id"])
+        seed_spec.require_association_present(connection, row.instrument_id, row.timeframe_id)
 
 
 def downgrade() -> None:

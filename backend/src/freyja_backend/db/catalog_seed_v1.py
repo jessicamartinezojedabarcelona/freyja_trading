@@ -6,19 +6,36 @@ instruments, 5 timeframes, 50 instrument-timeframe associations. Reused
 verbatim by the data migration that seeds it (`0007_seed_catalog_v1`), the
 migration that certifies it is still intact (`0009_seed_integrity_guard`),
 and the test suite — never duplicated into a second, independently
-maintainable list that could drift.
+maintained list that could drift.
 
-This module contains only pure data and pure, deterministic functions of
-that data (plus thin read-only verification helpers against a live
-connection). It imports no application services, no legacy code, and no
-live ORM models — table shapes are declared as plain `sa.table()` clauses,
-the same column-name-only pattern the migrations themselves use, so this
-spec never depends on (or is invalidated by) unrelated model changes.
+Every canonical structure below is deeply immutable: frozen dataclasses and
+tuples all the way down, never a public dict. A dict is only ever produced
+as a brand-new copy at the exact persistence boundary (via
+`dataclasses.asdict`, immediately before an INSERT) — it is never itself
+the canonical source.
+
+`0007_seed_catalog_v1` and `0009_seed_integrity_guard` do not trust this
+module blindly: `contract_fingerprint()` computes a deterministic SHA-256
+over a fixed, explicit serialization of the whole contract (markets,
+products, assets, timeframes, instruments — never the derived UUID rows,
+which are themselves a pure function of this same data). Each of those two
+migrations pins its own historical copy of the expected fingerprint and
+calls `verify_contract_fingerprint()` as the very first thing it does,
+before any insert, verification, or delete — any accidental drift in this
+module (a typo, a merge mistake, a future task editing it for an unrelated
+reason) fails closed immediately instead of silently seeding, verifying,
+or deleting against altered data.
+
+This module imports no application services, no legacy code, and no live
+ORM models — table shapes are declared as plain `sa.table()` clauses, the
+same column-name-only pattern the migrations themselves use.
 
 Changing any canonical value here is changing the approved v1 scope itself
 — out of bounds for POINT1-SEED-001's fail-closed integrity correction.
 """
 
+import dataclasses
+import hashlib
 import urllib.parse
 import uuid
 from dataclasses import dataclass
@@ -62,11 +79,12 @@ def instrument_id(market_code: str, product_code: str, canonical_symbol: str) ->
     return entity_uuid("instrument", market_code, product_code, canonical_symbol)
 
 
-def instrument_id_from_spec(spec: dict[str, object]) -> uuid.UUID:
-    return instrument_id(str(spec["market"]), str(spec["product"]), str(spec["symbol"]))
-
-
 # --- Exact v1 scope approved in POINT1-DOMAIN-001 ---------------------------
+#
+# Markets, products, assets, and timeframes are already deeply immutable as
+# plain tuples of (str, ...) primitives — no dict involved. Instruments need
+# an explicit shape (optional base/quote/underlying fields), so they are a
+# frozen dataclass instead of a dict.
 
 MARKETS: tuple[tuple[str, str], ...] = (
     ("CRYPTO", "Crypto"),
@@ -96,96 +114,252 @@ TIMEFRAMES: tuple[tuple[str, int, str], ...] = (
     ("4h", 14400, "4 hours"),
 )
 
+
+@dataclass(frozen=True, slots=True)
+class InstrumentKey:
+    """Identifies another canonical instrument by its own natural key —
+    never a nested dict, never a copy/reinterpretation of its symbol text."""
+
+    market: str
+    product: str
+    symbol: str
+
+
+@dataclass(frozen=True, slots=True)
+class InstrumentSpec:
+    """One canonical v1 instrument. Exactly one of (base & quote),
+    underlying_asset, or underlying_instrument is set — the same three
+    mutually exclusive shapes POINT1-DB-001's schema enforces physically."""
+
+    market: str
+    product: str
+    symbol: str
+    base: str | None = None
+    quote: str | None = None
+    underlying_asset: str | None = None
+    underlying_instrument: InstrumentKey | None = None
+
+
 # 5 PAIR + 4 ASSET_UNDERLYING + 1 INSTRUMENT_UNDERLYING = 10 instruments.
 # The broker contract symbol of a binary belongs to POINT1-PROVIDER-001; not
 # seeded here.
-INSTRUMENTS: tuple[dict[str, object], ...] = (
-    {"market": "CRYPTO", "product": "SPOT", "symbol": "BTC/USDT", "base": "BTC", "quote": "USDT"},
-    {"market": "CRYPTO", "product": "SPOT", "symbol": "ETH/USDT", "base": "ETH", "quote": "USDT"},
-    {"market": "CRYPTO", "product": "SPOT", "symbol": "SOL/USDT", "base": "SOL", "quote": "USDT"},
-    {"market": "CRYPTO", "product": "SPOT", "symbol": "XRP/USDT", "base": "XRP", "quote": "USDT"},
-    {"market": "FOREX", "product": "SPOT", "symbol": "EUR/USD", "base": "EUR", "quote": "USD"},
-    {"market": "CRYPTO", "product": "BINARY_OPTION", "symbol": "BTC", "underlying_asset": "BTC"},
-    {"market": "CRYPTO", "product": "BINARY_OPTION", "symbol": "ETH", "underlying_asset": "ETH"},
-    {"market": "CRYPTO", "product": "BINARY_OPTION", "symbol": "SOL", "underlying_asset": "SOL"},
-    {"market": "CRYPTO", "product": "BINARY_OPTION", "symbol": "XRP", "underlying_asset": "XRP"},
-    {
-        "market": "FOREX",
-        "product": "BINARY_OPTION",
-        "symbol": "EUR/USD",
-        "underlying_instrument": {"market": "FOREX", "product": "SPOT", "symbol": "EUR/USD"},
-    },
+INSTRUMENTS: tuple[InstrumentSpec, ...] = (
+    InstrumentSpec("CRYPTO", "SPOT", "BTC/USDT", base="BTC", quote="USDT"),
+    InstrumentSpec("CRYPTO", "SPOT", "ETH/USDT", base="ETH", quote="USDT"),
+    InstrumentSpec("CRYPTO", "SPOT", "SOL/USDT", base="SOL", quote="USDT"),
+    InstrumentSpec("CRYPTO", "SPOT", "XRP/USDT", base="XRP", quote="USDT"),
+    InstrumentSpec("FOREX", "SPOT", "EUR/USD", base="EUR", quote="USD"),
+    InstrumentSpec("CRYPTO", "BINARY_OPTION", "BTC", underlying_asset="BTC"),
+    InstrumentSpec("CRYPTO", "BINARY_OPTION", "ETH", underlying_asset="ETH"),
+    InstrumentSpec("CRYPTO", "BINARY_OPTION", "SOL", underlying_asset="SOL"),
+    InstrumentSpec("CRYPTO", "BINARY_OPTION", "XRP", underlying_asset="XRP"),
+    InstrumentSpec(
+        "FOREX",
+        "BINARY_OPTION",
+        "EUR/USD",
+        underlying_instrument=InstrumentKey("FOREX", "SPOT", "EUR/USD"),
+    ),
 )
 
-CANONICAL_COUNTS: dict[str, int] = {
-    "freyja2_underlying_markets": len(MARKETS),
-    "freyja2_product_types": len(PRODUCTS),
-    "freyja2_assets": len(ASSETS),
-    "freyja2_timeframes": len(TIMEFRAMES),
-    "freyja2_instruments": len(INSTRUMENTS),
-    "freyja2_instrument_timeframes": len(INSTRUMENTS) * len(TIMEFRAMES),
-}
+
+def instrument_id_from_spec(spec: InstrumentSpec) -> uuid.UUID:
+    return instrument_id(spec.market, spec.product, spec.symbol)
+
+
+def instrument_id_from_key(key: InstrumentKey) -> uuid.UUID:
+    return instrument_id(key.market, key.product, key.symbol)
+
+
+# --- Contract fingerprint ----------------------------------------------------
+#
+# A fixed, explicit, human-auditable serialization — never dict/JSON
+# key-ordering — of the whole approved v1 contract, hashed with SHA-256.
+# `0007_seed_catalog_v1` and `0009_seed_integrity_guard` each pin their own
+# copy of the expected digest and verify it before doing anything else.
+
+
+def _canonical_lines() -> tuple[str, ...]:
+    lines: list[str] = []
+    for code, name in MARKETS:
+        lines.append(f"market|{code}|{name}")
+    for code, name in PRODUCTS:
+        lines.append(f"product|{code}|{name}")
+    for code, name in ASSETS:
+        lines.append(f"asset|{code}|{name}")
+    for code, duration, name in TIMEFRAMES:
+        lines.append(f"timeframe|{code}|{duration}|{name}")
+    for spec in INSTRUMENTS:
+        underlying = (
+            f"{spec.underlying_instrument.market}/"
+            f"{spec.underlying_instrument.product}/"
+            f"{spec.underlying_instrument.symbol}"
+            if spec.underlying_instrument is not None
+            else ""
+        )
+        lines.append(
+            "instrument|"
+            f"{spec.market}|{spec.product}|{spec.symbol}|"
+            f"base={spec.base or ''}|"
+            f"quote={spec.quote or ''}|"
+            f"underlying_asset={spec.underlying_asset or ''}|"
+            f"underlying_instrument={underlying}"
+        )
+    return tuple(lines)
+
+
+def canonical_serialization() -> str:
+    return "\n".join(_canonical_lines())
+
+
+def contract_fingerprint() -> str:
+    return hashlib.sha256(canonical_serialization().encode("utf-8")).hexdigest()
+
+
+class SeedIntegrityError(RuntimeError):
+    """Base for any v1 seed-integrity failure. Always aborts the enclosing
+    Alembic migration transaction — never caught to repair, rename, or
+    silently continue."""
+
+
+class ContractFingerprintError(SeedIntegrityError):
+    """The live v1 catalog specification's SHA-256 fingerprint does not
+    match the historical anchor pinned inside the calling migration. Raised
+    before any insert, verification, or delete ever runs — an accidental
+    edit to this module (a typo, a merge mistake, an unrelated future
+    change) fails closed instead of silently seeding, verifying, or
+    deleting against altered data."""
+
+
+def verify_contract_fingerprint(expected_sha256: str) -> None:
+    actual = contract_fingerprint()
+    if actual != expected_sha256:
+        raise ContractFingerprintError(
+            "POINT1-SEED-001: la huella SHA-256 del contrato v1 vigente no "
+            "coincide con el ancla historica fijada en esta migracion; "
+            "abortando antes de cualquier operacion sobre datos."
+        )
+
+
+class SeedMissingError(SeedIntegrityError):
+    """A canonical v1 row or association is absent. Raised only by
+    verification-only call sites (0009's upgrade(), 0007's downgrade()
+    pre-check) — 0007's own upgrade() instead inserts a missing row; it
+    never raises this."""
+
+
+class SeedDivergenceError(SeedIntegrityError):
+    """An existing row/association found under a canonical natural key does
+    not match the v1 seed exactly: its id, a compared column, or is_active
+    differs. Never reports the actual differing values — only which table,
+    natural key, and column diverged — since the stored content is
+    arbitrary, out-of-band data this code does not control."""
+
 
 # --- Row payloads, computed once from the data above -------------------------
+#
+# Each is a frozen dataclass, never a dict: the only dict ever produced from
+# one of these is a brand-new copy from `dataclasses.asdict()`, generated
+# immediately before an INSERT — never stored, never shared, never the
+# canonical source itself.
 #
 # is_active is always True and always explicit here — both inserted
 # explicitly (never left to a server_default) and compared explicitly, so a
 # canonical row deactivated out-of-band is a detectable divergence rather
 # than a silently-ignored column.
 
-MARKET_ROWS: tuple[dict[str, object], ...] = tuple(
-    {"id": market_id(code), "code": code, "display_name": name, "is_active": True}
-    for code, name in MARKETS
+
+@dataclass(frozen=True, slots=True)
+class MarketRow:
+    id: uuid.UUID
+    code: str
+    display_name: str
+    is_active: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class ProductRow:
+    id: uuid.UUID
+    code: str
+    display_name: str
+    is_active: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class AssetRow:
+    id: uuid.UUID
+    code: str
+    display_name: str
+    is_active: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class TimeframeRow:
+    id: uuid.UUID
+    code: str
+    duration_seconds: int
+    display_name: str
+    is_active: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class InstrumentRow:
+    instrument_id: uuid.UUID
+    underlying_market_id: uuid.UUID
+    product_type_id: uuid.UUID
+    canonical_symbol: str
+    base_asset_id: uuid.UUID | None
+    quote_asset_id: uuid.UUID | None
+    underlying_asset_id: uuid.UUID | None
+    underlying_instrument_id: uuid.UUID | None
+    is_active: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class AssociationRow:
+    instrument_id: uuid.UUID
+    timeframe_id: uuid.UUID
+    is_active: bool = True
+
+
+MARKET_ROWS: tuple[MarketRow, ...] = tuple(
+    MarketRow(id=market_id(code), code=code, display_name=name) for code, name in MARKETS
 )
 
-PRODUCT_ROWS: tuple[dict[str, object], ...] = tuple(
-    {"id": product_id(code), "code": code, "display_name": name, "is_active": True}
-    for code, name in PRODUCTS
+PRODUCT_ROWS: tuple[ProductRow, ...] = tuple(
+    ProductRow(id=product_id(code), code=code, display_name=name) for code, name in PRODUCTS
 )
 
-ASSET_ROWS: tuple[dict[str, object], ...] = tuple(
-    {"id": asset_id(code), "code": code, "display_name": name, "is_active": True}
-    for code, name in ASSETS
+ASSET_ROWS: tuple[AssetRow, ...] = tuple(
+    AssetRow(id=asset_id(code), code=code, display_name=name) for code, name in ASSETS
 )
 
-TIMEFRAME_ROWS: tuple[dict[str, object], ...] = tuple(
-    {
-        "id": timeframe_id(code),
-        "code": code,
-        "duration_seconds": duration,
-        "display_name": name,
-        "is_active": True,
-    }
+TIMEFRAME_ROWS: tuple[TimeframeRow, ...] = tuple(
+    TimeframeRow(id=timeframe_id(code), code=code, duration_seconds=duration, display_name=name)
     for code, duration, name in TIMEFRAMES
 )
 
-INSTRUMENT_ROWS: tuple[dict[str, object], ...] = tuple(
-    {
-        "instrument_id": instrument_id_from_spec(spec),
-        "underlying_market_id": market_id(str(spec["market"])),
-        "product_type_id": product_id(str(spec["product"])),
-        "canonical_symbol": spec["symbol"],
-        "base_asset_id": asset_id(str(spec["base"])) if "base" in spec else None,
-        "quote_asset_id": asset_id(str(spec["quote"])) if "quote" in spec else None,
-        "underlying_asset_id": (
-            asset_id(str(spec["underlying_asset"])) if "underlying_asset" in spec else None
+INSTRUMENT_ROWS: tuple[InstrumentRow, ...] = tuple(
+    InstrumentRow(
+        instrument_id=instrument_id_from_spec(spec),
+        underlying_market_id=market_id(spec.market),
+        product_type_id=product_id(spec.product),
+        canonical_symbol=spec.symbol,
+        base_asset_id=asset_id(spec.base) if spec.base is not None else None,
+        quote_asset_id=asset_id(spec.quote) if spec.quote is not None else None,
+        underlying_asset_id=(
+            asset_id(spec.underlying_asset) if spec.underlying_asset is not None else None
         ),
-        "underlying_instrument_id": (
-            instrument_id_from_spec(spec["underlying_instrument"])  # type: ignore[arg-type]
-            if "underlying_instrument" in spec
+        underlying_instrument_id=(
+            instrument_id_from_key(spec.underlying_instrument)
+            if spec.underlying_instrument is not None
             else None
         ),
-        "is_active": True,
-    }
+    )
     for spec in INSTRUMENTS
 )
 
-INSTRUMENT_TIMEFRAME_ROWS: tuple[dict[str, object], ...] = tuple(
-    {
-        "instrument_id": instrument_row["instrument_id"],
-        "timeframe_id": timeframe_row["id"],
-        "is_active": True,
-    }
+INSTRUMENT_TIMEFRAME_ROWS: tuple[AssociationRow, ...] = tuple(
+    AssociationRow(instrument_id=instrument_row.instrument_id, timeframe_id=timeframe_row.id)
     for instrument_row in INSTRUMENT_ROWS
     for timeframe_row in TIMEFRAME_ROWS
 )
@@ -243,7 +417,7 @@ INSTRUMENT_TIMEFRAMES_TABLE = sa.table(
 )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SeedTableSpec:
     """Everything needed to seed-or-verify one canonical catalog table,
     generically, without repeating per-table plumbing in both
@@ -253,7 +427,7 @@ class SeedTableSpec:
     id_column: str
     natural_key_columns: tuple[str, ...]
     compare_columns: tuple[str, ...]
-    rows: tuple[dict[str, object], ...]
+    rows: tuple[object, ...]
 
 
 CATALOG_ROW_SPECS: tuple[SeedTableSpec, ...] = (
@@ -290,33 +464,12 @@ CATALOG_ROW_SPECS: tuple[SeedTableSpec, ...] = (
 # below — comparing them would make every "unchanged" row look diverged.
 
 
-class SeedIntegrityError(RuntimeError):
-    """Base for any v1 seed-integrity failure. Always aborts the enclosing
-    Alembic migration transaction — never caught to repair, rename, or
-    silently continue."""
-
-
-class SeedMissingError(SeedIntegrityError):
-    """A canonical v1 row or association is absent. Raised only by
-    verification-only call sites (0009's upgrade(), 0007's downgrade()
-    pre-check) — 0007's own upgrade() instead inserts a missing row; it
-    never raises this."""
-
-
-class SeedDivergenceError(SeedIntegrityError):
-    """An existing row/association found under a canonical natural key does
-    not match the v1 seed exactly: its id, a compared column, or is_active
-    differs. Never reports the actual differing values — only which table,
-    natural key, and column diverged — since the stored content is
-    arbitrary, out-of-band data this code does not control."""
-
-
 def verify_row(
     connection: Connection,
     table: sa.TableClause,
     id_column: str,
     natural_key_columns: tuple[str, ...],
-    row: dict[str, object],
+    row: object,
     compare_columns: tuple[str, ...],
 ) -> bool:
     """Looks up `row` by its natural key. Returns True if a row is found and
@@ -324,7 +477,7 @@ def verify_row(
     no row exists under that natural key (missing — caller decides whether
     to insert it or to raise). Raises SeedDivergenceError if a row exists
     under the natural key but its id or any compared column differs."""
-    natural_key_filter = [table.c[name] == row[name] for name in natural_key_columns]
+    natural_key_filter = [table.c[name] == getattr(row, name) for name in natural_key_columns]
     existing = (
         connection.execute(
             sa.select(*[table.c[name] for name in (id_column, *compare_columns)]).where(
@@ -337,14 +490,14 @@ def verify_row(
     if existing is None:
         return False
 
-    natural_key_value = tuple(row[name] for name in natural_key_columns)
-    if existing[id_column] != row[id_column]:
+    natural_key_value = tuple(getattr(row, name) for name in natural_key_columns)
+    if existing[id_column] != getattr(row, id_column):
         raise SeedDivergenceError(
             f"POINT1-SEED-001: {table.name} clave natural {natural_key_value!r} "
             "tiene un id distinto del esperado por el seed canonico v1."
         )
     for name in compare_columns:
-        if existing[name] != row[name]:
+        if existing[name] != getattr(row, name):
             raise SeedDivergenceError(
                 f"POINT1-SEED-001: {table.name} clave natural {natural_key_value!r} "
                 f"diverge del seed canonico v1 en la columna {name!r}."
@@ -357,17 +510,24 @@ def require_row_present(
     table: sa.TableClause,
     id_column: str,
     natural_key_columns: tuple[str, ...],
-    row: dict[str, object],
+    row: object,
     compare_columns: tuple[str, ...],
 ) -> None:
     """Same checks as verify_row, but a missing row is itself a failure —
     for verification-only call sites that must never insert."""
     if not verify_row(connection, table, id_column, natural_key_columns, row, compare_columns):
-        natural_key_value = tuple(row[name] for name in natural_key_columns)
+        natural_key_value = tuple(getattr(row, name) for name in natural_key_columns)
         raise SeedMissingError(
             f"POINT1-SEED-001: falta la fila canonica v1 en {table.name} "
             f"(clave natural {natural_key_value!r})."
         )
+
+
+def insert_row(connection: Connection, table: sa.TableClause, row: object) -> None:
+    """The only place a dict is built from a canonical row — a brand-new
+    copy via dataclasses.asdict(), generated at this exact persistence
+    boundary and never reused or stored anywhere else."""
+    connection.execute(sa.insert(table).values(**dataclasses.asdict(row)))  # type: ignore[call-overload]
 
 
 def verify_association(

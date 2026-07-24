@@ -1,7 +1,8 @@
+import dataclasses
 import uuid
 from collections.abc import Iterator, Sequence
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
 from alembic.config import Config
@@ -157,10 +158,6 @@ def _current_revision(connection: Connection) -> str:
     return str(connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one())
 
 
-def _uuid(value: object) -> uuid.UUID:
-    return cast(uuid.UUID, value)
-
-
 # --- Exact v1 scope, shape, and identity ------------------------------------
 
 
@@ -248,23 +245,35 @@ def test_50_instrument_timeframe_associations_have_no_duplicates(
         assert distinct == 50
 
 
-def test_identity_is_deterministic_and_matches_stored_seed(seeded_engine: Engine) -> None:
-    """The UUIDv5 identity scheme is a pure function of the canonical
-    strings: recomputing it independently must match both the precomputed
-    row constants and what is actually stored (item 24)."""
-    assert seed_spec.market_id("CRYPTO") == seed_spec.market_id("CRYPTO")
-    recomputed_market_row = next(row for row in seed_spec.MARKET_ROWS if row["code"] == "CRYPTO")
-    assert recomputed_market_row["id"] == seed_spec.market_id("CRYPTO")
-
-    recomputed_instrument_id = seed_spec.instrument_id("FOREX", "SPOT", "EUR/USD")
-    assert recomputed_instrument_id == seed_spec.instrument_id("FOREX", "SPOT", "EUR/USD")
+def test_market_id_matches_independent_uuidv5_calculation_from_literal_url(
+    seeded_engine: Engine,
+) -> None:
+    """Independent recomputation: uuid.uuid5 applied directly to a literal
+    URL string — never calling entity_uuid()/market_id(), so the expected
+    value isn't derived from the function under test — must match both what
+    the module produces and what is actually stored (item 24)."""
+    expected = uuid.uuid5(
+        uuid.NAMESPACE_URL, "https://freyja.app/freyja2/catalog/v1/underlying-market/CRYPTO"
+    )
+    assert seed_spec.market_id("CRYPTO") == expected
 
     with seeded_engine.connect() as connection:
         stored_market_id = connection.execute(
             text("SELECT id FROM freyja2_underlying_markets WHERE code = 'CRYPTO'")
         ).scalar_one()
-        assert stored_market_id == seed_spec.market_id("CRYPTO")
+        assert stored_market_id == expected
 
+
+def test_instrument_id_matches_independent_uuidv5_calculation_from_literal_url(
+    seeded_engine: Engine,
+) -> None:
+    expected = uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        "https://freyja.app/freyja2/catalog/v1/instrument/FOREX/SPOT/EUR%2FUSD",
+    )
+    assert seed_spec.instrument_id("FOREX", "SPOT", "EUR/USD") == expected
+
+    with seeded_engine.connect() as connection:
         stored_instrument_id = connection.execute(
             text(
                 "SELECT instrument_id FROM freyja2_instruments "
@@ -273,7 +282,161 @@ def test_identity_is_deterministic_and_matches_stored_seed(seeded_engine: Engine
             ),
             {"market_id": seed_spec.market_id("FOREX")},
         ).scalar_one()
-        assert stored_instrument_id == recomputed_instrument_id
+        assert stored_instrument_id == expected
+
+
+# --- Independent regression anchors: literal expected values, never derived
+# by calling the function/module under test against itself ------------------
+
+_APPROVED_MARKETS = (
+    ("CRYPTO", "Crypto"),
+    ("FOREX", "Forex"),
+)
+_APPROVED_PRODUCTS = (
+    ("SPOT", "Spot"),
+    ("BINARY_OPTION", "Binary option"),
+)
+_APPROVED_ASSETS = (
+    ("BTC", "Bitcoin"),
+    ("ETH", "Ethereum"),
+    ("SOL", "Solana"),
+    ("XRP", "XRP"),
+    ("USDT", "Tether USD"),
+    ("EUR", "Euro"),
+    ("USD", "US dollar"),
+)
+_APPROVED_TIMEFRAMES = (
+    ("1m", 60, "1 minute"),
+    ("5m", 300, "5 minutes"),
+    ("15m", 900, "15 minutes"),
+    ("1h", 3600, "1 hour"),
+    ("4h", 14400, "4 hours"),
+)
+_APPROVED_INSTRUMENTS = (
+    seed_spec.InstrumentSpec("CRYPTO", "SPOT", "BTC/USDT", base="BTC", quote="USDT"),
+    seed_spec.InstrumentSpec("CRYPTO", "SPOT", "ETH/USDT", base="ETH", quote="USDT"),
+    seed_spec.InstrumentSpec("CRYPTO", "SPOT", "SOL/USDT", base="SOL", quote="USDT"),
+    seed_spec.InstrumentSpec("CRYPTO", "SPOT", "XRP/USDT", base="XRP", quote="USDT"),
+    seed_spec.InstrumentSpec("FOREX", "SPOT", "EUR/USD", base="EUR", quote="USD"),
+    seed_spec.InstrumentSpec("CRYPTO", "BINARY_OPTION", "BTC", underlying_asset="BTC"),
+    seed_spec.InstrumentSpec("CRYPTO", "BINARY_OPTION", "ETH", underlying_asset="ETH"),
+    seed_spec.InstrumentSpec("CRYPTO", "BINARY_OPTION", "SOL", underlying_asset="SOL"),
+    seed_spec.InstrumentSpec("CRYPTO", "BINARY_OPTION", "XRP", underlying_asset="XRP"),
+    seed_spec.InstrumentSpec(
+        "FOREX",
+        "BINARY_OPTION",
+        "EUR/USD",
+        underlying_instrument=seed_spec.InstrumentKey("FOREX", "SPOT", "EUR/USD"),
+    ),
+)
+
+# The exact SHA-256 fingerprint 0007_seed_catalog_v1 and 0009_seed_integrity_
+# guard each pin as their own historical anchor — a literal here too, not
+# obtained by calling contract_fingerprint() and comparing it to itself.
+_APPROVED_V1_CONTRACT_SHA256 = "5237ca2d9870c80402e2738ffe4e58492061b8c63d11ee165a64aa6d9b089f08"
+
+
+def test_markets_match_exact_scope_approved_in_point1_domain_001() -> None:
+    assert seed_spec.MARKETS == _APPROVED_MARKETS
+
+
+def test_products_match_exact_scope_approved_in_point1_domain_001() -> None:
+    assert seed_spec.PRODUCTS == _APPROVED_PRODUCTS
+
+
+def test_assets_match_exact_scope_approved_in_point1_domain_001() -> None:
+    assert seed_spec.ASSETS == _APPROVED_ASSETS
+
+
+def test_timeframes_match_exact_scope_approved_in_point1_domain_001() -> None:
+    assert seed_spec.TIMEFRAMES == _APPROVED_TIMEFRAMES
+
+
+def test_instruments_match_exact_scope_approved_in_point1_seed_001() -> None:
+    assert seed_spec.INSTRUMENTS == _APPROVED_INSTRUMENTS
+
+
+def test_contract_fingerprint_matches_the_approved_v1_anchor() -> None:
+    assert seed_spec.contract_fingerprint() == _APPROVED_V1_CONTRACT_SHA256
+
+
+# --- Deep immutability: mutation attempts must fail --------------------------
+
+
+def test_canonical_markets_tuple_rejects_item_assignment() -> None:
+    with pytest.raises(TypeError):
+        seed_spec.MARKETS[0] = ("HACKED", "Hacked")  # type: ignore[index]
+
+
+def test_canonical_instruments_tuple_rejects_item_assignment() -> None:
+    with pytest.raises(TypeError):
+        seed_spec.INSTRUMENTS[0] = seed_spec.InstrumentSpec(  # type: ignore[index]
+            "HACKED", "HACKED", "HACKED"
+        )
+
+
+def test_instrument_spec_rejects_attribute_mutation() -> None:
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        seed_spec.INSTRUMENTS[0].market = "HACKED"  # type: ignore[misc]
+
+
+def test_market_row_rejects_attribute_mutation() -> None:
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        seed_spec.MARKET_ROWS[0].display_name = "Hacked"  # type: ignore[misc]
+
+
+def test_instrument_row_rejects_attribute_mutation() -> None:
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        seed_spec.INSTRUMENT_ROWS[0].canonical_symbol = "HACKED"  # type: ignore[misc]
+
+
+def test_association_row_rejects_attribute_mutation() -> None:
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        seed_spec.INSTRUMENT_TIMEFRAME_ROWS[0].is_active = False  # type: ignore[misc]
+
+
+def test_seed_table_spec_rejects_attribute_mutation() -> None:
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        seed_spec.CATALOG_ROW_SPECS[0].id_column = "hacked"  # type: ignore[misc]
+
+
+# --- Contract-alteration guard: fails closed before any DML -----------------
+
+
+def test_altered_contract_fails_fingerprint_before_0007_inserts_anything(
+    monkeypatch: pytest.MonkeyPatch, isolated_migrated_database: tuple[Config, Engine]
+) -> None:
+    """Simulates an accidental edit to catalog_seed_v1.py (a typo, a merge
+    mistake) by monkeypatching contract_fingerprint() so it no longer
+    matches either migration's pinned anchor. 0007 must abort before
+    inserting a single row, and the revision must not advance."""
+    cfg, engine = isolated_migrated_database
+    command.upgrade(cfg, "0006_catalog_display_names")
+
+    monkeypatch.setattr(seed_spec, "contract_fingerprint", lambda: "0" * 64)
+
+    with pytest.raises(seed_spec.ContractFingerprintError):
+        command.upgrade(cfg, "0007_seed_catalog_v1")
+
+    with engine.connect() as connection:
+        assert _current_revision(connection) == "0006_catalog_display_names"
+        assert _count(connection, "freyja2_underlying_markets") == 0
+        assert _count(connection, "freyja2_instruments") == 0
+
+
+def test_altered_contract_fails_fingerprint_before_0009_verifies_anything(
+    monkeypatch: pytest.MonkeyPatch, isolated_migrated_database: tuple[Config, Engine]
+) -> None:
+    cfg, engine = isolated_migrated_database
+    command.upgrade(cfg, "0008_catalog_integrity")
+
+    monkeypatch.setattr(seed_spec, "contract_fingerprint", lambda: "0" * 64)
+
+    with pytest.raises(seed_spec.ContractFingerprintError):
+        command.upgrade(cfg, "0009_seed_integrity_guard")
+
+    with engine.connect() as connection:
+        assert _current_revision(connection) == "0008_catalog_integrity"
 
 
 # --- Item 1: idempotent re-verification -------------------------------------
@@ -300,9 +463,7 @@ def test_reapplying_verification_across_full_seed_is_idempotent(
                 table_spec.compare_columns,
             )
     for row in seed_spec.INSTRUMENT_TIMEFRAME_ROWS:
-        assert seed_spec.verify_association(
-            connection, _uuid(row["instrument_id"]), _uuid(row["timeframe_id"])
-        )
+        assert seed_spec.verify_association(connection, row.instrument_id, row.timeframe_id)
     connection.commit()
 
     after = _snapshot_catalog(connection)
@@ -321,7 +482,7 @@ def test_market_is_active_false_is_a_divergence(isolated_seeded_connection: Conn
     )
     connection.commit()
 
-    row = next(r for r in seed_spec.MARKET_ROWS if r["code"] == "CRYPTO")
+    row = next(r for r in seed_spec.MARKET_ROWS if r.code == "CRYPTO")
     with pytest.raises(seed_spec.SeedDivergenceError, match="diverge"):
         seed_spec.verify_row(
             connection, seed_spec.MARKETS_TABLE, "id", ("code",), row, ("display_name", "is_active")
@@ -342,7 +503,7 @@ def test_product_is_active_false_is_a_divergence(isolated_seeded_connection: Con
     )
     connection.commit()
 
-    row = next(r for r in seed_spec.PRODUCT_ROWS if r["code"] == "SPOT")
+    row = next(r for r in seed_spec.PRODUCT_ROWS if r.code == "SPOT")
     with pytest.raises(seed_spec.SeedDivergenceError, match="diverge"):
         seed_spec.verify_row(
             connection,
@@ -363,7 +524,7 @@ def test_asset_is_active_false_is_a_divergence(isolated_seeded_connection: Conne
     )
     connection.commit()
 
-    row = next(r for r in seed_spec.ASSET_ROWS if r["code"] == "BTC")
+    row = next(r for r in seed_spec.ASSET_ROWS if r.code == "BTC")
     with pytest.raises(seed_spec.SeedDivergenceError, match="diverge"):
         seed_spec.verify_row(
             connection, seed_spec.ASSETS_TABLE, "id", ("code",), row, ("display_name", "is_active")
@@ -380,7 +541,7 @@ def test_timeframe_is_active_false_is_a_divergence(isolated_seeded_connection: C
     )
     connection.commit()
 
-    row = next(r for r in seed_spec.TIMEFRAME_ROWS if r["code"] == "1m")
+    row = next(r for r in seed_spec.TIMEFRAME_ROWS if r.code == "1m")
     with pytest.raises(seed_spec.SeedDivergenceError, match="diverge"):
         seed_spec.verify_row(
             connection,
@@ -402,7 +563,7 @@ def test_instrument_is_active_false_is_a_divergence(isolated_seeded_connection: 
     )
     connection.commit()
 
-    row = next(r for r in seed_spec.INSTRUMENT_ROWS if r["canonical_symbol"] == "BTC/USDT")
+    row = next(r for r in seed_spec.INSTRUMENT_ROWS if r.canonical_symbol == "BTC/USDT")
     with pytest.raises(seed_spec.SeedDivergenceError, match="diverge"):
         seed_spec.verify_row(
             connection,
@@ -431,14 +592,12 @@ def test_association_is_active_false_is_a_divergence(
             "UPDATE freyja2_instrument_timeframes SET is_active = false "
             "WHERE instrument_id = :instrument_id AND timeframe_id = :timeframe_id"
         ),
-        {"instrument_id": row["instrument_id"], "timeframe_id": row["timeframe_id"]},
+        {"instrument_id": row.instrument_id, "timeframe_id": row.timeframe_id},
     )
     connection.commit()
 
     with pytest.raises(seed_spec.SeedDivergenceError, match="inactiva"):
-        seed_spec.verify_association(
-            connection, _uuid(row["instrument_id"]), _uuid(row["timeframe_id"])
-        )
+        seed_spec.verify_association(connection, row.instrument_id, row.timeframe_id)
     connection.rollback()
 
 
@@ -456,7 +615,7 @@ def test_display_name_divergence_aborts_and_preserves_original(
     )
     connection.commit()
 
-    row = next(r for r in seed_spec.MARKET_ROWS if r["code"] == "CRYPTO")
+    row = next(r for r in seed_spec.MARKET_ROWS if r.code == "CRYPTO")
     with pytest.raises(seed_spec.SeedDivergenceError, match="diverge"):
         seed_spec.verify_row(
             connection, seed_spec.MARKETS_TABLE, "id", ("code",), row, ("display_name", "is_active")
@@ -489,7 +648,7 @@ def test_canonical_symbol_divergence_is_detected_as_missing_not_silently_kept(
     )
     connection.commit()
 
-    row = next(r for r in seed_spec.INSTRUMENT_ROWS if r["canonical_symbol"] == "BTC/USDT")
+    row = next(r for r in seed_spec.INSTRUMENT_ROWS if r.canonical_symbol == "BTC/USDT")
     found = seed_spec.verify_row(
         connection,
         seed_spec.INSTRUMENTS_TABLE,
@@ -523,7 +682,7 @@ def test_duration_seconds_divergence_is_detected(isolated_seeded_connection: Con
     )
     connection.commit()
 
-    row = next(r for r in seed_spec.TIMEFRAME_ROWS if r["code"] == "1m")
+    row = next(r for r in seed_spec.TIMEFRAME_ROWS if r.code == "1m")
     with pytest.raises(seed_spec.SeedDivergenceError, match="duration_seconds"):
         seed_spec.verify_row(
             connection,
@@ -550,7 +709,7 @@ def test_instrument_fk_divergence_is_detected(isolated_seeded_connection: Connec
     )
     connection.commit()
 
-    row = next(r for r in seed_spec.INSTRUMENT_ROWS if r["canonical_symbol"] == "BTC/USDT")
+    row = next(r for r in seed_spec.INSTRUMENT_ROWS if r.canonical_symbol == "BTC/USDT")
     with pytest.raises(seed_spec.SeedDivergenceError, match="base_asset_id"):
         seed_spec.verify_row(
             connection,
@@ -608,7 +767,7 @@ def test_seed_detects_divergence_by_natural_key_not_only_by_id() -> None:
                 )
                 connection.commit()
 
-                row = next(r for r in seed_spec.MARKET_ROWS if r["code"] == "CRYPTO")
+                row = next(r for r in seed_spec.MARKET_ROWS if r.code == "CRYPTO")
                 with pytest.raises(seed_spec.SeedDivergenceError, match="clave natural"):
                     seed_spec.verify_row(
                         connection,
@@ -693,7 +852,7 @@ def test_0009_aborts_on_missing_association_without_reconstructing_it(
                 "DELETE FROM freyja2_instrument_timeframes "
                 "WHERE instrument_id = :instrument_id AND timeframe_id = :timeframe_id"
             ),
-            {"instrument_id": row["instrument_id"], "timeframe_id": row["timeframe_id"]},
+            {"instrument_id": row.instrument_id, "timeframe_id": row.timeframe_id},
         )
 
     with pytest.raises(seed_spec.SeedMissingError):
@@ -706,7 +865,7 @@ def test_0009_aborts_on_missing_association_without_reconstructing_it(
                 "SELECT 1 FROM freyja2_instrument_timeframes "
                 "WHERE instrument_id = :instrument_id AND timeframe_id = :timeframe_id"
             ),
-            {"instrument_id": row["instrument_id"], "timeframe_id": row["timeframe_id"]},
+            {"instrument_id": row.instrument_id, "timeframe_id": row.timeframe_id},
         ).first()
         assert exists is None
 
