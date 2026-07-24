@@ -12,6 +12,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -139,8 +140,28 @@ class VenueInstrument(Base):
 
     __tablename__ = "freyja2_venue_instruments"
     __table_args__ = (
-        UniqueConstraint(
-            "venue_id", "provider_symbol", name="uq_freyja2_venue_instruments_venue_symbol"
+        # Two partial unique indexes replace a single UNIQUE(venue_id,
+        # provider_symbol): a venue can list the SAME provider_symbol more
+        # than once when each listing carries a distinct
+        # provider_contract_id (e.g. the same BTCUSDT ticker at two
+        # different binary-option expiries) — only the (venue, symbol,
+        # contract) triple must be unique then. When no contract id is
+        # given at all, (venue, symbol) alone must still be unique, since
+        # nothing else disambiguates the row.
+        Index(
+            "uq_freyja2_venue_instruments_venue_symbol_no_contract",
+            "venue_id",
+            "provider_symbol",
+            unique=True,
+            postgresql_where=text("provider_contract_id IS NULL"),
+        ),
+        Index(
+            "uq_freyja2_venue_instruments_venue_symbol_contract",
+            "venue_id",
+            "provider_symbol",
+            "provider_contract_id",
+            unique=True,
+            postgresql_where=text("provider_contract_id IS NOT NULL"),
         ),
         CheckConstraint(
             "char_length(btrim(provider_symbol)) > 0",

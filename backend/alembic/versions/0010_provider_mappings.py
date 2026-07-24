@@ -137,11 +137,8 @@ def upgrade() -> None:
         ),
         # Deliberately NOT unique on (venue_id, instrument_id): a venue may
         # expose several contracts/listings for the same canonical
-        # instrument (e.g. different expiries). Only the concrete symbol is
-        # unique per venue.
-        sa.UniqueConstraint(
-            "venue_id", "provider_symbol", name="uq_freyja2_venue_instruments_venue_symbol"
-        ),
+        # instrument (e.g. different expiries) — see the two partial unique
+        # indexes created below instead of a single UniqueConstraint here.
         sa.CheckConstraint(
             "char_length(btrim(provider_symbol)) > 0",
             name="ck_freyja2_venue_instruments_provider_symbol_not_blank",
@@ -165,6 +162,26 @@ def upgrade() -> None:
         "ix_freyja2_venue_instruments_instrument_id",
         "freyja2_venue_instruments",
         ["instrument_id"],
+    )
+    # Two partial unique indexes instead of a single UNIQUE(venue_id,
+    # provider_symbol): a venue can list the SAME provider_symbol more than
+    # once as long as each listing carries a distinct provider_contract_id
+    # (e.g. the same BTCUSDT ticker at two different binary-option
+    # expiries). With no contract id at all, (venue_id, provider_symbol)
+    # alone must still be unique — nothing else disambiguates the row.
+    op.create_index(
+        "uq_freyja2_venue_instruments_venue_symbol_no_contract",
+        "freyja2_venue_instruments",
+        ["venue_id", "provider_symbol"],
+        unique=True,
+        postgresql_where=sa.text("provider_contract_id IS NULL"),
+    )
+    op.create_index(
+        "uq_freyja2_venue_instruments_venue_symbol_contract",
+        "freyja2_venue_instruments",
+        ["venue_id", "provider_symbol", "provider_contract_id"],
+        unique=True,
+        postgresql_where=sa.text("provider_contract_id IS NOT NULL"),
     )
 
     op.create_table(
@@ -229,6 +246,14 @@ def downgrade() -> None:
     )
     op.drop_table("freyja2_data_source_instruments")
 
+    op.drop_index(
+        "uq_freyja2_venue_instruments_venue_symbol_contract",
+        table_name="freyja2_venue_instruments",
+    )
+    op.drop_index(
+        "uq_freyja2_venue_instruments_venue_symbol_no_contract",
+        table_name="freyja2_venue_instruments",
+    )
     op.drop_index(
         "ix_freyja2_venue_instruments_instrument_id", table_name="freyja2_venue_instruments"
     )

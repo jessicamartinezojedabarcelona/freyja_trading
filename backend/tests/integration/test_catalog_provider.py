@@ -221,9 +221,12 @@ def test_venue_instrument_provider_symbol_rejects_blank_or_padded(
     db_session.rollback()
 
 
-def test_venue_instrument_venue_and_provider_symbol_combination_is_unique(
+def test_venue_instrument_same_symbol_without_contract_is_rejected_even_across_instruments(
     db_session: Session,
 ) -> None:
+    """With provider_contract_id left NULL on both rows, uniqueness is by
+    (venue_id, provider_symbol) alone — nothing else disambiguates the row,
+    so this must still collide even against a DIFFERENT instrument."""
     venue = _make_venue(db_session)
     instrument_id = _seeded_instrument_id(db_session, "CRYPTO", "SPOT", "BTC/USDT")
     other_instrument_id = _seeded_instrument_id(db_session, "CRYPTO", "SPOT", "ETH/USDT")
@@ -235,8 +238,6 @@ def test_venue_instrument_venue_and_provider_symbol_combination_is_unique(
     )
     db_session.flush()
 
-    # Same venue + same symbol, even against a DIFFERENT instrument, must
-    # collide: a venue cannot use one symbol for two different listings.
     db_session.add(
         VenueInstrument(
             venue_id=venue.id, instrument_id=other_instrument_id, provider_symbol=_TEST_SYMBOL
@@ -247,7 +248,29 @@ def test_venue_instrument_venue_and_provider_symbol_combination_is_unique(
     db_session.rollback()
 
 
+@pytest.mark.parametrize("invalid_value", _BLANK_OR_PADDED)
+def test_venue_instrument_provider_contract_id_rejects_blank_or_padded(
+    db_session: Session, invalid_value: str
+) -> None:
+    venue = _make_venue(db_session)
+    instrument_id = _seeded_instrument_id(db_session, "CRYPTO", "SPOT", "BTC/USDT")
+
+    db_session.add(
+        VenueInstrument(
+            venue_id=venue.id,
+            instrument_id=instrument_id,
+            provider_symbol=_TEST_SYMBOL,
+            provider_contract_id=invalid_value,
+        )
+    )
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
 # --- Item 10: a venue may expose several contracts for the same instrument -
+# using the SAME provider_symbol, distinguished only by provider_contract_id
+# (e.g. the same BTCUSDT ticker at two different binary-option expiries) --
 
 
 def test_venue_can_have_multiple_contracts_for_the_same_instrument(db_session: Session) -> None:
@@ -257,10 +280,16 @@ def test_venue_can_have_multiple_contracts_for_the_same_instrument(db_session: S
     db_session.add_all(
         [
             VenueInstrument(
-                venue_id=venue.id, instrument_id=instrument_id, provider_symbol=f"{_TEST_SYMBOL}_A"
+                venue_id=venue.id,
+                instrument_id=instrument_id,
+                provider_symbol=_TEST_SYMBOL,
+                provider_contract_id="expiry-10:00",
             ),
             VenueInstrument(
-                venue_id=venue.id, instrument_id=instrument_id, provider_symbol=f"{_TEST_SYMBOL}_B"
+                venue_id=venue.id,
+                instrument_id=instrument_id,
+                provider_symbol=_TEST_SYMBOL,
+                provider_contract_id="expiry-10:05",
             ),
         ]
     )
@@ -274,6 +303,35 @@ def test_venue_can_have_multiple_contracts_for_the_same_instrument(db_session: S
         .count()
     )
     assert count == 2
+
+
+def test_venue_instrument_same_symbol_and_same_contract_is_rejected(
+    db_session: Session,
+) -> None:
+    venue = _make_venue(db_session)
+    instrument_id = _seeded_instrument_id(db_session, "CRYPTO", "SPOT", "BTC/USDT")
+
+    db_session.add(
+        VenueInstrument(
+            venue_id=venue.id,
+            instrument_id=instrument_id,
+            provider_symbol=_TEST_SYMBOL,
+            provider_contract_id="expiry-10:00",
+        )
+    )
+    db_session.flush()
+
+    db_session.add(
+        VenueInstrument(
+            venue_id=venue.id,
+            instrument_id=instrument_id,
+            provider_symbol=_TEST_SYMBOL,
+            provider_contract_id="expiry-10:00",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
 
 
 # --- Items 6, 9, 11, 12: DataSourceInstrument shape, uniqueness, purpose ----
