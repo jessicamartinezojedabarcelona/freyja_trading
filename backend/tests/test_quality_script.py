@@ -138,7 +138,7 @@ def test_backend_checks_use_expected_cwd_and_canonical_commands(
             return subprocess.CompletedProcess(command, 0, stdout=payload, stderr="")
         if command[-1] in ("heads", "current"):
             return subprocess.CompletedProcess(
-                command, 0, stdout="0008_catalog_integrity (head)\n", stderr=""
+                command, 0, stdout="0009_seed_integrity_guard (head)\n", stderr=""
             )
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
@@ -419,11 +419,11 @@ def test_validate_alembic_stderr_rejects_unexpected_content(bad_stderr: str) -> 
 
 
 def test_validate_alembic_heads_accepts_expected_single_head() -> None:
-    quality.validate_alembic_heads("0008_catalog_integrity (head)\n")
+    quality.validate_alembic_heads("0009_seed_integrity_guard (head)\n")
 
 
 def test_validate_alembic_heads_accepts_with_real_info_noise() -> None:
-    quality.validate_alembic_heads(_REAL_ALEMBIC_INFO_LINES + "0008_catalog_integrity (head)\n")
+    quality.validate_alembic_heads(_REAL_ALEMBIC_INFO_LINES + "0009_seed_integrity_guard (head)\n")
 
 
 def test_validate_alembic_heads_rejects_zero_heads() -> None:
@@ -449,11 +449,13 @@ def test_validate_alembic_heads_rejects_warning_plus_head() -> None:
 
 
 def test_validate_alembic_current_accepts_expected_single_head() -> None:
-    quality.validate_alembic_current("0008_catalog_integrity (head)\n")
+    quality.validate_alembic_current("0009_seed_integrity_guard (head)\n")
 
 
 def test_validate_alembic_current_accepts_with_real_info_noise() -> None:
-    quality.validate_alembic_current(_REAL_ALEMBIC_INFO_LINES + "0008_catalog_integrity (head)\n")
+    quality.validate_alembic_current(
+        _REAL_ALEMBIC_INFO_LINES + "0009_seed_integrity_guard (head)\n"
+    )
 
 
 def test_validate_alembic_current_rejects_ambiguous_output() -> None:

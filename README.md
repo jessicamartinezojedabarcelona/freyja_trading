@@ -202,7 +202,7 @@ Consultar los heads disponibles:
 uv run alembic heads
 ```
 
-Actualmente existe un único head: `0008_catalog_integrity (head)`.
+Actualmente existe un único head: `0009_seed_integrity_guard (head)`.
 
 Consultar la revisión actual aplicada:
 
@@ -223,6 +223,31 @@ modo offline, exigiendo una conexión real a PostgreSQL.
 No se documentan aquí comandos de `downgrade` como operación rutinaria:
 son exclusivamente de verificación/desarrollo y no deben ejecutarse sobre
 datos valiosos.
+
+**Comportamiento fail-closed del catálogo v1 (`0006`-`0009`):**
+
+- `0006_catalog_display_names` presupone que las cuatro tablas de catálogo
+  están vacías, porque precede al seed oficial (`0007_seed_catalog_v1`). No
+  añade ningún valor por defecto para la columna `display_name` que crea.
+  Si alguien insertó una fila manualmente bajo `0005_catalog`, PostgreSQL
+  rechaza el `ALTER TABLE ... ADD COLUMN ... NOT NULL` sin valor por
+  defecto en cuanto detecta esa fila: el `upgrade` a `0006` falla, la fila
+  manual se conserva intacta y Alembic no avanza de revisión. No existe
+  backfill automático ni un nombre inventado a partir del código — resolver
+  esa fila manual exige una intervención explícita fuera de esta tarea.
+- `0007_seed_catalog_v1` es transaccional, idempotente y fail-closed:
+  inserta cualquier fila o asociación canónica que falte y, para una que ya
+  exista, verifica que todo su contenido estable (UUID determinista, clave
+  natural, `display_name`, `canonical_symbol`, `duration_seconds`,
+  FKs/forma del instrumento e `is_active`) coincide exactamente. Cualquier
+  divergencia aborta toda la migración sin reparar, renombrar ni sobrescribir
+  nada. Su `downgrade` aplica la misma verificación completa *antes* de
+  borrar una sola fila; si algo falta, cambió o está inactivo, aborta sin
+  borrar nada.
+- `0009_seed_integrity_guard` certifica, en una base ya migrada, que el
+  seed v1 sigue siendo exactamente el aprobado — nunca inserta ni repara.
+  Su `downgrade` es un no-op documentado: esta revisión no crea esquema ni
+  escribe datos, así que no hay nada que revertir.
 
 ## 9. Backend
 
@@ -563,7 +588,7 @@ freyja_trading/
   `docker compose logs postgres`; normalmente indica que el proceso sigue
   inicializando o que las variables de entorno no son válidas. No borres
   el volumen como primera solución.
-- **`alembic current` aparece vacío o distinto de `0008_catalog_integrity (head)`**:
+- **`alembic current` aparece vacío o distinto de `0009_seed_integrity_guard (head)`**:
   ejecuta `uv run alembic upgrade head` desde `backend/` con PostgreSQL
   `healthy`. Un valor vacío es normal en una base de datos recién creada
   antes de aplicar migraciones.
