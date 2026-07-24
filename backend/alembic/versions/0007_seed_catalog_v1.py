@@ -31,7 +31,7 @@ depends_on: str | Sequence[str] | None = None
 # catalog_seed_v1.py's data — a typo, a merge mistake, an unrelated future
 # edit — changes contract_fingerprint() and is caught here, before this
 # migration inserts, verifies, or deletes a single row.
-_EXPECTED_V1_CONTRACT_SHA256 = "5237ca2d9870c80402e2738ffe4e58492061b8c63d11ee165a64aa6d9b089f08"
+_EXPECTED_V1_CONTRACT_SHA256 = "0f40a3df7ed37f9d69a2dd66437747bf72830831b430f17d4a97f695c81117c2"
 
 
 def upgrade() -> None:

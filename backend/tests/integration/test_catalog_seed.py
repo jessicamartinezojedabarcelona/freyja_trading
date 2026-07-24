@@ -333,7 +333,7 @@ _APPROVED_INSTRUMENTS = (
 # The exact SHA-256 fingerprint 0007_seed_catalog_v1 and 0009_seed_integrity_
 # guard each pin as their own historical anchor — a literal here too, not
 # obtained by calling contract_fingerprint() and comparing it to itself.
-_APPROVED_V1_CONTRACT_SHA256 = "5237ca2d9870c80402e2738ffe4e58492061b8c63d11ee165a64aa6d9b089f08"
+_APPROVED_V1_CONTRACT_SHA256 = "0f40a3df7ed37f9d69a2dd66437747bf72830831b430f17d4a97f695c81117c2"
 
 
 def test_markets_match_exact_scope_approved_in_point1_domain_001() -> None:
@@ -358,6 +358,62 @@ def test_instruments_match_exact_scope_approved_in_point1_seed_001() -> None:
 
 def test_contract_fingerprint_matches_the_approved_v1_anchor() -> None:
     assert seed_spec.contract_fingerprint() == _APPROVED_V1_CONTRACT_SHA256
+
+
+# --- The REAL serialization detects these changes — not a monkeypatched
+# contract_fingerprint() return value, but the actual module-level *_ROWS
+# data that _canonical_lines()/canonical_serialization() actually reads at
+# call time. Each test patches the input data, then calls the real
+# contract_fingerprint() and checks the digest actually moved. -------------
+
+
+def test_fingerprint_changes_if_a_deterministic_uuid_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stands in for a future change to entity_uuid()'s algorithm,
+    uuid.NAMESPACE_URL, or the base URL — any of which would change every
+    deterministic UUID the same way a single row's id changing here does."""
+    original = seed_spec.contract_fingerprint()
+    altered_market = dataclasses.replace(seed_spec.MARKET_ROWS[0], id=uuid.uuid4())
+    monkeypatch.setattr(seed_spec, "MARKET_ROWS", (altered_market, *seed_spec.MARKET_ROWS[1:]))
+
+    assert seed_spec.contract_fingerprint() != original
+
+
+def test_fingerprint_changes_if_a_row_is_active_changes(monkeypatch: pytest.MonkeyPatch) -> None:
+    original = seed_spec.contract_fingerprint()
+    deactivated = dataclasses.replace(seed_spec.INSTRUMENT_ROWS[0], is_active=False)
+    monkeypatch.setattr(seed_spec, "INSTRUMENT_ROWS", (deactivated, *seed_spec.INSTRUMENT_ROWS[1:]))
+
+    assert seed_spec.contract_fingerprint() != original
+
+
+def test_fingerprint_changes_if_an_association_is_active_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = seed_spec.contract_fingerprint()
+    deactivated = dataclasses.replace(seed_spec.INSTRUMENT_TIMEFRAME_ROWS[0], is_active=False)
+    monkeypatch.setattr(
+        seed_spec,
+        "INSTRUMENT_TIMEFRAME_ROWS",
+        (deactivated, *seed_spec.INSTRUMENT_TIMEFRAME_ROWS[1:]),
+    )
+
+    assert seed_spec.contract_fingerprint() != original
+
+
+def test_fingerprint_changes_if_an_association_uuid_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = seed_spec.contract_fingerprint()
+    rewired = dataclasses.replace(seed_spec.INSTRUMENT_TIMEFRAME_ROWS[0], timeframe_id=uuid.uuid4())
+    monkeypatch.setattr(
+        seed_spec,
+        "INSTRUMENT_TIMEFRAME_ROWS",
+        (rewired, *seed_spec.INSTRUMENT_TIMEFRAME_ROWS[1:]),
+    )
+
+    assert seed_spec.contract_fingerprint() != original
 
 
 # --- Deep immutability: mutation attempts must fail --------------------------

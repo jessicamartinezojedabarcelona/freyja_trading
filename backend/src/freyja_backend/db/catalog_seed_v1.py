@@ -16,10 +16,17 @@ the canonical source.
 
 `0007_seed_catalog_v1` and `0009_seed_integrity_guard` do not trust this
 module blindly: `contract_fingerprint()` computes a deterministic SHA-256
-over a fixed, explicit serialization of the whole contract (markets,
-products, assets, timeframes, instruments — never the derived UUID rows,
-which are themselves a pure function of this same data). Each of those two
-migrations pins its own historical copy of the expected fingerprint and
+over a fixed, explicit serialization of the whole *final, stable payload*
+of all six catalog tables — every deterministic UUID, natural key,
+display_name, canonical_symbol, duration_seconds, FK/instrument shape, and
+is_active, for every canonical row AND every one of the 50
+instrument-timeframe associations. It is computed from the same
+MARKET_ROWS/.../INSTRUMENT_TIMEFRAME_ROWS constants 0007/0009 actually
+insert-or-verify, never from the pre-UUID conceptual data alone — so a
+future change to entity_uuid()'s algorithm, to uuid.NAMESPACE_URL, to the
+base URL, to any row's is_active default, or to an association's
+identity/state changes the fingerprint too, not just the row content. Each
+of 0007/0009 pins its own historical copy of the expected fingerprint and
 calls `verify_contract_fingerprint()` as the very first thing it does,
 before any insert, verification, or delete — any accidental drift in this
 module (a typo, a merge mistake, a future task editing it for an unrelated
@@ -170,91 +177,6 @@ def instrument_id_from_key(key: InstrumentKey) -> uuid.UUID:
     return instrument_id(key.market, key.product, key.symbol)
 
 
-# --- Contract fingerprint ----------------------------------------------------
-#
-# A fixed, explicit, human-auditable serialization — never dict/JSON
-# key-ordering — of the whole approved v1 contract, hashed with SHA-256.
-# `0007_seed_catalog_v1` and `0009_seed_integrity_guard` each pin their own
-# copy of the expected digest and verify it before doing anything else.
-
-
-def _canonical_lines() -> tuple[str, ...]:
-    lines: list[str] = []
-    for code, name in MARKETS:
-        lines.append(f"market|{code}|{name}")
-    for code, name in PRODUCTS:
-        lines.append(f"product|{code}|{name}")
-    for code, name in ASSETS:
-        lines.append(f"asset|{code}|{name}")
-    for code, duration, name in TIMEFRAMES:
-        lines.append(f"timeframe|{code}|{duration}|{name}")
-    for spec in INSTRUMENTS:
-        underlying = (
-            f"{spec.underlying_instrument.market}/"
-            f"{spec.underlying_instrument.product}/"
-            f"{spec.underlying_instrument.symbol}"
-            if spec.underlying_instrument is not None
-            else ""
-        )
-        lines.append(
-            "instrument|"
-            f"{spec.market}|{spec.product}|{spec.symbol}|"
-            f"base={spec.base or ''}|"
-            f"quote={spec.quote or ''}|"
-            f"underlying_asset={spec.underlying_asset or ''}|"
-            f"underlying_instrument={underlying}"
-        )
-    return tuple(lines)
-
-
-def canonical_serialization() -> str:
-    return "\n".join(_canonical_lines())
-
-
-def contract_fingerprint() -> str:
-    return hashlib.sha256(canonical_serialization().encode("utf-8")).hexdigest()
-
-
-class SeedIntegrityError(RuntimeError):
-    """Base for any v1 seed-integrity failure. Always aborts the enclosing
-    Alembic migration transaction — never caught to repair, rename, or
-    silently continue."""
-
-
-class ContractFingerprintError(SeedIntegrityError):
-    """The live v1 catalog specification's SHA-256 fingerprint does not
-    match the historical anchor pinned inside the calling migration. Raised
-    before any insert, verification, or delete ever runs — an accidental
-    edit to this module (a typo, a merge mistake, an unrelated future
-    change) fails closed instead of silently seeding, verifying, or
-    deleting against altered data."""
-
-
-def verify_contract_fingerprint(expected_sha256: str) -> None:
-    actual = contract_fingerprint()
-    if actual != expected_sha256:
-        raise ContractFingerprintError(
-            "POINT1-SEED-001: la huella SHA-256 del contrato v1 vigente no "
-            "coincide con el ancla historica fijada en esta migracion; "
-            "abortando antes de cualquier operacion sobre datos."
-        )
-
-
-class SeedMissingError(SeedIntegrityError):
-    """A canonical v1 row or association is absent. Raised only by
-    verification-only call sites (0009's upgrade(), 0007's downgrade()
-    pre-check) — 0007's own upgrade() instead inserts a missing row; it
-    never raises this."""
-
-
-class SeedDivergenceError(SeedIntegrityError):
-    """An existing row/association found under a canonical natural key does
-    not match the v1 seed exactly: its id, a compared column, or is_active
-    differs. Never reports the actual differing values — only which table,
-    natural key, and column diverged — since the stored content is
-    arbitrary, out-of-band data this code does not control."""
-
-
 # --- Row payloads, computed once from the data above -------------------------
 #
 # Each is a frozen dataclass, never a dict: the only dict ever produced from
@@ -363,6 +285,119 @@ INSTRUMENT_TIMEFRAME_ROWS: tuple[AssociationRow, ...] = tuple(
     for instrument_row in INSTRUMENT_ROWS
     for timeframe_row in TIMEFRAME_ROWS
 )
+
+
+# --- Contract fingerprint ----------------------------------------------------
+#
+# A fixed, explicit, human-auditable serialization — never dict/JSON
+# key-ordering — of the whole approved v1 contract's FINAL, STABLE PAYLOAD:
+# every row's deterministic UUID, natural key, display_name/canonical_symbol,
+# duration_seconds, FKs/instrument shape, and is_active — plus every one of
+# the 50 associations' instrument_id, timeframe_id, and is_active. Built from
+# the same *_ROWS constants 0007/0009 actually act on, so it also protects
+# against silent drift in entity_uuid()'s algorithm, uuid.NAMESPACE_URL, the
+# base URL, or any is_active default — not just the pre-UUID conceptual data.
+# `0007_seed_catalog_v1` and `0009_seed_integrity_guard` each pin their own
+# copy of the expected digest and verify it before doing anything else.
+
+
+def _market_line(market: MarketRow) -> str:
+    return f"market|{market.id}|{market.code}|{market.display_name}|{market.is_active}"
+
+
+def _product_line(product: ProductRow) -> str:
+    return f"product|{product.id}|{product.code}|{product.display_name}|{product.is_active}"
+
+
+def _asset_line(asset: AssetRow) -> str:
+    return f"asset|{asset.id}|{asset.code}|{asset.display_name}|{asset.is_active}"
+
+
+def _timeframe_line(timeframe: TimeframeRow) -> str:
+    return (
+        f"timeframe|{timeframe.id}|{timeframe.code}|{timeframe.duration_seconds}|"
+        f"{timeframe.display_name}|{timeframe.is_active}"
+    )
+
+
+def _instrument_line(instrument: InstrumentRow) -> str:
+    return (
+        "instrument|"
+        f"{instrument.instrument_id}|{instrument.underlying_market_id}|"
+        f"{instrument.product_type_id}|{instrument.canonical_symbol}|"
+        f"base={instrument.base_asset_id or ''}|"
+        f"quote={instrument.quote_asset_id or ''}|"
+        f"underlying_asset={instrument.underlying_asset_id or ''}|"
+        f"underlying_instrument={instrument.underlying_instrument_id or ''}|"
+        f"is_active={instrument.is_active}"
+    )
+
+
+def _association_line(association: AssociationRow) -> str:
+    return (
+        f"association|{association.instrument_id}|{association.timeframe_id}|"
+        f"{association.is_active}"
+    )
+
+
+def _canonical_lines() -> tuple[str, ...]:
+    return (
+        *(_market_line(market) for market in MARKET_ROWS),
+        *(_product_line(product) for product in PRODUCT_ROWS),
+        *(_asset_line(asset) for asset in ASSET_ROWS),
+        *(_timeframe_line(timeframe) for timeframe in TIMEFRAME_ROWS),
+        *(_instrument_line(instrument) for instrument in INSTRUMENT_ROWS),
+        *(_association_line(association) for association in INSTRUMENT_TIMEFRAME_ROWS),
+    )
+
+
+def canonical_serialization() -> str:
+    return "\n".join(_canonical_lines())
+
+
+def contract_fingerprint() -> str:
+    return hashlib.sha256(canonical_serialization().encode("utf-8")).hexdigest()
+
+
+class SeedIntegrityError(RuntimeError):
+    """Base for any v1 seed-integrity failure. Always aborts the enclosing
+    Alembic migration transaction — never caught to repair, rename, or
+    silently continue."""
+
+
+class ContractFingerprintError(SeedIntegrityError):
+    """The live v1 catalog specification's SHA-256 fingerprint does not
+    match the historical anchor pinned inside the calling migration. Raised
+    before any insert, verification, or delete ever runs — an accidental
+    edit to this module (a typo, a merge mistake, an unrelated future
+    change) fails closed instead of silently seeding, verifying, or
+    deleting against altered data."""
+
+
+def verify_contract_fingerprint(expected_sha256: str) -> None:
+    actual = contract_fingerprint()
+    if actual != expected_sha256:
+        raise ContractFingerprintError(
+            "POINT1-SEED-001: la huella SHA-256 del contrato v1 vigente no "
+            "coincide con el ancla historica fijada en esta migracion; "
+            "abortando antes de cualquier operacion sobre datos."
+        )
+
+
+class SeedMissingError(SeedIntegrityError):
+    """A canonical v1 row or association is absent. Raised only by
+    verification-only call sites (0009's upgrade(), 0007's downgrade()
+    pre-check) — 0007's own upgrade() instead inserts a missing row; it
+    never raises this."""
+
+
+class SeedDivergenceError(SeedIntegrityError):
+    """An existing row/association found under a canonical natural key does
+    not match the v1 seed exactly: its id, a compared column, or is_active
+    differs. Never reports the actual differing values — only which table,
+    natural key, and column diverged — since the stored content is
+    arbitrary, out-of-band data this code does not control."""
+
 
 # --- Table handles for DML (column-name-only, the standard Alembic data-
 # migration pattern — never imports the live ORM models, which could change
