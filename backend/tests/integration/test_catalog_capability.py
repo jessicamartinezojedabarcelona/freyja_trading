@@ -1,5 +1,6 @@
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 from sqlalchemy import inspect, text
@@ -13,6 +14,7 @@ from freyja_backend.db.models.capability import (
     CapabilityStatus,
     CredentialsStatus,
     ExecutionContext,
+    ExecutionContextRegulatoryRule,
     ExecutionEnvironment,
     OwnerAuthorizationStatus,
     RegulatoryEligibilityStatus,
@@ -28,6 +30,7 @@ _CAPABILITY_TABLES = frozenset(
         "freyja2_technical_capabilities",
         "freyja2_execution_contexts",
         "freyja2_regulatory_rules",
+        "freyja2_execution_context_regulatory_rules",
     }
 )
 
@@ -38,6 +41,8 @@ _TEST_SOURCE_CODE = "TEST_CAP_MARKET_DATA"
 _TEST_JURISDICTION = "TEST_XX"
 _TEST_CLASSIFICATION = "TEST_RETAIL"
 _TEST_CITATION = "TEST fixture citation — not a real regulatory source"
+_TEST_ACCOUNT_1 = "TEST_ACCOUNT_1"
+_TEST_ACCOUNT_2 = "TEST_ACCOUNT_2"
 _BLANK_OR_PADDED = ["", "   ", " X", "X "]
 
 
@@ -47,8 +52,9 @@ def _truncate_capability_tables(auth_test_engine: Engine) -> None:
         connection.execute(
             text(
                 "TRUNCATE "
-                "freyja2_execution_contexts, freyja2_technical_capabilities, "
-                "freyja2_regulatory_rules, freyja2_venues, freyja2_data_sources "
+                "freyja2_execution_context_regulatory_rules, freyja2_execution_contexts, "
+                "freyja2_technical_capabilities, freyja2_regulatory_rules, "
+                "freyja2_venues, freyja2_data_sources "
                 "RESTART IDENTITY CASCADE"
             )
         )
@@ -74,6 +80,13 @@ def _seeded_instrument_id(
 def _seeded_timeframe_id(session: Session, code: str) -> uuid.UUID:
     row = session.execute(
         text("SELECT id FROM freyja2_timeframes WHERE code = :code"), {"code": code}
+    ).scalar_one()
+    return uuid.UUID(str(row))
+
+
+def _seeded_product_type_id(session: Session, code: str) -> uuid.UUID:
+    row = session.execute(
+        text("SELECT id FROM freyja2_product_types WHERE code = :code"), {"code": code}
     ).scalar_one()
     return uuid.UUID(str(row))
 
@@ -114,6 +127,15 @@ def _make_capability(
     data_source_id: uuid.UUID | None = None,
     **overrides: object,
 ) -> TechnicalCapability:
+    # A DataSource never executes or settles anything (POINT1-PROVIDER-001):
+    # default the three execution/settlement dimensions to NOT_APPLICABLE
+    # whenever data_source_id is used, unless the caller overrides them
+    # explicitly (e.g. to exercise the negative/rejection path).
+    if data_source_id is not None:
+        overrides.setdefault("demo_execution_status", CapabilityStatus.NOT_APPLICABLE)
+        overrides.setdefault("real_execution_status", CapabilityStatus.NOT_APPLICABLE)
+        overrides.setdefault("settlement_status", CapabilityStatus.NOT_APPLICABLE)
+
     capability = TechnicalCapability(
         instrument_id=instrument_id,
         venue_id=venue_id,
@@ -126,7 +148,7 @@ def _make_capability(
     return capability
 
 
-def _enabled_context_kwargs() -> dict[str, object]:
+def _enabled_context_kwargs() -> dict[str, Any]:
     return {
         "credentials_status": CredentialsStatus.CONFIGURED,
         "venue_permission_status": VenuePermissionStatus.GRANTED,
@@ -134,6 +156,62 @@ def _enabled_context_kwargs() -> dict[str, object]:
         "owner_authorization_status": OwnerAuthorizationStatus.AUTHORIZED,
         "activation_status": ActivationStatus.ENABLED,
     }
+
+
+def _execution_context_kwargs(
+    session: Session,
+    *,
+    owner: AuthUser,
+    venue: Venue,
+    product_type_id: uuid.UUID | None = None,
+    account_key: str = _TEST_ACCOUNT_1,
+    environment: ExecutionEnvironment = ExecutionEnvironment.DEMO,
+    **overrides: object,
+) -> dict[str, object]:
+    """Builds a fully-valid ExecutionContext constructor kwargs dict, so each
+    test can override exactly the one field it means to test (e.g.
+    jurisdiction=invalid_value) without every other required column also
+    being missing/invalid and masking which constraint actually fired."""
+    resolved_product_type_id = (
+        product_type_id if product_type_id is not None else _seeded_product_type_id(session, "SPOT")
+    )
+    kwargs: dict[str, object] = {
+        "owner_id": owner.id,
+        "venue_id": venue.id,
+        "account_key": account_key,
+        "execution_environment": environment,
+        "product_type_id": resolved_product_type_id,
+        "jurisdiction": _TEST_JURISDICTION,
+        "client_classification": _TEST_CLASSIFICATION,
+    }
+    kwargs.update(overrides)
+    return kwargs
+
+
+def _make_execution_context(
+    session: Session,
+    *,
+    owner: AuthUser,
+    venue: Venue,
+    product_type_id: uuid.UUID | None = None,
+    account_key: str = _TEST_ACCOUNT_1,
+    environment: ExecutionEnvironment = ExecutionEnvironment.DEMO,
+    **overrides: object,
+) -> ExecutionContext:
+    context = ExecutionContext(
+        **_execution_context_kwargs(
+            session,
+            owner=owner,
+            venue=venue,
+            product_type_id=product_type_id,
+            account_key=account_key,
+            environment=environment,
+            **overrides,
+        )
+    )
+    session.add(context)
+    session.flush()
+    return context
 
 
 def _make_regulatory_rule(session: Session, **overrides: object) -> RegulatoryRule:
@@ -150,7 +228,7 @@ def _make_regulatory_rule(session: Session, **overrides: object) -> RegulatoryRu
     return rule
 
 
-# --- Items 16, 1-2, 15: schema shape right after migration -----------------
+# --- Schema shape right after migration -------------------------------------
 
 
 def test_new_tables_are_empty_after_migration(auth_test_engine: Engine) -> None:
@@ -201,6 +279,8 @@ _FORBIDDEN_SECRET_SUBSTRINGS = ("password", "secret", "token", "api_key", "apike
 
 
 def test_no_new_table_has_secret_shaped_columns(auth_test_engine: Engine) -> None:
+    """Covers account_key too: it is an opaque internal bookkeeping key,
+    never a credential/token/API key, and must never trip this check."""
     inspector = inspect(auth_test_engine)
     for table in _CAPABILITY_TABLES:
         for column in inspector.get_columns(table):
@@ -212,7 +292,7 @@ def test_no_new_table_has_secret_shaped_columns(auth_test_engine: Engine) -> Non
                 )
 
 
-# --- Item 1: exactly one of venue_id/data_source_id on TechnicalCapability --
+# --- TechnicalCapability: exactly one provider axis -------------------------
 
 
 def test_technical_capability_requires_exactly_one_provider_axis(db_session: Session) -> None:
@@ -246,6 +326,9 @@ def test_technical_capability_requires_exactly_one_provider_axis(db_session: Ses
     db_session.rollback()
 
 
+# --- Block 4: DataSource vs Venue capability coherence ----------------------
+
+
 def test_technical_capability_accepts_data_source_axis(db_session: Session) -> None:
     instrument_id = _seeded_instrument_id(db_session, "CRYPTO", "SPOT", "BTC/USDT")
     timeframe_id = _seeded_timeframe_id(db_session, "1m")
@@ -254,10 +337,69 @@ def test_technical_capability_accepts_data_source_axis(db_session: Session) -> N
     capability = _make_capability(
         db_session, instrument_id=instrument_id, timeframe_id=timeframe_id, data_source_id=source.id
     )
+    db_session.refresh(capability)
     assert capability.venue_id is None
+    assert capability.demo_execution_status == CapabilityStatus.NOT_APPLICABLE
+    assert capability.real_execution_status == CapabilityStatus.NOT_APPLICABLE
+    assert capability.settlement_status == CapabilityStatus.NOT_APPLICABLE
 
 
-# --- Item 5: absence of evidence is never read as supported -----------------
+@pytest.mark.parametrize(
+    "field", ["demo_execution_status", "real_execution_status", "settlement_status"]
+)
+def test_data_source_capability_rejects_non_not_applicable_execution_or_settlement(
+    db_session: Session, field: str
+) -> None:
+    """A DataSource is market-data-only (POINT1-PROVIDER-001): it never
+    executes or settles anything, so PostgreSQL itself must reject any of
+    these three dimensions being anything other than NOT_APPLICABLE."""
+    instrument_id = _seeded_instrument_id(db_session, "CRYPTO", "SPOT", "BTC/USDT")
+    timeframe_id = _seeded_timeframe_id(db_session, "1m")
+    source = _make_data_source(db_session)
+
+    db_session.add(_capability_with_one_field_broken(instrument_id, timeframe_id, source.id, field))
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+def _capability_with_one_field_broken(
+    instrument_id: uuid.UUID, timeframe_id: uuid.UUID, data_source_id: uuid.UUID, broken_field: str
+) -> TechnicalCapability:
+    fields = {
+        "demo_execution_status": CapabilityStatus.NOT_APPLICABLE,
+        "real_execution_status": CapabilityStatus.NOT_APPLICABLE,
+        "settlement_status": CapabilityStatus.NOT_APPLICABLE,
+    }
+    fields[broken_field] = CapabilityStatus.NOT_EVALUATED
+    return TechnicalCapability(
+        instrument_id=instrument_id,
+        timeframe_id=timeframe_id,
+        data_source_id=data_source_id,
+        **fields,
+    )
+
+
+def test_not_applicable_distinct_from_not_evaluated_and_not_supported(
+    db_session: Session,
+) -> None:
+    instrument_id = _seeded_instrument_id(db_session, "CRYPTO", "SPOT", "BTC/USDT")
+    timeframe_id = _seeded_timeframe_id(db_session, "1m")
+    venue = _make_venue(db_session)
+
+    capability = _make_capability(
+        db_session,
+        instrument_id=instrument_id,
+        timeframe_id=timeframe_id,
+        venue_id=venue.id,
+        real_execution_status=CapabilityStatus.NOT_EVALUATED,
+    )
+    db_session.refresh(capability)
+    assert capability.real_execution_status != CapabilityStatus.NOT_APPLICABLE
+    assert capability.real_execution_status == CapabilityStatus.NOT_EVALUATED
+
+
+# --- Capability status semantics: absence of evidence is never SUPPORTED ---
 
 
 def test_technical_capability_defaults_to_not_evaluated(db_session: Session) -> None:
@@ -299,7 +441,7 @@ def test_not_implemented_and_not_evaluated_are_distinguishable(db_session: Sessi
     assert capability.market_data_status == CapabilityStatus.NOT_EVALUATED
 
 
-# --- Reason required when NOT_SUPPORTED -------------------------------------
+# --- Block 6: bidirectional reason_unavailable coherence --------------------
 
 
 def test_reason_unavailable_required_when_any_status_not_supported(db_session: Session) -> None:
@@ -331,7 +473,72 @@ def test_reason_unavailable_required_when_any_status_not_supported(db_session: S
     assert capability.reason_unavailable is not None
 
 
-# --- Item 8: valid vigencia windows, reject impossible intervals -----------
+def test_reason_unavailable_forbidden_when_nothing_not_supported(db_session: Session) -> None:
+    """The converse of the rule above: NOT_IMPLEMENTED, NOT_EVALUATED, and
+    NOT_APPLICABLE never justify a reason_unavailable by themselves."""
+    instrument_id = _seeded_instrument_id(db_session, "CRYPTO", "SPOT", "BTC/USDT")
+    timeframe_id = _seeded_timeframe_id(db_session, "1m")
+    venue = _make_venue(db_session)
+
+    db_session.add(
+        TechnicalCapability(
+            instrument_id=instrument_id,
+            timeframe_id=timeframe_id,
+            venue_id=venue.id,
+            backtest_status=CapabilityStatus.NOT_IMPLEMENTED,
+            reason_unavailable="This should not be allowed without a NOT_SUPPORTED dimension.",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+@pytest.mark.parametrize("invalid_reason", ["", "   "])
+def test_reason_unavailable_rejects_blank_when_required(
+    db_session: Session, invalid_reason: str
+) -> None:
+    instrument_id = _seeded_instrument_id(db_session, "CRYPTO", "SPOT", "BTC/USDT")
+    timeframe_id = _seeded_timeframe_id(db_session, "1m")
+    venue = _make_venue(db_session)
+
+    db_session.add(
+        TechnicalCapability(
+            instrument_id=instrument_id,
+            timeframe_id=timeframe_id,
+            venue_id=venue.id,
+            real_execution_status=CapabilityStatus.NOT_SUPPORTED,
+            reason_unavailable=invalid_reason,
+        )
+    )
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+@pytest.mark.parametrize("padded_reason", [" padded reason", "padded reason "])
+def test_reason_unavailable_rejects_padded_when_required(
+    db_session: Session, padded_reason: str
+) -> None:
+    instrument_id = _seeded_instrument_id(db_session, "CRYPTO", "SPOT", "BTC/USDT")
+    timeframe_id = _seeded_timeframe_id(db_session, "1m")
+    venue = _make_venue(db_session)
+
+    db_session.add(
+        TechnicalCapability(
+            instrument_id=instrument_id,
+            timeframe_id=timeframe_id,
+            venue_id=venue.id,
+            real_execution_status=CapabilityStatus.NOT_SUPPORTED,
+            reason_unavailable=padded_reason,
+        )
+    )
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+# --- Valid vigencia windows, reject impossible intervals --------------------
 
 
 def test_technical_capability_rejects_impossible_effective_window(db_session: Session) -> None:
@@ -405,7 +612,7 @@ def test_technical_capability_allows_versioned_history_but_only_one_open_row(
     db_session.rollback()
 
 
-# --- Item 9: regulatory rules are versionable, citable, evidence-only ------
+# --- RegulatoryRule: versionable, citable, evidence-only --------------------
 
 
 def test_regulatory_rule_requires_source_citation_and_verified_at(db_session: Session) -> None:
@@ -433,74 +640,6 @@ def test_regulatory_rule_can_have_multiple_versions_over_time(db_session: Sessio
     )
     assert count == 2
     assert superseding.effective_to is None
-
-
-def test_execution_context_can_cite_the_regulatory_rule_that_determined_it(
-    db_session: Session,
-) -> None:
-    rule = _make_regulatory_rule(db_session, effect=RegulatoryRuleEffect.NOT_ELIGIBLE)
-    owner = _make_owner(db_session, "owner-cites-rule@example.test")
-    venue = _make_venue(db_session)
-
-    context = ExecutionContext(
-        owner_id=owner.id,
-        venue_id=venue.id,
-        execution_environment=ExecutionEnvironment.REAL,
-        jurisdiction=_TEST_JURISDICTION,
-        client_classification=_TEST_CLASSIFICATION,
-        regulatory_eligibility_status=RegulatoryEligibilityStatus.NOT_ELIGIBLE,
-        regulatory_rule_id=rule.id,
-    )
-    db_session.add(context)
-    db_session.flush()
-    db_session.refresh(context)
-
-    assert context.regulatory_rule_id == rule.id
-
-
-# --- Item 10: blank/padded rejection, invalid enum values -------------------
-
-
-@pytest.mark.parametrize("invalid_value", _BLANK_OR_PADDED)
-def test_execution_context_jurisdiction_rejects_blank_or_padded(
-    db_session: Session, invalid_value: str
-) -> None:
-    owner = _make_owner(db_session, "owner-bad-jurisdiction@example.test")
-    venue = _make_venue(db_session)
-
-    db_session.add(
-        ExecutionContext(
-            owner_id=owner.id,
-            venue_id=venue.id,
-            execution_environment=ExecutionEnvironment.DEMO,
-            jurisdiction=invalid_value,
-            client_classification=_TEST_CLASSIFICATION,
-        )
-    )
-    with pytest.raises(IntegrityError):
-        db_session.flush()
-    db_session.rollback()
-
-
-@pytest.mark.parametrize("invalid_value", _BLANK_OR_PADDED)
-def test_execution_context_client_classification_rejects_blank_or_padded(
-    db_session: Session, invalid_value: str
-) -> None:
-    owner = _make_owner(db_session, "owner-bad-classification@example.test")
-    venue = _make_venue(db_session)
-
-    db_session.add(
-        ExecutionContext(
-            owner_id=owner.id,
-            venue_id=venue.id,
-            execution_environment=ExecutionEnvironment.DEMO,
-            jurisdiction=_TEST_JURISDICTION,
-            client_classification=invalid_value,
-        )
-    )
-    with pytest.raises(IntegrityError):
-        db_session.flush()
-    db_session.rollback()
 
 
 @pytest.mark.parametrize("invalid_value", _BLANK_OR_PADDED)
@@ -537,25 +676,196 @@ def test_regulatory_rule_source_citation_rejects_blank_or_padded(
     db_session.rollback()
 
 
+# --- Block 3: ExecutionContext <-> RegulatoryRule many-to-many --------------
+
+
+def test_execution_context_can_be_associated_with_multiple_regulatory_rules(
+    db_session: Session,
+) -> None:
+    owner = _make_owner(db_session, "owner-multi-rule@example.test")
+    venue = _make_venue(db_session)
+    context = _make_execution_context(db_session, owner=owner, venue=venue)
+    rule_a = _make_regulatory_rule(db_session, effect=RegulatoryRuleEffect.NOT_ELIGIBLE)
+    rule_b = _make_regulatory_rule(
+        db_session, jurisdiction="TEST_YY", effect=RegulatoryRuleEffect.ELIGIBLE
+    )
+
+    db_session.add_all(
+        [
+            ExecutionContextRegulatoryRule(
+                execution_context_id=context.id, regulatory_rule_id=rule_a.id
+            ),
+            ExecutionContextRegulatoryRule(
+                execution_context_id=context.id, regulatory_rule_id=rule_b.id
+            ),
+        ]
+    )
+    db_session.flush()
+
+    count = (
+        db_session.query(ExecutionContextRegulatoryRule)
+        .filter(ExecutionContextRegulatoryRule.execution_context_id == context.id)
+        .count()
+    )
+    assert count == 2
+
+
+def test_execution_context_can_have_zero_regulatory_rule_associations(
+    db_session: Session,
+) -> None:
+    owner = _make_owner(db_session, "owner-zero-rules@example.test")
+    venue = _make_venue(db_session)
+    context = _make_execution_context(db_session, owner=owner, venue=venue)
+
+    count = (
+        db_session.query(ExecutionContextRegulatoryRule)
+        .filter(ExecutionContextRegulatoryRule.execution_context_id == context.id)
+        .count()
+    )
+    assert count == 0
+
+
+def test_duplicate_regulatory_rule_association_is_rejected(db_session: Session) -> None:
+    owner = _make_owner(db_session, "owner-duplicate-rule@example.test")
+    venue = _make_venue(db_session)
+    context = _make_execution_context(db_session, owner=owner, venue=venue)
+    rule = _make_regulatory_rule(db_session)
+
+    db_session.add(
+        ExecutionContextRegulatoryRule(execution_context_id=context.id, regulatory_rule_id=rule.id)
+    )
+    db_session.flush()
+
+    db_session.add(
+        ExecutionContextRegulatoryRule(execution_context_id=context.id, regulatory_rule_id=rule.id)
+    )
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+def test_fk_prevents_deleting_a_regulatory_rule_referenced_by_association(
+    db_session: Session,
+) -> None:
+    owner = _make_owner(db_session, "owner-rule-protected@example.test")
+    venue = _make_venue(db_session)
+    context = _make_execution_context(db_session, owner=owner, venue=venue)
+    rule = _make_regulatory_rule(db_session)
+    db_session.add(
+        ExecutionContextRegulatoryRule(execution_context_id=context.id, regulatory_rule_id=rule.id)
+    )
+    db_session.flush()
+
+    with pytest.raises(IntegrityError):
+        db_session.execute(
+            text("DELETE FROM freyja2_regulatory_rules WHERE id = :id"), {"id": rule.id}
+        )
+        db_session.flush()
+    db_session.rollback()
+
+
+def test_fk_prevents_deleting_an_execution_context_referenced_by_association(
+    db_session: Session,
+) -> None:
+    owner = _make_owner(db_session, "owner-context-protected@example.test")
+    venue = _make_venue(db_session)
+    context = _make_execution_context(db_session, owner=owner, venue=venue)
+    rule = _make_regulatory_rule(db_session)
+    db_session.add(
+        ExecutionContextRegulatoryRule(execution_context_id=context.id, regulatory_rule_id=rule.id)
+    )
+    db_session.flush()
+
+    with pytest.raises(IntegrityError):
+        db_session.execute(
+            text("DELETE FROM freyja2_execution_contexts WHERE id = :id"), {"id": context.id}
+        )
+        db_session.flush()
+    db_session.rollback()
+
+
+# --- Blank/padded rejection, invalid enum values ----------------------------
+
+
+@pytest.mark.parametrize("invalid_value", _BLANK_OR_PADDED)
+def test_execution_context_jurisdiction_rejects_blank_or_padded(
+    db_session: Session, invalid_value: str
+) -> None:
+    owner = _make_owner(db_session, "owner-bad-jurisdiction@example.test")
+    venue = _make_venue(db_session)
+
+    db_session.add(
+        ExecutionContext(
+            **_execution_context_kwargs(
+                db_session, owner=owner, venue=venue, jurisdiction=invalid_value
+            )
+        )
+    )
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+@pytest.mark.parametrize("invalid_value", _BLANK_OR_PADDED)
+def test_execution_context_client_classification_rejects_blank_or_padded(
+    db_session: Session, invalid_value: str
+) -> None:
+    owner = _make_owner(db_session, "owner-bad-classification@example.test")
+    venue = _make_venue(db_session)
+
+    db_session.add(
+        ExecutionContext(
+            **_execution_context_kwargs(
+                db_session, owner=owner, venue=venue, client_classification=invalid_value
+            )
+        )
+    )
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+@pytest.mark.parametrize("invalid_value", _BLANK_OR_PADDED)
+def test_execution_context_account_key_rejects_blank_or_padded(
+    db_session: Session, invalid_value: str
+) -> None:
+    owner = _make_owner(db_session, "owner-bad-account-key@example.test")
+    venue = _make_venue(db_session)
+
+    db_session.add(
+        ExecutionContext(
+            **_execution_context_kwargs(
+                db_session, owner=owner, venue=venue, account_key=invalid_value
+            )
+        )
+    )
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
 def test_invalid_activation_status_value_is_rejected_by_the_database(
     db_session: Session,
 ) -> None:
     owner = _make_owner(db_session, "owner-invalid-enum@example.test")
     venue = _make_venue(db_session)
+    product_type_id = _seeded_product_type_id(db_session, "SPOT")
 
     with pytest.raises(DBAPIError):
         db_session.execute(
             text(
                 "INSERT INTO freyja2_execution_contexts "
-                "(id, owner_id, venue_id, execution_environment, jurisdiction, "
-                "client_classification, activation_status) "
-                "VALUES (:id, :owner_id, :venue_id, 'DEMO', :jurisdiction, :classification, "
-                "'HACKED_STATUS')"
+                "(id, owner_id, venue_id, account_key, execution_environment, product_type_id, "
+                "jurisdiction, client_classification, activation_status) "
+                "VALUES (:id, :owner_id, :venue_id, :account_key, 'DEMO', :product_type_id, "
+                ":jurisdiction, :classification, 'HACKED_STATUS')"
             ),
             {
                 "id": uuid.uuid4(),
                 "owner_id": owner.id,
                 "venue_id": venue.id,
+                "account_key": _TEST_ACCOUNT_1,
+                "product_type_id": product_type_id,
                 "jurisdiction": _TEST_JURISDICTION,
                 "classification": _TEST_CLASSIFICATION,
             },
@@ -563,7 +873,7 @@ def test_invalid_activation_status_value_is_rejected_by_the_database(
     db_session.rollback()
 
 
-# --- Item 7: no contradictory ENABLED/SUSPENDED declarations ---------------
+# --- No contradictory ENABLED/SUSPENDED declarations ------------------------
 
 
 def test_enabled_requires_all_four_positive_substatuses(db_session: Session) -> None:
@@ -575,12 +885,13 @@ def test_enabled_requires_all_four_positive_substatuses(db_session: Session) -> 
 
     db_session.add(
         ExecutionContext(
-            owner_id=owner.id,
-            venue_id=venue.id,
-            execution_environment=ExecutionEnvironment.REAL,
-            jurisdiction=_TEST_JURISDICTION,
-            client_classification=_TEST_CLASSIFICATION,
-            **kwargs,
+            **_execution_context_kwargs(
+                db_session,
+                owner=owner,
+                venue=venue,
+                environment=ExecutionEnvironment.REAL,
+                **kwargs,
+            )
         )
     )
     with pytest.raises(IntegrityError):
@@ -592,16 +903,13 @@ def test_enabled_succeeds_when_all_four_substatuses_are_positive(db_session: Ses
     owner = _make_owner(db_session, "owner-fully-enabled@example.test")
     venue = _make_venue(db_session)
 
-    context = ExecutionContext(
-        owner_id=owner.id,
-        venue_id=venue.id,
-        execution_environment=ExecutionEnvironment.REAL,
-        jurisdiction=_TEST_JURISDICTION,
-        client_classification=_TEST_CLASSIFICATION,
+    context = _make_execution_context(
+        db_session,
+        owner=owner,
+        venue=venue,
+        environment=ExecutionEnvironment.REAL,
         **_enabled_context_kwargs(),
     )
-    db_session.add(context)
-    db_session.flush()
     db_session.refresh(context)
     assert context.activation_status == ActivationStatus.ENABLED
 
@@ -612,13 +920,14 @@ def test_suspended_requires_nonempty_suspension_reasons(db_session: Session) -> 
 
     db_session.add(
         ExecutionContext(
-            owner_id=owner.id,
-            venue_id=venue.id,
-            execution_environment=ExecutionEnvironment.REAL,
-            jurisdiction=_TEST_JURISDICTION,
-            client_classification=_TEST_CLASSIFICATION,
-            activation_status=ActivationStatus.SUSPENDED,
-            suspension_reasons=None,
+            **_execution_context_kwargs(
+                db_session,
+                owner=owner,
+                venue=venue,
+                environment=ExecutionEnvironment.REAL,
+                activation_status=ActivationStatus.SUSPENDED,
+                suspension_reasons=None,
+            )
         )
     )
     with pytest.raises(IntegrityError):
@@ -634,13 +943,14 @@ def test_non_suspended_context_rejects_populated_suspension_reasons(
 
     db_session.add(
         ExecutionContext(
-            owner_id=owner.id,
-            venue_id=venue.id,
-            execution_environment=ExecutionEnvironment.REAL,
-            jurisdiction=_TEST_JURISDICTION,
-            client_classification=_TEST_CLASSIFICATION,
-            activation_status=ActivationStatus.NOT_CONFIGURED,
-            suspension_reasons=["This should not be allowed alongside NOT_CONFIGURED."],
+            **_execution_context_kwargs(
+                db_session,
+                owner=owner,
+                venue=venue,
+                environment=ExecutionEnvironment.REAL,
+                activation_status=ActivationStatus.NOT_CONFIGURED,
+                suspension_reasons=["This should not be allowed alongside NOT_CONFIGURED."],
+            )
         )
     )
     with pytest.raises(IntegrityError):
@@ -648,7 +958,202 @@ def test_non_suspended_context_rejects_populated_suspension_reasons(
     db_session.rollback()
 
 
-# --- Item 6: suspension is scoped to one ExecutionContext, never global ---
+# --- Block 5: strict suspension_reasons element validation ------------------
+
+
+def test_suspension_reasons_rejects_null_element(db_session: Session) -> None:
+    owner = _make_owner(db_session, "owner-null-reason@example.test")
+    venue = _make_venue(db_session)
+
+    db_session.add(
+        ExecutionContext(
+            **_execution_context_kwargs(
+                db_session,
+                owner=owner,
+                venue=venue,
+                environment=ExecutionEnvironment.REAL,
+                activation_status=ActivationStatus.SUSPENDED,
+                suspension_reasons=["valid reason", None],
+            )
+        )
+    )
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+@pytest.mark.parametrize("invalid_element", ["", "   "])
+def test_suspension_reasons_rejects_blank_or_whitespace_element(
+    db_session: Session, invalid_element: str
+) -> None:
+    owner = _make_owner(db_session, "owner-blank-reason@example.test")
+    venue = _make_venue(db_session)
+
+    db_session.add(
+        ExecutionContext(
+            **_execution_context_kwargs(
+                db_session,
+                owner=owner,
+                venue=venue,
+                environment=ExecutionEnvironment.REAL,
+                activation_status=ActivationStatus.SUSPENDED,
+                suspension_reasons=["valid reason", invalid_element],
+            )
+        )
+    )
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+@pytest.mark.parametrize("padded_element", [" padded reason", "padded reason "])
+def test_suspension_reasons_rejects_padded_element(
+    db_session: Session, padded_element: str
+) -> None:
+    owner = _make_owner(db_session, "owner-padded-reason@example.test")
+    venue = _make_venue(db_session)
+
+    db_session.add(
+        ExecutionContext(
+            **_execution_context_kwargs(
+                db_session,
+                owner=owner,
+                venue=venue,
+                environment=ExecutionEnvironment.REAL,
+                activation_status=ActivationStatus.SUSPENDED,
+                suspension_reasons=[padded_element],
+            )
+        )
+    )
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+def test_suspension_reasons_accepts_multiple_valid_reasons(db_session: Session) -> None:
+    owner = _make_owner(db_session, "owner-valid-reasons@example.test")
+    venue = _make_venue(db_session)
+
+    context = _make_execution_context(
+        db_session,
+        owner=owner,
+        venue=venue,
+        environment=ExecutionEnvironment.REAL,
+        activation_status=ActivationStatus.SUSPENDED,
+        suspension_reasons=["reason one", "reason two", "reason three"],
+    )
+    db_session.refresh(context)
+    assert context.suspension_reasons == ["reason one", "reason two", "reason three"]
+
+
+# --- Block 1 & 2: account_key + product_type_id identity --------------------
+
+
+def test_same_owner_can_have_two_accounts_at_same_venue_and_environment(
+    db_session: Session,
+) -> None:
+    owner = _make_owner(db_session, "owner-two-accounts@example.test")
+    venue = _make_venue(db_session)
+
+    _make_execution_context(db_session, owner=owner, venue=venue, account_key=_TEST_ACCOUNT_1)
+    _make_execution_context(db_session, owner=owner, venue=venue, account_key=_TEST_ACCOUNT_2)
+
+    count = (
+        db_session.query(ExecutionContext)
+        .filter(ExecutionContext.owner_id == owner.id, ExecutionContext.venue_id == venue.id)
+        .count()
+    )
+    assert count == 2
+
+
+def test_same_account_can_have_independent_contexts_per_product(db_session: Session) -> None:
+    owner = _make_owner(db_session, "owner-per-product@example.test")
+    venue = _make_venue(db_session)
+    spot_id = _seeded_product_type_id(db_session, "SPOT")
+    binary_id = _seeded_product_type_id(db_session, "BINARY_OPTION")
+
+    _make_execution_context(db_session, owner=owner, venue=venue, product_type_id=spot_id)
+    _make_execution_context(db_session, owner=owner, venue=venue, product_type_id=binary_id)
+
+    count = (
+        db_session.query(ExecutionContext)
+        .filter(
+            ExecutionContext.owner_id == owner.id,
+            ExecutionContext.venue_id == venue.id,
+            ExecutionContext.account_key == _TEST_ACCOUNT_1,
+        )
+        .count()
+    )
+    assert count == 2
+
+
+def test_duplicate_execution_context_identity_is_rejected(db_session: Session) -> None:
+    owner = _make_owner(db_session, "owner-duplicate-identity@example.test")
+    venue = _make_venue(db_session)
+
+    _make_execution_context(db_session, owner=owner, venue=venue)
+
+    db_session.add(
+        ExecutionContext(**_execution_context_kwargs(db_session, owner=owner, venue=venue))
+    )
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+def test_demo_and_real_are_independent_for_the_same_account_and_product(
+    db_session: Session,
+) -> None:
+    owner = _make_owner(db_session, "owner-demo-and-real@example.test")
+    venue = _make_venue(db_session)
+
+    _make_execution_context(
+        db_session, owner=owner, venue=venue, environment=ExecutionEnvironment.DEMO
+    )
+    _make_execution_context(
+        db_session, owner=owner, venue=venue, environment=ExecutionEnvironment.REAL
+    )
+
+    count = (
+        db_session.query(ExecutionContext)
+        .filter(ExecutionContext.owner_id == owner.id, ExecutionContext.venue_id == venue.id)
+        .count()
+    )
+    assert count == 2
+
+
+def test_binary_option_real_suspended_does_not_affect_spot_real_for_same_account(
+    db_session: Session,
+) -> None:
+    """The canonical scenario from the task spec: the SAME owner+venue+
+    account has BINARY_OPTION REAL suspended while SPOT REAL is an entirely
+    independent row — suspending one product never suspends another."""
+    owner = _make_owner(db_session, "owner-binary-vs-spot@example.test")
+    venue = _make_venue(db_session)
+    spot_id = _seeded_product_type_id(db_session, "SPOT")
+    binary_id = _seeded_product_type_id(db_session, "BINARY_OPTION")
+
+    binary_context = _make_execution_context(
+        db_session,
+        owner=owner,
+        venue=venue,
+        product_type_id=binary_id,
+        environment=ExecutionEnvironment.REAL,
+        activation_status=ActivationStatus.SUSPENDED,
+        suspension_reasons=["Fixture: BINARY_OPTION not eligible under TEST_XX retail rules."],
+    )
+    spot_context = _make_execution_context(
+        db_session,
+        owner=owner,
+        venue=venue,
+        product_type_id=spot_id,
+        environment=ExecutionEnvironment.REAL,
+    )
+
+    db_session.refresh(binary_context)
+    db_session.refresh(spot_context)
+    assert binary_context.activation_status == ActivationStatus.SUSPENDED
+    assert spot_context.activation_status == ActivationStatus.NOT_CONFIGURED
 
 
 def test_suspended_context_does_not_affect_other_owners_or_capability(
@@ -659,30 +1164,24 @@ def test_suspended_context_does_not_affect_other_owners_or_capability(
     timeframe_id = _seeded_timeframe_id(db_session, "1m")
 
     suspended_owner = _make_owner(db_session, "owner-suspended@example.test")
-    db_session.add(
-        ExecutionContext(
-            owner_id=suspended_owner.id,
-            venue_id=venue.id,
-            execution_environment=ExecutionEnvironment.REAL,
-            jurisdiction=_TEST_JURISDICTION,
-            client_classification=_TEST_CLASSIFICATION,
-            activation_status=ActivationStatus.SUSPENDED,
-            suspension_reasons=["Fixture: not eligible under TEST_XX retail rules."],
-        )
+    _make_execution_context(
+        db_session,
+        owner=suspended_owner,
+        venue=venue,
+        environment=ExecutionEnvironment.REAL,
+        activation_status=ActivationStatus.SUSPENDED,
+        suspension_reasons=["Fixture: not eligible under TEST_XX retail rules."],
     )
-    db_session.flush()
 
     other_owner = _make_owner(db_session, "owner-unaffected@example.test")
-    other_context = ExecutionContext(
-        owner_id=other_owner.id,
-        venue_id=venue.id,
-        execution_environment=ExecutionEnvironment.REAL,
+    other_context = _make_execution_context(
+        db_session,
+        owner=other_owner,
+        venue=venue,
+        environment=ExecutionEnvironment.REAL,
         jurisdiction="TEST_YY",
-        client_classification=_TEST_CLASSIFICATION,
         **_enabled_context_kwargs(),
     )
-    db_session.add(other_context)
-    db_session.flush()
     db_session.refresh(other_context)
     assert other_context.activation_status == ActivationStatus.ENABLED
 
@@ -694,117 +1193,25 @@ def test_suspended_context_does_not_affect_other_owners_or_capability(
     assert capability.market_data_status == CapabilityStatus.NOT_EVALUATED
 
 
-# --- Items 3-4: multiple accounts/contexts, DEMO vs REAL --------------------
-
-
 def test_multiple_owners_can_use_the_same_venue_without_collision(db_session: Session) -> None:
     venue = _make_venue(db_session)
     owner_a = _make_owner(db_session, "owner-a@example.test")
     owner_b = _make_owner(db_session, "owner-b@example.test")
 
-    db_session.add_all(
-        [
-            ExecutionContext(
-                owner_id=owner_a.id,
-                venue_id=venue.id,
-                execution_environment=ExecutionEnvironment.DEMO,
-                jurisdiction=_TEST_JURISDICTION,
-                client_classification=_TEST_CLASSIFICATION,
-            ),
-            ExecutionContext(
-                owner_id=owner_b.id,
-                venue_id=venue.id,
-                execution_environment=ExecutionEnvironment.DEMO,
-                jurisdiction=_TEST_JURISDICTION,
-                client_classification=_TEST_CLASSIFICATION,
-            ),
-        ]
-    )
-    db_session.flush()
+    _make_execution_context(db_session, owner=owner_a, venue=venue)
+    _make_execution_context(db_session, owner=owner_b, venue=venue)
 
     count = db_session.query(ExecutionContext).filter(ExecutionContext.venue_id == venue.id).count()
     assert count == 2
 
 
-def test_demo_and_real_are_distinct_contexts_for_the_same_owner_and_venue(
-    db_session: Session,
-) -> None:
-    venue = _make_venue(db_session)
-    owner = _make_owner(db_session, "owner-demo-and-real@example.test")
-
-    db_session.add_all(
-        [
-            ExecutionContext(
-                owner_id=owner.id,
-                venue_id=venue.id,
-                execution_environment=ExecutionEnvironment.DEMO,
-                jurisdiction=_TEST_JURISDICTION,
-                client_classification=_TEST_CLASSIFICATION,
-            ),
-            ExecutionContext(
-                owner_id=owner.id,
-                venue_id=venue.id,
-                execution_environment=ExecutionEnvironment.REAL,
-                jurisdiction=_TEST_JURISDICTION,
-                client_classification=_TEST_CLASSIFICATION,
-            ),
-        ]
-    )
-    db_session.flush()
-
-    count = (
-        db_session.query(ExecutionContext)
-        .filter(ExecutionContext.owner_id == owner.id, ExecutionContext.venue_id == venue.id)
-        .count()
-    )
-    assert count == 2
-
-
-def test_duplicate_owner_venue_environment_is_rejected(db_session: Session) -> None:
-    venue = _make_venue(db_session)
-    owner = _make_owner(db_session, "owner-duplicate@example.test")
-
-    db_session.add(
-        ExecutionContext(
-            owner_id=owner.id,
-            venue_id=venue.id,
-            execution_environment=ExecutionEnvironment.DEMO,
-            jurisdiction=_TEST_JURISDICTION,
-            client_classification=_TEST_CLASSIFICATION,
-        )
-    )
-    db_session.flush()
-
-    db_session.add(
-        ExecutionContext(
-            owner_id=owner.id,
-            venue_id=venue.id,
-            execution_environment=ExecutionEnvironment.DEMO,
-            jurisdiction=_TEST_JURISDICTION,
-            client_classification=_TEST_CLASSIFICATION,
-        )
-    )
-    with pytest.raises(IntegrityError):
-        db_session.flush()
-    db_session.rollback()
-
-
-# --- Item 11: referential integrity, no CASCADE -----------------------------
+# --- Referential integrity, no CASCADE --------------------------------------
 
 
 def test_fk_prevents_deleting_a_referenced_owner(db_session: Session) -> None:
     owner = _make_owner(db_session, "owner-protected@example.test")
     venue = _make_venue(db_session)
-    db_session.add(
-        ExecutionContext(
-            owner_id=owner.id,
-            venue_id=venue.id,
-            execution_environment=ExecutionEnvironment.DEMO,
-            jurisdiction=_TEST_JURISDICTION,
-            client_classification=_TEST_CLASSIFICATION,
-        )
-    )
-    db_session.flush()
+    _make_execution_context(db_session, owner=owner, venue=venue)
 
     with pytest.raises(IntegrityError):
         db_session.execute(text("DELETE FROM auth_users WHERE id = :id"), {"id": owner.id})
@@ -817,19 +1224,26 @@ def test_fk_prevents_deleting_a_venue_referenced_by_execution_context(
 ) -> None:
     owner = _make_owner(db_session, "owner-venue-protected@example.test")
     venue = _make_venue(db_session)
-    db_session.add(
-        ExecutionContext(
-            owner_id=owner.id,
-            venue_id=venue.id,
-            execution_environment=ExecutionEnvironment.DEMO,
-            jurisdiction=_TEST_JURISDICTION,
-            client_classification=_TEST_CLASSIFICATION,
-        )
-    )
-    db_session.flush()
+    _make_execution_context(db_session, owner=owner, venue=venue)
 
     with pytest.raises(IntegrityError):
         db_session.execute(text("DELETE FROM freyja2_venues WHERE id = :id"), {"id": venue.id})
+        db_session.flush()
+    db_session.rollback()
+
+
+def test_fk_prevents_deleting_a_product_type_referenced_by_execution_context(
+    db_session: Session,
+) -> None:
+    owner = _make_owner(db_session, "owner-product-protected@example.test")
+    venue = _make_venue(db_session)
+    spot_id = _seeded_product_type_id(db_session, "SPOT")
+    _make_execution_context(db_session, owner=owner, venue=venue, product_type_id=spot_id)
+
+    with pytest.raises(IntegrityError):
+        db_session.execute(
+            text("DELETE FROM freyja2_product_types WHERE id = :id"), {"id": spot_id}
+        )
         db_session.flush()
     db_session.rollback()
 
@@ -866,32 +1280,6 @@ def test_fk_prevents_deleting_a_timeframe_referenced_by_technical_capability(
     with pytest.raises(IntegrityError):
         db_session.execute(
             text("DELETE FROM freyja2_timeframes WHERE id = :id"), {"id": timeframe_id}
-        )
-        db_session.flush()
-    db_session.rollback()
-
-
-def test_fk_prevents_deleting_a_regulatory_rule_referenced_by_execution_context(
-    db_session: Session,
-) -> None:
-    rule = _make_regulatory_rule(db_session)
-    owner = _make_owner(db_session, "owner-rule-protected@example.test")
-    venue = _make_venue(db_session)
-    db_session.add(
-        ExecutionContext(
-            owner_id=owner.id,
-            venue_id=venue.id,
-            execution_environment=ExecutionEnvironment.REAL,
-            jurisdiction=_TEST_JURISDICTION,
-            client_classification=_TEST_CLASSIFICATION,
-            regulatory_rule_id=rule.id,
-        )
-    )
-    db_session.flush()
-
-    with pytest.raises(IntegrityError):
-        db_session.execute(
-            text("DELETE FROM freyja2_regulatory_rules WHERE id = :id"), {"id": rule.id}
         )
         db_session.flush()
     db_session.rollback()

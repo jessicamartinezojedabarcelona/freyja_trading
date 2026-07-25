@@ -318,6 +318,7 @@ _CAPABILITY_TABLES = (
     "freyja2_technical_capabilities",
     "freyja2_execution_contexts",
     "freyja2_regulatory_rules",
+    "freyja2_execution_context_regulatory_rules",
 )
 
 

@@ -22,15 +22,40 @@ depends_on: str | Sequence[str] | None = None
 # POINT1-CAPABILITY-001: separates technical capability (what Freyja/a
 # venue/data source knows how to do), regulatory eligibility (what is
 # permitted for a jurisdiction/client classification/product/venue), and
-# operational activation (what a specific owner's account may use, in a
-# specific DEMO/REAL environment) into three distinct tables. None of these
-# collapse into a single boolean, and none of them touch
-# freyja2_instruments/freyja2_venues/freyja2_data_sources/freyja2_timeframes
-# beyond a plain, non-cascading FK reference. No credentials, tokens, API
-# keys, or secret material are stored anywhere — only status enums. No
-# provider/account/capability/regulatory rows are inserted; schema only.
+# operational activation (what a specific owner's account may use, for a
+# specific product, in a specific DEMO/REAL environment) into distinct
+# tables. None of these collapse into a single boolean, and none of them
+# touch freyja2_instruments/freyja2_venues/freyja2_data_sources/
+# freyja2_timeframes/freyja2_product_types beyond a plain, non-cascading FK
+# reference. No credentials, tokens, API keys, or secret material are
+# stored anywhere — only status enums and account_key, an internal opaque
+# (non-secret) account identifier. No provider/account/capability/
+# regulatory rows are inserted; schema only.
+#
+# This revision was corrected after independent audit (2026-07-25), before
+# being merged to main, so it is edited in place rather than superseded by
+# a new revision: added account_key + product_type_id to
+# freyja2_execution_contexts (a single owner+venue+environment triple
+# cannot represent several accounts of the same owner, nor per-product
+# independence); replaced the single regulatory_rule_id FK with an explicit
+# many-to-many association table
+# (freyja2_execution_context_regulatory_rules), since a context's
+# eligibility may depend on several rules/evidence simultaneously; added
+# NOT_APPLICABLE to freyja2_capability_status plus a physical CHECK forcing
+# demo_execution/real_execution/settlement to NOT_APPLICABLE whenever a
+# capability is linked to a DataSource (which never executes or settles
+# anything); replaced the one-directional reason_unavailable CHECK with a
+# biconditional (reason present and well-formed if-and-only-if some
+# dimension is NOT_SUPPORTED); and added a small IMMUTABLE SQL function to
+# validate every element of suspension_reasons (not just its cardinality).
 
-_CAPABILITY_STATUS_VALUES = ("NOT_IMPLEMENTED", "NOT_EVALUATED", "SUPPORTED", "NOT_SUPPORTED")
+_CAPABILITY_STATUS_VALUES = (
+    "NOT_IMPLEMENTED",
+    "NOT_EVALUATED",
+    "SUPPORTED",
+    "NOT_SUPPORTED",
+    "NOT_APPLICABLE",
+)
 _EXECUTION_ENVIRONMENT_VALUES = ("DEMO", "REAL")
 _CREDENTIALS_STATUS_VALUES = ("NOT_CONFIGURED", "CONFIGURED", "INVALID")
 _VENUE_PERMISSION_STATUS_VALUES = ("NOT_EVALUATED", "GRANTED", "DENIED")
@@ -50,6 +75,8 @@ _ENUM_SPECS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("freyja2_regulatory_rule_effect", _REGULATORY_RULE_EFFECT_VALUES),
 )
 
+_TEXT_ARRAY_ALL_NONBLANK_FUNCTION = "freyja2_text_array_all_nonblank"
+
 
 def upgrade() -> None:
     bind = op.get_bind()
@@ -58,6 +85,27 @@ def upgrade() -> None:
 
     def enum_ref(name: str) -> postgresql.ENUM:
         return postgresql.ENUM(name=name, create_type=False)
+
+    # A plain CHECK expression cannot contain a subquery, so validating
+    # "every element of this array is non-null and non-blank after trim"
+    # needs a small IMMUTABLE SQL function instead — a subquery inside a
+    # function body is fully legal even though one directly inside a CHECK
+    # clause is not. NULL arrays pass trivially (cardinality is validated
+    # separately by ck_freyja2_execution_contexts_suspension_reasons_consistency).
+    op.execute(
+        f"""
+        CREATE FUNCTION {_TEXT_ARRAY_ALL_NONBLANK_FUNCTION}(arr text[])
+        RETURNS boolean
+        LANGUAGE sql
+        IMMUTABLE
+        AS $$
+            SELECT arr IS NULL OR NOT EXISTS (
+                SELECT 1 FROM unnest(arr) AS elem
+                WHERE elem IS NULL OR btrim(elem) = '' OR elem <> btrim(elem)
+            )
+        $$
+        """
+    )
 
     op.create_table(
         "freyja2_regulatory_rules",
@@ -218,17 +266,31 @@ def upgrade() -> None:
             "effective_to IS NULL OR effective_to > effective_from",
             name="ck_freyja2_technical_capabilities_valid_effective_window",
         ),
+        # Bidirectional: reason_unavailable is required, non-blank, and
+        # trimmed if AND ONLY IF at least one dimension is NOT_SUPPORTED.
         sa.CheckConstraint(
-            "(reason_unavailable IS NOT NULL AND char_length(btrim(reason_unavailable)) > 0) "
-            "OR ("
-            "market_data_status <> 'NOT_SUPPORTED' "
-            "AND signal_detection_status <> 'NOT_SUPPORTED' "
-            "AND backtest_status <> 'NOT_SUPPORTED' "
-            "AND demo_execution_status <> 'NOT_SUPPORTED' "
-            "AND real_execution_status <> 'NOT_SUPPORTED' "
-            "AND settlement_status <> 'NOT_SUPPORTED'"
+            "("
+            "market_data_status = 'NOT_SUPPORTED' "
+            "OR signal_detection_status = 'NOT_SUPPORTED' "
+            "OR backtest_status = 'NOT_SUPPORTED' "
+            "OR demo_execution_status = 'NOT_SUPPORTED' "
+            "OR real_execution_status = 'NOT_SUPPORTED' "
+            "OR settlement_status = 'NOT_SUPPORTED'"
+            ") = ("
+            "reason_unavailable IS NOT NULL "
+            "AND char_length(btrim(reason_unavailable)) > 0 "
+            "AND reason_unavailable = btrim(reason_unavailable)"
             ")",
-            name="ck_freyja2_technical_capabilities_reason_needed_if_unsupported",
+            name="ck_freyja2_technical_capabilities_reason_iff_not_supported",
+        ),
+        # A DataSource never executes or settles anything.
+        sa.CheckConstraint(
+            "data_source_id IS NULL OR ("
+            "demo_execution_status = 'NOT_APPLICABLE' "
+            "AND real_execution_status = 'NOT_APPLICABLE' "
+            "AND settlement_status = 'NOT_APPLICABLE'"
+            ")",
+            name="ck_freyja2_technical_capabilities_data_source_not_applicable",
         ),
     )
     op.create_index(
@@ -277,11 +339,16 @@ def upgrade() -> None:
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column("owner_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("venue_id", postgresql.UUID(as_uuid=True), nullable=False),
+        # Internal, opaque, non-secret identifier of which of an owner's
+        # several accounts at this venue the row refers to — never a
+        # credential, API key, or token. See the model docstring.
+        sa.Column("account_key", sa.String(length=64), nullable=False),
         sa.Column(
             "execution_environment",
             enum_ref("freyja2_execution_environment"),
             nullable=False,
         ),
+        sa.Column("product_type_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("jurisdiction", sa.String(length=32), nullable=False),
         sa.Column("client_classification", sa.String(length=32), nullable=False),
         sa.Column(
@@ -302,7 +369,6 @@ def upgrade() -> None:
             nullable=False,
             server_default="NOT_EVALUATED",
         ),
-        sa.Column("regulatory_rule_id", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column(
             "owner_authorization_status",
             enum_ref("freyja2_owner_authorization_status"),
@@ -329,9 +395,9 @@ def upgrade() -> None:
             ["venue_id"], ["freyja2_venues.id"], name="fk_freyja2_execution_contexts_venue_id"
         ),
         sa.ForeignKeyConstraint(
-            ["regulatory_rule_id"],
-            ["freyja2_regulatory_rules.id"],
-            name="fk_freyja2_execution_contexts_regulatory_rule_id",
+            ["product_type_id"],
+            ["freyja2_product_types.id"],
+            name="fk_freyja2_execution_contexts_product_type_id",
         ),
         sa.CheckConstraint(
             "activation_status <> 'ENABLED' OR ("
@@ -350,6 +416,10 @@ def upgrade() -> None:
             name="ck_freyja2_execution_contexts_suspension_reasons_consistency",
         ),
         sa.CheckConstraint(
+            f"{_TEXT_ARRAY_ALL_NONBLANK_FUNCTION}(suspension_reasons)",
+            name="ck_freyja2_execution_contexts_suspension_reasons_elements_valid",
+        ),
+        sa.CheckConstraint(
             "char_length(btrim(jurisdiction)) > 0",
             name="ck_freyja2_execution_contexts_jurisdiction_not_blank",
         ),
@@ -365,6 +435,14 @@ def upgrade() -> None:
             "client_classification = btrim(client_classification)",
             name="ck_freyja2_execution_contexts_client_classification_trimmed",
         ),
+        sa.CheckConstraint(
+            "char_length(btrim(account_key)) > 0",
+            name="ck_freyja2_execution_contexts_account_key_not_blank",
+        ),
+        sa.CheckConstraint(
+            "account_key = btrim(account_key)",
+            name="ck_freyja2_execution_contexts_account_key_trimmed",
+        ),
     )
     op.create_index(
         "ix_freyja2_execution_contexts_owner_id", "freyja2_execution_contexts", ["owner_id"]
@@ -373,25 +451,55 @@ def upgrade() -> None:
         "ix_freyja2_execution_contexts_venue_id", "freyja2_execution_contexts", ["venue_id"]
     )
     op.create_index(
-        "ix_freyja2_execution_contexts_regulatory_rule_id",
+        "ix_freyja2_execution_contexts_product_type_id",
         "freyja2_execution_contexts",
-        ["regulatory_rule_id"],
+        ["product_type_id"],
     )
     op.create_index(
-        "uq_freyja2_execution_contexts_owner_venue_environment",
+        "uq_freyja2_execution_contexts_identity",
         "freyja2_execution_contexts",
-        ["owner_id", "venue_id", "execution_environment"],
+        ["owner_id", "venue_id", "account_key", "execution_environment", "product_type_id"],
         unique=True,
+    )
+
+    op.create_table(
+        "freyja2_execution_context_regulatory_rules",
+        sa.Column("execution_context_id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("regulatory_rule_id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
+        sa.ForeignKeyConstraint(
+            ["execution_context_id"],
+            ["freyja2_execution_contexts.id"],
+            name="fk_freyja2_execution_context_regulatory_rules_context_id",
+        ),
+        sa.ForeignKeyConstraint(
+            ["regulatory_rule_id"],
+            ["freyja2_regulatory_rules.id"],
+            name="fk_freyja2_execution_context_regulatory_rules_rule_id",
+        ),
+    )
+    op.create_index(
+        "ix_freyja2_execution_context_regulatory_rules_rule_id",
+        "freyja2_execution_context_regulatory_rules",
+        ["regulatory_rule_id"],
     )
 
 
 def downgrade() -> None:
     op.drop_index(
-        "uq_freyja2_execution_contexts_owner_venue_environment",
+        "ix_freyja2_execution_context_regulatory_rules_rule_id",
+        table_name="freyja2_execution_context_regulatory_rules",
+    )
+    op.drop_table("freyja2_execution_context_regulatory_rules")
+
+    op.drop_index(
+        "uq_freyja2_execution_contexts_identity",
         table_name="freyja2_execution_contexts",
     )
     op.drop_index(
-        "ix_freyja2_execution_contexts_regulatory_rule_id",
+        "ix_freyja2_execution_contexts_product_type_id",
         table_name="freyja2_execution_contexts",
     )
     op.drop_index("ix_freyja2_execution_contexts_venue_id", table_name="freyja2_execution_contexts")
@@ -430,6 +538,8 @@ def downgrade() -> None:
     )
     op.drop_index("ix_freyja2_regulatory_rules_jurisdiction", table_name="freyja2_regulatory_rules")
     op.drop_table("freyja2_regulatory_rules")
+
+    op.execute(f"DROP FUNCTION {_TEXT_ARRAY_ALL_NONBLANK_FUNCTION}(text[])")
 
     for name, _values in reversed(_ENUM_SPECS):
         postgresql.ENUM(name=name).drop(op.get_bind(), checkfirst=False)
