@@ -211,7 +211,7 @@ Consultar los heads disponibles:
 uv run alembic heads
 ```
 
-Actualmente existe un único head: `0010_provider_mappings (head)`.
+Actualmente existe un único head: `0011_capability_context (head)`.
 
 Consultar la revisión actual aplicada:
 
@@ -597,7 +597,7 @@ freyja_trading/
   `docker compose logs postgres`; normalmente indica que el proceso sigue
   inicializando o que las variables de entorno no son válidas. No borres
   el volumen como primera solución.
-- **`alembic current` aparece vacío o distinto de `0010_provider_mappings (head)`**:
+- **`alembic current` aparece vacío o distinto de `0011_capability_context (head)`**:
   ejecuta `uv run alembic upgrade head` desde `backend/` con PostgreSQL
   `healthy`. Un valor vacío es normal en una base de datos recién creada
   antes de aplicar migraciones.

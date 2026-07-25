@@ -107,7 +107,7 @@ def test_upgrade_downgrade_upgrade_cycle(temp_database_name: str) -> None:
             current = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-        assert current == "0010_provider_mappings"
+        assert current == "0011_capability_context"
 
         command.downgrade(cfg, "base")
         with engine.connect() as connection:
@@ -119,7 +119,7 @@ def test_upgrade_downgrade_upgrade_cycle(temp_database_name: str) -> None:
         command.upgrade(cfg, "head")
         with engine.connect() as connection:
             final = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert final == "0010_provider_mappings"
+        assert final == "0011_capability_context"
     finally:
         engine.dispose()
 
@@ -219,7 +219,7 @@ _CANONICAL_COUNTS = {
 }
 
 
-def test_upgrade_from_empty_to_0010_reaches_expected_head_with_exact_seed(
+def test_upgrade_from_empty_to_head_reaches_expected_head_with_exact_seed(
     temp_database_name: str,
 ) -> None:
     temp_url = get_postgres_settings().url.set(database=temp_database_name)
@@ -231,7 +231,7 @@ def test_upgrade_from_empty_to_0010_reaches_expected_head_with_exact_seed(
             current = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            assert current == "0010_provider_mappings"
+            assert current == "0011_capability_context"
             counts = {
                 table: connection.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
                 for table in _CATALOG_TABLES
@@ -289,7 +289,7 @@ def test_0010_downgrade_upgrade_is_reversible(temp_database_name: str) -> None:
     cfg = _alembic_config(temp_url)
     engine = create_engine(temp_url)
     try:
-        command.upgrade(cfg, "head")
+        command.upgrade(cfg, "0010_provider_mappings")
         with engine.connect() as connection:
             assert _existing_tables(connection, _PROVIDER_TABLES) == set(_PROVIDER_TABLES)
 
@@ -303,13 +303,71 @@ def test_0010_downgrade_upgrade_is_reversible(temp_database_name: str) -> None:
             }
             assert counts == _CANONICAL_COUNTS
 
-        command.upgrade(cfg, "head")
+        command.upgrade(cfg, "0010_provider_mappings")
         with engine.connect() as connection:
             assert _existing_tables(connection, _PROVIDER_TABLES) == set(_PROVIDER_TABLES)
             current = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
             assert current == "0010_provider_mappings"
+    finally:
+        engine.dispose()
+
+
+_CAPABILITY_TABLES = (
+    "freyja2_technical_capabilities",
+    "freyja2_execution_contexts",
+    "freyja2_regulatory_rules",
+    "freyja2_execution_context_regulatory_rules",
+)
+
+
+def test_upgrade_from_0010_to_0011_succeeds(temp_database_name: str) -> None:
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, "0010_provider_mappings")
+        command.upgrade(cfg, "0011_capability_context")  # must not raise
+
+        with engine.connect() as connection:
+            current = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+            assert current == "0011_capability_context"
+            assert _existing_tables(connection, _CAPABILITY_TABLES) == set(_CAPABILITY_TABLES)
+    finally:
+        engine.dispose()
+
+
+def test_0011_downgrade_upgrade_is_reversible(temp_database_name: str) -> None:
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, "head")
+        with engine.connect() as connection:
+            assert _existing_tables(connection, _CAPABILITY_TABLES) == set(_CAPABILITY_TABLES)
+
+        command.downgrade(cfg, "0010_provider_mappings")
+        with engine.connect() as connection:
+            assert _existing_tables(connection, _CAPABILITY_TABLES) == set()
+            # Downgrading 0011 must not touch the catalog seed or provider
+            # mappings at all.
+            assert _existing_tables(connection, _PROVIDER_TABLES) == set(_PROVIDER_TABLES)
+            counts = {
+                table: connection.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
+                for table in _CATALOG_TABLES
+            }
+            assert counts == _CANONICAL_COUNTS
+
+        command.upgrade(cfg, "head")
+        with engine.connect() as connection:
+            assert _existing_tables(connection, _CAPABILITY_TABLES) == set(_CAPABILITY_TABLES)
+            current = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+            assert current == "0011_capability_context"
     finally:
         engine.dispose()
 

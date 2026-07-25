@@ -1008,7 +1008,7 @@ def test_downgrade_aborts_on_modified_canonical_row_and_deletes_nothing(
         assert _count(connection, "freyja2_timeframes") == 5
         assert _count(connection, "freyja2_instruments") == 10
         assert _count(connection, "freyja2_instrument_timeframes") == 50
-        assert _current_revision(connection) == "0010_provider_mappings"
+        assert _current_revision(connection) == "0011_capability_context"
 
 
 def test_downgrade_aborts_on_inactive_canonical_row_and_deletes_nothing(
@@ -1029,7 +1029,7 @@ def test_downgrade_aborts_on_inactive_canonical_row_and_deletes_nothing(
     with engine.connect() as connection:
         assert _count(connection, "freyja2_instruments") == 10
         assert _count(connection, "freyja2_instrument_timeframes") == 50
-        assert _current_revision(connection) == "0010_provider_mappings"
+        assert _current_revision(connection) == "0011_capability_context"
 
 
 def test_downgrade_blocked_by_external_reference_without_cascade_or_partial_loss(
@@ -1079,7 +1079,7 @@ def test_downgrade_blocked_by_external_reference_without_cascade_or_partial_loss
         assert _count(connection, "freyja2_timeframes") == 5
         assert _count(connection, "freyja2_instruments") == 11  # 10 canonical + 1 custom
         assert _count(connection, "freyja2_instrument_timeframes") == 51  # 50 + 1 custom
-        assert _current_revision(connection) == "0010_provider_mappings"
+        assert _current_revision(connection) == "0011_capability_context"
 
 
 # --- POINT1-DB-001: 0007 <-> 0008 preserve the seed (unchanged behavior) ----
