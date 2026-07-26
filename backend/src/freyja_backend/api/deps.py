@@ -1,7 +1,8 @@
 import secrets
+from dataclasses import dataclass
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from freyja_backend.application import auth_service
@@ -75,3 +76,24 @@ def get_current_user(request: Request, db: DbSession) -> AuthUser:
 
 CurrentUser = Annotated[AuthUser, Depends(get_current_user)]
 ClientIp = Annotated[str, Depends(get_client_ip)]
+
+
+@dataclass(frozen=True)
+class PageParams:
+    """The project's single pagination convention (POINT1-API-001) — no list
+    endpoint existed before this task, so this is defined once here and
+    shared by every list endpoint rather than each one inventing its own
+    limit/offset shape."""
+
+    limit: int
+    offset: int
+
+
+def get_page_params(
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> PageParams:
+    return PageParams(limit=limit, offset=offset)
+
+
+PageParamsDep = Annotated[PageParams, Depends(get_page_params)]
