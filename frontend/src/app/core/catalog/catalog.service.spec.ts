@@ -102,7 +102,9 @@ describe('CatalogService', () => {
       demo_execution_status: 'NOT_SUPPORTED',
       real_execution_status: 'NOT_APPLICABLE',
       settlement_status: 'NOT_APPLICABLE',
-      reason_unavailable: null,
+      // reason_unavailable is required whenever any dimension is
+      // NOT_SUPPORTED (ck_freyja2_technical_capabilities_reason_iff_not_supported).
+      reason_unavailable: 'TEST fixture reason — not real supportability evidence',
       effective_from: '2026-01-01T00:00:00Z',
       effective_to: null,
     };
@@ -146,7 +148,32 @@ describe('CatalogService', () => {
       owner_authorization_status: 'NOT_AUTHORIZED',
       activation_status: 'SUSPENDED',
       suspension_reasons: ['TEST reason'],
-      regulatory_rules: [],
+      regulatory_rules: [
+        {
+          id: 'rule-general',
+          jurisdiction: 'TEST_XX',
+          client_classification: null,
+          product_type_id: null,
+          venue_id: null,
+          effect: 'NOT_ELIGIBLE',
+          source_citation: 'TEST general rule',
+          verified_at: '2026-01-01T00:00:00Z',
+          effective_from: '2026-01-01T00:00:00Z',
+          effective_to: null,
+        },
+        {
+          id: 'rule-scoped',
+          jurisdiction: 'TEST_XX',
+          client_classification: 'TEST_RETAIL',
+          product_type_id: 'p-1',
+          venue_id: 'v-1',
+          effect: 'NOT_ELIGIBLE',
+          source_citation: 'TEST product-and-venue-scoped rule',
+          verified_at: '2026-01-01T00:00:00Z',
+          effective_from: '2026-01-01T00:00:00Z',
+          effective_to: null,
+        },
+      ],
     };
     req.flush({ items: [fixture], total: 1, limit: 50, offset: 0 });
 
@@ -155,6 +182,13 @@ describe('CatalogService', () => {
     // silently upgraded/downgraded to NOT_ELIGIBLE or a boolean.
     expect(result?.items[0].credentials_status).toBe('NOT_CONFIGURED');
     expect(result?.items[0].regulatory_eligibility_status).toBe('NOT_EVALUATED');
+    // product_type_id/venue_id must pass through untransformed, distinguishing
+    // a general rule (both null) from one scoped to a product and venue.
+    const [general, scoped] = result?.items[0].regulatory_rules ?? [];
+    expect(general.product_type_id).toBeNull();
+    expect(general.venue_id).toBeNull();
+    expect(scoped.product_type_id).toBe('p-1');
+    expect(scoped.venue_id).toBe('v-1');
   });
 
   it('getExecutionContext() calls the context-by-id endpoint', () => {

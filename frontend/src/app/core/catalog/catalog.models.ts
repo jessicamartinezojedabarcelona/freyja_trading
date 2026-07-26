@@ -137,6 +137,8 @@ export interface RegulatoryRuleEvidenceOut {
   id: string;
   jurisdiction: string;
   client_classification: string | null;
+  product_type_id: string | null;
+  venue_id: string | null;
   effect: RegulatoryRuleEffect;
   source_citation: string;
   verified_at: string;

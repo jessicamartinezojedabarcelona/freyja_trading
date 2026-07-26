@@ -25,6 +25,8 @@ class RegulatoryRuleEvidenceOut(BaseModel):
     id: uuid.UUID
     jurisdiction: str
     client_classification: str | None
+    product_type_id: uuid.UUID | None
+    venue_id: uuid.UUID | None
     effect: RegulatoryRuleEffect
     source_citation: str
     verified_at: datetime

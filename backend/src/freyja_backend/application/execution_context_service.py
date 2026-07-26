@@ -16,6 +16,8 @@ def _regulatory_rule_evidence(rule: RegulatoryRule) -> RegulatoryRuleEvidenceOut
         id=rule.id,
         jurisdiction=rule.jurisdiction,
         client_classification=rule.client_classification,
+        product_type_id=rule.product_type_id,
+        venue_id=rule.venue_id,
         effect=rule.effect,
         source_citation=rule.source_citation,
         verified_at=rule.verified_at,

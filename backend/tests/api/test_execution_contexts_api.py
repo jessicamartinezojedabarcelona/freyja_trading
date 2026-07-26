@@ -244,47 +244,85 @@ def test_multiple_regulatory_rules_appear_as_separate_evidence(
 ) -> None:
     owner = _create_owner(db_session, _OWNER_A_IDENTIFIER)
     venue = _make_venue(db_session)
-    product_type_id = _seeded_product_type_id(db_session, "BINARY_OPTION")
+    binary_id = _seeded_product_type_id(db_session, "BINARY_OPTION")
+    spot_id = _seeded_product_type_id(db_session, "SPOT")
 
     context = _make_context(
         db_session,
         owner=owner,
         venue=venue,
-        product_type_id=product_type_id,
+        product_type_id=binary_id,
         regulatory_eligibility_status=RegulatoryEligibilityStatus.NOT_ELIGIBLE,
     )
-    rule_1 = RegulatoryRule(
+    # Four distinct regulatory scopes — product_type_id/venue_id come from
+    # RegulatoryRule itself, never reconstructed from the ExecutionContext,
+    # since a rule's own scope can differ from the context it applies to.
+    rule_general = RegulatoryRule(
         jurisdiction=_TEST_JURISDICTION,
         effect=RegulatoryRuleEffect.NOT_ELIGIBLE,
         source_citation=_TEST_CITATION + " (general)",
         verified_at=datetime.now(UTC),
     )
-    rule_2 = RegulatoryRule(
+    rule_product_scoped = RegulatoryRule(
         jurisdiction=_TEST_JURISDICTION,
-        client_classification=_TEST_CLASSIFICATION,
+        product_type_id=spot_id,
         effect=RegulatoryRuleEffect.NOT_ELIGIBLE,
-        source_citation=_TEST_CITATION + " (retail-specific)",
+        source_citation=_TEST_CITATION + " (product-scoped)",
         verified_at=datetime.now(UTC),
     )
-    db_session.add_all([rule_1, rule_2])
+    rule_venue_scoped = RegulatoryRule(
+        jurisdiction=_TEST_JURISDICTION,
+        venue_id=venue.id,
+        effect=RegulatoryRuleEffect.NOT_ELIGIBLE,
+        source_citation=_TEST_CITATION + " (venue-scoped)",
+        verified_at=datetime.now(UTC),
+    )
+    rule_product_and_venue_scoped = RegulatoryRule(
+        jurisdiction=_TEST_JURISDICTION,
+        client_classification=_TEST_CLASSIFICATION,
+        product_type_id=binary_id,
+        venue_id=venue.id,
+        effect=RegulatoryRuleEffect.NOT_ELIGIBLE,
+        source_citation=_TEST_CITATION + " (product-and-venue-scoped)",
+        verified_at=datetime.now(UTC),
+    )
+    rules = [rule_general, rule_product_scoped, rule_venue_scoped, rule_product_and_venue_scoped]
+    db_session.add_all(rules)
     db_session.flush()
     db_session.add_all(
         [
             ExecutionContextRegulatoryRule(
-                execution_context_id=context.id, regulatory_rule_id=rule_1.id
-            ),
-            ExecutionContextRegulatoryRule(
-                execution_context_id=context.id, regulatory_rule_id=rule_2.id
-            ),
+                execution_context_id=context.id, regulatory_rule_id=rule.id
+            )
+            for rule in rules
         ]
     )
     db_session.commit()
 
     _login_as(client, _OWNER_A_IDENTIFIER)
     item = client.get(CONTEXTS_URL).json()["items"][0]
-    assert len(item["regulatory_rules"]) == 2
-    citations = {rule["source_citation"] for rule in item["regulatory_rules"]}
-    assert citations == {_TEST_CITATION + " (general)", _TEST_CITATION + " (retail-specific)"}
+    assert len(item["regulatory_rules"]) == 4
+    by_citation = {rule["source_citation"]: rule for rule in item["regulatory_rules"]}
+
+    general = by_citation[_TEST_CITATION + " (general)"]
+    assert general["id"] == str(rule_general.id)
+    assert general["product_type_id"] is None
+    assert general["venue_id"] is None
+
+    product_scoped = by_citation[_TEST_CITATION + " (product-scoped)"]
+    assert product_scoped["id"] == str(rule_product_scoped.id)
+    assert product_scoped["product_type_id"] == str(spot_id)
+    assert product_scoped["venue_id"] is None
+
+    venue_scoped = by_citation[_TEST_CITATION + " (venue-scoped)"]
+    assert venue_scoped["id"] == str(rule_venue_scoped.id)
+    assert venue_scoped["product_type_id"] is None
+    assert venue_scoped["venue_id"] == str(venue.id)
+
+    product_and_venue_scoped = by_citation[_TEST_CITATION + " (product-and-venue-scoped)"]
+    assert product_and_venue_scoped["id"] == str(rule_product_and_venue_scoped.id)
+    assert product_and_venue_scoped["product_type_id"] == str(binary_id)
+    assert product_and_venue_scoped["venue_id"] == str(venue.id)
 
 
 def test_owner_cannot_list_another_owners_contexts(client: TestClient, db_session: Session) -> None:
