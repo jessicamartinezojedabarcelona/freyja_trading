@@ -19,12 +19,8 @@ from freyja_backend.db.models.capability import (
     CapabilityStatus,
     CredentialsStatus,
     ExecutionContext,
-    ExecutionContextRegulatoryRule,
     ExecutionEnvironment,
     OwnerAuthorizationStatus,
-    RegulatoryEligibilityStatus,
-    RegulatoryRule,
-    RegulatoryRuleEffect,
     TechnicalCapability,
     VenuePermissionStatus,
 )
@@ -42,18 +38,24 @@ _CAPABILITY_TABLES = frozenset(
     {
         "freyja2_technical_capabilities",
         "freyja2_execution_contexts",
+    }
+)
+
+# Tables that must no longer exist at all as of
+# 0012_remove_regulatory_engine (POINT1-CAPABILITY-API-CORRECTION-001) —
+# Freyja does not maintain an internal regulatory-eligibility engine; the
+# connected broker is the sole authority over availability/permissions.
+_REMOVED_REGULATORY_TABLES = frozenset(
+    {
         "freyja2_regulatory_rules",
         "freyja2_execution_context_regulatory_rules",
     }
 )
 
-# Unambiguously fictitious fixtures — no real broker, exchange, owner, or
-# regulatory citation is named or seeded anywhere in this task.
+# Unambiguously fictitious fixtures — no real broker, exchange, or owner is
+# named or seeded anywhere in this task.
 _TEST_VENUE_CODE = "TEST_CAP_EXCHANGE"
 _TEST_SOURCE_CODE = "TEST_CAP_MARKET_DATA"
-_TEST_JURISDICTION = "TEST_XX"
-_TEST_CLASSIFICATION = "TEST_RETAIL"
-_TEST_CITATION = "TEST fixture citation — not a real regulatory source"
 _TEST_ACCOUNT_1 = "TEST_ACCOUNT_1"
 _TEST_ACCOUNT_2 = "TEST_ACCOUNT_2"
 _BLANK_OR_PADDED = ["", "   ", " X", "X "]
@@ -65,8 +67,7 @@ def _truncate_capability_tables(auth_test_engine: Engine) -> None:
         connection.execute(
             text(
                 "TRUNCATE "
-                "freyja2_execution_context_regulatory_rules, freyja2_execution_contexts, "
-                "freyja2_technical_capabilities, freyja2_regulatory_rules, "
+                "freyja2_execution_contexts, freyja2_technical_capabilities, "
                 "freyja2_venues, freyja2_data_sources "
                 "RESTART IDENTITY CASCADE"
             )
@@ -165,7 +166,6 @@ def _enabled_context_kwargs() -> dict[str, Any]:
     return {
         "credentials_status": CredentialsStatus.CONFIGURED,
         "venue_permission_status": VenuePermissionStatus.GRANTED,
-        "regulatory_eligibility_status": RegulatoryEligibilityStatus.ELIGIBLE,
         "owner_authorization_status": OwnerAuthorizationStatus.AUTHORIZED,
         "activation_status": ActivationStatus.ENABLED,
     }
@@ -183,7 +183,7 @@ def _execution_context_kwargs(
 ) -> dict[str, object]:
     """Builds a fully-valid ExecutionContext constructor kwargs dict, so each
     test can override exactly the one field it means to test (e.g.
-    jurisdiction=invalid_value) without every other required column also
+    account_key=invalid_value) without every other required column also
     being missing/invalid and masking which constraint actually fired."""
     resolved_product_type_id = (
         product_type_id if product_type_id is not None else _seeded_product_type_id(session, "SPOT")
@@ -194,8 +194,6 @@ def _execution_context_kwargs(
         "account_key": account_key,
         "execution_environment": environment,
         "product_type_id": resolved_product_type_id,
-        "jurisdiction": _TEST_JURISDICTION,
-        "client_classification": _TEST_CLASSIFICATION,
     }
     kwargs.update(overrides)
     return kwargs
@@ -227,20 +225,6 @@ def _make_execution_context(
     return context
 
 
-def _make_regulatory_rule(session: Session, **overrides: object) -> RegulatoryRule:
-    defaults: dict[str, object] = {
-        "jurisdiction": _TEST_JURISDICTION,
-        "effect": RegulatoryRuleEffect.NOT_ELIGIBLE,
-        "source_citation": _TEST_CITATION,
-        "verified_at": datetime.now(UTC),
-    }
-    defaults.update(overrides)
-    rule = RegulatoryRule(**defaults)
-    session.add(rule)
-    session.flush()
-    return rule
-
-
 # --- Schema shape right after migration -------------------------------------
 
 
@@ -251,16 +235,53 @@ def test_new_tables_are_empty_after_migration(auth_test_engine: Engine) -> None:
             assert count == 0, f"{table} must be empty — 0011 creates schema only, never data"
 
 
+def test_regulatory_tables_no_longer_exist_at_head(auth_test_engine: Engine) -> None:
+    """POINT1-CAPABILITY-API-CORRECTION-001: freyja2_regulatory_rules and
+    freyja2_execution_context_regulatory_rules were dropped by
+    0012_remove_regulatory_engine — Freyja does not maintain an internal
+    regulatory-eligibility engine; the connected broker is the sole
+    authority over availability/permissions."""
+    inspector = inspect(auth_test_engine)
+    existing_table_names = set(inspector.get_table_names())
+    for table in _REMOVED_REGULATORY_TABLES:
+        assert table not in existing_table_names, f"{table} must not exist at head"
+
+
+def test_orm_does_not_export_regulatory_entities() -> None:
+    """The ORM package must not export RegulatoryRule, RegulatoryRuleEffect,
+    RegulatoryEligibilityStatus, or ExecutionContextRegulatoryRule — a
+    consumer importing these by name gets an ImportError, not a stale
+    class bound to a table that no longer exists."""
+    import freyja_backend.db.models as models_package
+    import freyja_backend.db.models.capability as capability_module
+
+    for removed_name in (
+        "RegulatoryRule",
+        "RegulatoryRuleEffect",
+        "RegulatoryEligibilityStatus",
+        "ExecutionContextRegulatoryRule",
+    ):
+        assert not hasattr(capability_module, removed_name), (
+            f"freyja_backend.db.models.capability must not export {removed_name!r}"
+        )
+        assert not hasattr(models_package, removed_name), (
+            f"freyja_backend.db.models must not export {removed_name!r}"
+        )
+        assert removed_name not in models_package.__all__
+
+
 def test_capability_table_has_no_activation_or_eligibility_columns(
     auth_test_engine: Engine,
 ) -> None:
     inspector = inspect(auth_test_engine)
     columns = {c["name"] for c in inspector.get_columns("freyja2_technical_capabilities")}
-    for forbidden in ("activation_status", "credentials_status", "owner_id", "jurisdiction"):
+    for forbidden in ("activation_status", "credentials_status", "owner_id"):
         assert forbidden not in columns
 
 
-def test_execution_context_has_no_technical_capability_columns(auth_test_engine: Engine) -> None:
+def test_execution_context_has_no_technical_capability_or_regulatory_columns(
+    auth_test_engine: Engine,
+) -> None:
     inspector = inspect(auth_test_engine)
     columns = {c["name"] for c in inspector.get_columns("freyja2_execution_contexts")}
     for forbidden in (
@@ -270,6 +291,9 @@ def test_execution_context_has_no_technical_capability_columns(auth_test_engine:
         "demo_execution_status",
         "real_execution_status",
         "settlement_status",
+        "jurisdiction",
+        "client_classification",
+        "regulatory_eligibility_status",
     ):
         assert forbidden not in columns
 
@@ -574,23 +598,6 @@ def test_technical_capability_rejects_impossible_effective_window(db_session: Se
     db_session.rollback()
 
 
-def test_regulatory_rule_rejects_impossible_effective_window(db_session: Session) -> None:
-    now = datetime.now(UTC)
-    db_session.add(
-        RegulatoryRule(
-            jurisdiction=_TEST_JURISDICTION,
-            effect=RegulatoryRuleEffect.NOT_ELIGIBLE,
-            source_citation=_TEST_CITATION,
-            verified_at=now,
-            effective_from=now,
-            effective_to=now,
-        )
-    )
-    with pytest.raises(IntegrityError):
-        db_session.flush()
-    db_session.rollback()
-
-
 def test_technical_capability_allows_versioned_history_but_only_one_open_row(
     db_session: Session,
 ) -> None:
@@ -625,217 +632,7 @@ def test_technical_capability_allows_versioned_history_but_only_one_open_row(
     db_session.rollback()
 
 
-# --- RegulatoryRule: versionable, citable, evidence-only --------------------
-
-
-def test_regulatory_rule_requires_source_citation_and_verified_at(db_session: Session) -> None:
-    rule = _make_regulatory_rule(db_session)
-    assert rule.source_citation == _TEST_CITATION
-    assert rule.verified_at is not None
-
-
-def test_regulatory_rule_can_have_multiple_versions_over_time(db_session: Session) -> None:
-    earlier = datetime.now(UTC) - timedelta(days=60)
-    closed_end = datetime.now(UTC) - timedelta(days=1)
-
-    _make_regulatory_rule(
-        db_session,
-        effect=RegulatoryRuleEffect.ELIGIBLE,
-        effective_from=earlier,
-        effective_to=closed_end,
-    )
-    superseding = _make_regulatory_rule(db_session, effect=RegulatoryRuleEffect.NOT_ELIGIBLE)
-
-    count = (
-        db_session.query(RegulatoryRule)
-        .filter(RegulatoryRule.jurisdiction == _TEST_JURISDICTION)
-        .count()
-    )
-    assert count == 2
-    assert superseding.effective_to is None
-
-
-@pytest.mark.parametrize("invalid_value", _BLANK_OR_PADDED)
-def test_regulatory_rule_jurisdiction_rejects_blank_or_padded(
-    db_session: Session, invalid_value: str
-) -> None:
-    db_session.add(
-        RegulatoryRule(
-            jurisdiction=invalid_value,
-            effect=RegulatoryRuleEffect.NOT_ELIGIBLE,
-            source_citation=_TEST_CITATION,
-            verified_at=datetime.now(UTC),
-        )
-    )
-    with pytest.raises(IntegrityError):
-        db_session.flush()
-    db_session.rollback()
-
-
-@pytest.mark.parametrize("invalid_value", _BLANK_OR_PADDED)
-def test_regulatory_rule_source_citation_rejects_blank_or_padded(
-    db_session: Session, invalid_value: str
-) -> None:
-    db_session.add(
-        RegulatoryRule(
-            jurisdiction=_TEST_JURISDICTION,
-            effect=RegulatoryRuleEffect.NOT_ELIGIBLE,
-            source_citation=invalid_value,
-            verified_at=datetime.now(UTC),
-        )
-    )
-    with pytest.raises(IntegrityError):
-        db_session.flush()
-    db_session.rollback()
-
-
-# --- Block 3: ExecutionContext <-> RegulatoryRule many-to-many --------------
-
-
-def test_execution_context_can_be_associated_with_multiple_regulatory_rules(
-    db_session: Session,
-) -> None:
-    owner = _make_owner(db_session, "owner-multi-rule@example.test")
-    venue = _make_venue(db_session)
-    context = _make_execution_context(db_session, owner=owner, venue=venue)
-    rule_a = _make_regulatory_rule(db_session, effect=RegulatoryRuleEffect.NOT_ELIGIBLE)
-    rule_b = _make_regulatory_rule(
-        db_session, jurisdiction="TEST_YY", effect=RegulatoryRuleEffect.ELIGIBLE
-    )
-
-    db_session.add_all(
-        [
-            ExecutionContextRegulatoryRule(
-                execution_context_id=context.id, regulatory_rule_id=rule_a.id
-            ),
-            ExecutionContextRegulatoryRule(
-                execution_context_id=context.id, regulatory_rule_id=rule_b.id
-            ),
-        ]
-    )
-    db_session.flush()
-
-    count = (
-        db_session.query(ExecutionContextRegulatoryRule)
-        .filter(ExecutionContextRegulatoryRule.execution_context_id == context.id)
-        .count()
-    )
-    assert count == 2
-
-
-def test_execution_context_can_have_zero_regulatory_rule_associations(
-    db_session: Session,
-) -> None:
-    owner = _make_owner(db_session, "owner-zero-rules@example.test")
-    venue = _make_venue(db_session)
-    context = _make_execution_context(db_session, owner=owner, venue=venue)
-
-    count = (
-        db_session.query(ExecutionContextRegulatoryRule)
-        .filter(ExecutionContextRegulatoryRule.execution_context_id == context.id)
-        .count()
-    )
-    assert count == 0
-
-
-def test_duplicate_regulatory_rule_association_is_rejected(db_session: Session) -> None:
-    owner = _make_owner(db_session, "owner-duplicate-rule@example.test")
-    venue = _make_venue(db_session)
-    context = _make_execution_context(db_session, owner=owner, venue=venue)
-    rule = _make_regulatory_rule(db_session)
-
-    db_session.add(
-        ExecutionContextRegulatoryRule(execution_context_id=context.id, regulatory_rule_id=rule.id)
-    )
-    db_session.flush()
-
-    db_session.add(
-        ExecutionContextRegulatoryRule(execution_context_id=context.id, regulatory_rule_id=rule.id)
-    )
-    with pytest.raises(IntegrityError):
-        db_session.flush()
-    db_session.rollback()
-
-
-def test_fk_prevents_deleting_a_regulatory_rule_referenced_by_association(
-    db_session: Session,
-) -> None:
-    owner = _make_owner(db_session, "owner-rule-protected@example.test")
-    venue = _make_venue(db_session)
-    context = _make_execution_context(db_session, owner=owner, venue=venue)
-    rule = _make_regulatory_rule(db_session)
-    db_session.add(
-        ExecutionContextRegulatoryRule(execution_context_id=context.id, regulatory_rule_id=rule.id)
-    )
-    db_session.flush()
-
-    with pytest.raises(IntegrityError):
-        db_session.execute(
-            text("DELETE FROM freyja2_regulatory_rules WHERE id = :id"), {"id": rule.id}
-        )
-        db_session.flush()
-    db_session.rollback()
-
-
-def test_fk_prevents_deleting_an_execution_context_referenced_by_association(
-    db_session: Session,
-) -> None:
-    owner = _make_owner(db_session, "owner-context-protected@example.test")
-    venue = _make_venue(db_session)
-    context = _make_execution_context(db_session, owner=owner, venue=venue)
-    rule = _make_regulatory_rule(db_session)
-    db_session.add(
-        ExecutionContextRegulatoryRule(execution_context_id=context.id, regulatory_rule_id=rule.id)
-    )
-    db_session.flush()
-
-    with pytest.raises(IntegrityError):
-        db_session.execute(
-            text("DELETE FROM freyja2_execution_contexts WHERE id = :id"), {"id": context.id}
-        )
-        db_session.flush()
-    db_session.rollback()
-
-
 # --- Blank/padded rejection, invalid enum values ----------------------------
-
-
-@pytest.mark.parametrize("invalid_value", _BLANK_OR_PADDED)
-def test_execution_context_jurisdiction_rejects_blank_or_padded(
-    db_session: Session, invalid_value: str
-) -> None:
-    owner = _make_owner(db_session, "owner-bad-jurisdiction@example.test")
-    venue = _make_venue(db_session)
-
-    db_session.add(
-        ExecutionContext(
-            **_execution_context_kwargs(
-                db_session, owner=owner, venue=venue, jurisdiction=invalid_value
-            )
-        )
-    )
-    with pytest.raises(IntegrityError):
-        db_session.flush()
-    db_session.rollback()
-
-
-@pytest.mark.parametrize("invalid_value", _BLANK_OR_PADDED)
-def test_execution_context_client_classification_rejects_blank_or_padded(
-    db_session: Session, invalid_value: str
-) -> None:
-    owner = _make_owner(db_session, "owner-bad-classification@example.test")
-    venue = _make_venue(db_session)
-
-    db_session.add(
-        ExecutionContext(
-            **_execution_context_kwargs(
-                db_session, owner=owner, venue=venue, client_classification=invalid_value
-            )
-        )
-    )
-    with pytest.raises(IntegrityError):
-        db_session.flush()
-    db_session.rollback()
 
 
 @pytest.mark.parametrize("invalid_value", _BLANK_OR_PADDED)
@@ -869,9 +666,9 @@ def test_invalid_activation_status_value_is_rejected_by_the_database(
             text(
                 "INSERT INTO freyja2_execution_contexts "
                 "(id, owner_id, venue_id, account_key, execution_environment, product_type_id, "
-                "jurisdiction, client_classification, activation_status) "
+                "activation_status) "
                 "VALUES (:id, :owner_id, :venue_id, :account_key, 'DEMO', :product_type_id, "
-                ":jurisdiction, :classification, 'HACKED_STATUS')"
+                "'HACKED_STATUS')"
             ),
             {
                 "id": uuid.uuid4(),
@@ -879,8 +676,6 @@ def test_invalid_activation_status_value_is_rejected_by_the_database(
                 "venue_id": venue.id,
                 "account_key": _TEST_ACCOUNT_1,
                 "product_type_id": product_type_id,
-                "jurisdiction": _TEST_JURISDICTION,
-                "classification": _TEST_CLASSIFICATION,
             },
         )
     db_session.rollback()
@@ -889,7 +684,7 @@ def test_invalid_activation_status_value_is_rejected_by_the_database(
 # --- No contradictory ENABLED/SUSPENDED declarations ------------------------
 
 
-def test_enabled_requires_all_four_positive_substatuses(db_session: Session) -> None:
+def test_enabled_requires_all_three_positive_substatuses(db_session: Session) -> None:
     owner = _make_owner(db_session, "owner-partial-enabled@example.test")
     venue = _make_venue(db_session)
 
@@ -912,7 +707,46 @@ def test_enabled_requires_all_four_positive_substatuses(db_session: Session) -> 
     db_session.rollback()
 
 
-def test_enabled_succeeds_when_all_four_substatuses_are_positive(db_session: Session) -> None:
+@pytest.mark.parametrize(
+    "case_id,blocking_field,blocking_value",
+    [
+        ("credentials", "credentials_status", CredentialsStatus.NOT_CONFIGURED),
+        ("denied", "venue_permission_status", VenuePermissionStatus.DENIED),
+        ("not-evaluated", "venue_permission_status", VenuePermissionStatus.NOT_EVALUATED),
+        ("owner-auth", "owner_authorization_status", OwnerAuthorizationStatus.NOT_AUTHORIZED),
+    ],
+)
+def test_enabled_is_blocked_by_each_substatus_individually_including_defaults(
+    db_session: Session, case_id: str, blocking_field: str, blocking_value: object
+) -> None:
+    """Beyond the single DENIED case above, this parametrizes across every
+    substatus, including the DEFAULT NOT_EVALUATED broker-permission state —
+    proving an unevaluated/unknown broker response is never silently treated
+    as GRANTED, exactly like a missing credential or missing user
+    authorization blocks ENABLED."""
+    owner = _make_owner(db_session, f"owner-blocked-{case_id}@example.test")
+    venue = _make_venue(db_session)
+
+    kwargs = _enabled_context_kwargs()
+    kwargs[blocking_field] = blocking_value
+
+    db_session.add(
+        ExecutionContext(
+            **_execution_context_kwargs(
+                db_session,
+                owner=owner,
+                venue=venue,
+                environment=ExecutionEnvironment.REAL,
+                **kwargs,
+            )
+        )
+    )
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+def test_enabled_succeeds_when_all_three_substatuses_are_positive(db_session: Session) -> None:
     owner = _make_owner(db_session, "owner-fully-enabled@example.test")
     venue = _make_venue(db_session)
 
@@ -1153,7 +987,7 @@ def test_binary_option_real_suspended_does_not_affect_spot_real_for_same_account
         product_type_id=binary_id,
         environment=ExecutionEnvironment.REAL,
         activation_status=ActivationStatus.SUSPENDED,
-        suspension_reasons=["Fixture: BINARY_OPTION not eligible under TEST_XX retail rules."],
+        suspension_reasons=["Fixture: broker denied venue permission for BINARY_OPTION."],
     )
     spot_context = _make_execution_context(
         db_session,
@@ -1183,7 +1017,7 @@ def test_suspended_context_does_not_affect_other_owners_or_capability(
         venue=venue,
         environment=ExecutionEnvironment.REAL,
         activation_status=ActivationStatus.SUSPENDED,
-        suspension_reasons=["Fixture: not eligible under TEST_XX retail rules."],
+        suspension_reasons=["Fixture: broker denied venue permission for this account."],
     )
 
     other_owner = _make_owner(db_session, "owner-unaffected@example.test")
@@ -1192,7 +1026,6 @@ def test_suspended_context_does_not_affect_other_owners_or_capability(
         owner=other_owner,
         venue=venue,
         environment=ExecutionEnvironment.REAL,
-        jurisdiction="TEST_YY",
         **_enabled_context_kwargs(),
     )
     db_session.refresh(other_context)
@@ -1453,7 +1286,7 @@ def test_spot_and_binary_option_on_same_symbol_get_independent_capability_rows(
     assert binary_status == "NOT_SUPPORTED"
 
 
-# --- POINT1-TEST-001: technical capability status != authorization ----------
+# --- POINT1-CAPABILITY-API-CORRECTION-001: broker-authority guarantees -----
 
 
 def test_supported_capability_without_any_execution_context_grants_no_authorization(
@@ -1461,8 +1294,10 @@ def test_supported_capability_without_any_execution_context_grants_no_authorizat
 ) -> None:
     """A TechnicalCapability row expresses what the venue/Freyja can
     technically do — it never creates, implies, or substitutes for an
-    ExecutionContext. Marking real_execution_status SUPPORTED must not leave
-    any owner authorized to trade it absent an actual ExecutionContext row."""
+    ExecutionContext, and it is not the broker's permission either. Marking
+    real_execution_status SUPPORTED must not leave any owner authorized to
+    trade absent an actual ExecutionContext row with a GRANTED broker
+    permission and an AUTHORIZED user."""
     venue = _make_venue(db_session)
     instrument_id = _seeded_instrument_id(db_session, "CRYPTO", "SPOT", "BTC/USDT")
     timeframe_id = _seeded_timeframe_id(db_session, "1m")
@@ -1485,51 +1320,9 @@ def test_supported_capability_without_any_execution_context_grants_no_authorizat
     )
     assert context_count == 0, (
         "a fully SUPPORTED capability must not create or imply any "
-        "ExecutionContext — technical support is never authorization"
+        "ExecutionContext — technical support is never broker permission or "
+        "user authorization"
     )
-
-
-# --- POINT1-TEST-001: each of the four substatuses independently blocks ----
-# ENABLED, including the default NOT_EVALUATED/NOT_CONFIGURED states -------
-
-
-@pytest.mark.parametrize(
-    "blocking_field,blocking_value",
-    [
-        ("credentials_status", CredentialsStatus.NOT_CONFIGURED),
-        ("venue_permission_status", VenuePermissionStatus.NOT_EVALUATED),
-        ("regulatory_eligibility_status", RegulatoryEligibilityStatus.NOT_EVALUATED),
-        ("owner_authorization_status", OwnerAuthorizationStatus.NOT_AUTHORIZED),
-    ],
-)
-def test_enabled_is_blocked_by_each_substatus_individually_including_defaults(
-    db_session: Session, blocking_field: str, blocking_value: object
-) -> None:
-    """test_enabled_requires_all_four_positive_substatuses (above) only
-    exercises venue_permission_status=DENIED as the failing dimension. This
-    parametrizes across all four, including the DEFAULT NOT_EVALUATED/
-    NOT_CONFIGURED states — proving NOT_EVALUATED is never silently treated
-    as positive/permitted by the CHECK constraint."""
-    owner = _make_owner(db_session, f"owner-blocked-{blocking_field}@example.test")
-    venue = _make_venue(db_session)
-
-    kwargs = _enabled_context_kwargs()
-    kwargs[blocking_field] = blocking_value
-
-    db_session.add(
-        ExecutionContext(
-            **_execution_context_kwargs(
-                db_session,
-                owner=owner,
-                venue=venue,
-                environment=ExecutionEnvironment.REAL,
-                **kwargs,
-            )
-        )
-    )
-    with pytest.raises(IntegrityError):
-        db_session.flush()
-    db_session.rollback()
 
 
 # --- POINT1-TEST-001: broader forbidden-column guard for capability tables --
@@ -1571,93 +1364,36 @@ def test_capability_tables_have_no_account_balance_order_or_position_columns(
                 )
 
 
-# --- POINT1-TEST-001: Spain/retail binary-options SUSPENDED via real -------
-# regulatory evidence, without a global BINARY_OPTION ban --------------------
-
-
-def test_binary_option_suspended_via_regulatory_rule_evidence_does_not_ban_it_globally(
-    db_session: Session,
-) -> None:
-    """A TEST_XX/retail context trading BINARY_OPTION is SUSPENDED, backed by
-    a real RegulatoryRule(effect=NOT_ELIGIBLE) scoped to that product,
-    evidenced via the ExecutionContextRegulatoryRule association — while a
-    second jurisdiction's BINARY_OPTION context remains fully ENABLED and
-    unaffected. BINARY_OPTION itself is never disabled as a ProductType."""
+def test_absence_of_execution_context_never_implies_authorization(db_session: Session) -> None:
+    """An owner with zero ExecutionContext rows for a venue has no
+    authorization state at all — never an implicit ENABLED/authorized
+    default. Absence of a row is absence of permission, not a fallback
+    granted state."""
+    owner = _make_owner(db_session, "owner-no-context-at-all@example.test")
     venue = _make_venue(db_session)
-    binary_id = _seeded_product_type_id(db_session, "BINARY_OPTION")
 
-    suspended_owner = _make_owner(db_session, "owner-es-retail-binary@example.test")
-    rule = _make_regulatory_rule(
-        db_session,
-        jurisdiction=_TEST_JURISDICTION,
-        client_classification=_TEST_CLASSIFICATION,
-        product_type_id=binary_id,
-        effect=RegulatoryRuleEffect.NOT_ELIGIBLE,
-        source_citation="TEST fixture citation — simulated ES/retail binary-options restriction",
+    count = (
+        db_session.query(ExecutionContext)
+        .filter(ExecutionContext.owner_id == owner.id, ExecutionContext.venue_id == venue.id)
+        .count()
     )
-    suspended_context = _make_execution_context(
-        db_session,
-        owner=suspended_owner,
-        venue=venue,
-        product_type_id=binary_id,
-        environment=ExecutionEnvironment.REAL,
-        jurisdiction=_TEST_JURISDICTION,
-        client_classification=_TEST_CLASSIFICATION,
-        regulatory_eligibility_status=RegulatoryEligibilityStatus.NOT_ELIGIBLE,
-        activation_status=ActivationStatus.SUSPENDED,
-        suspension_reasons=[f"Fixture: {rule.source_citation}"],
-    )
-    db_session.add(
-        ExecutionContextRegulatoryRule(
-            execution_context_id=suspended_context.id, regulatory_rule_id=rule.id
-        )
-    )
-    db_session.flush()
-
-    other_jurisdiction_owner = _make_owner(
-        db_session, "owner-other-jurisdiction-binary@example.test"
-    )
-    other_context = _make_execution_context(
-        db_session,
-        owner=other_jurisdiction_owner,
-        venue=venue,
-        product_type_id=binary_id,
-        environment=ExecutionEnvironment.REAL,
-        jurisdiction="TEST_YY",
-        **_enabled_context_kwargs(),
-    )
-
-    db_session.refresh(suspended_context)
-    db_session.refresh(other_context)
-
-    assert suspended_context.activation_status == ActivationStatus.SUSPENDED
-    assert suspended_context.regulatory_eligibility_status == (
-        RegulatoryEligibilityStatus.NOT_ELIGIBLE
-    )
-    # The other jurisdiction's BINARY_OPTION context is completely
-    # unaffected — BINARY_OPTION itself was never globally disabled.
-    assert other_context.activation_status == ActivationStatus.ENABLED
-    assert other_context.regulatory_eligibility_status == RegulatoryEligibilityStatus.ELIGIBLE
-
-    product_type_still_exists = db_session.execute(
-        text("SELECT is_active FROM freyja2_product_types WHERE id = :id"), {"id": binary_id}
-    ).scalar_one()
-    assert product_type_still_exists is True
+    assert count == 0
 
 
-# --- POINT1-TEST-001: changing activation_status mutates nothing else ------
-
-
-def test_changing_activation_status_never_mutates_instrument_venue_instrument_or_capability(
+def test_changing_broker_permission_never_mutates_instrument_or_capability(
     db_session: Session,
 ) -> None:
+    """venue_permission_status is normalized from the broker's own response
+    (POINT1-CAPABILITY-API-CORRECTION-001) — updating it on an
+    ExecutionContext must never mutate the referenced Instrument or any
+    TechnicalCapability row."""
     venue = _make_venue(db_session)
     instrument_id = _seeded_instrument_id(db_session, "CRYPTO", "SPOT", "BTC/USDT")
     timeframe_id = _seeded_timeframe_id(db_session, "1m")
 
     db_session.add(
         VenueInstrument(
-            venue_id=venue.id, instrument_id=instrument_id, provider_symbol="TEST_ACT_STATUS_BTC"
+            venue_id=venue.id, instrument_id=instrument_id, provider_symbol="TEST_BROKER_PERM_BTC"
         )
     )
     db_session.flush()
@@ -1670,7 +1406,7 @@ def test_changing_activation_status_never_mutates_instrument_venue_instrument_or
         market_data_status=CapabilityStatus.SUPPORTED,
     )
 
-    owner = _make_owner(db_session, "owner-activation-mutation-check@example.test")
+    owner = _make_owner(db_session, "owner-broker-permission-change@example.test")
     context = _make_execution_context(db_session, owner=owner, venue=venue)
 
     before_instrument = (
@@ -1701,9 +1437,10 @@ def test_changing_activation_status_never_mutates_instrument_venue_instrument_or
         .one()
     )
 
+    # Simulate the broker denying permission after a prior GRANT.
+    context.venue_permission_status = VenuePermissionStatus.DENIED
     context.activation_status = ActivationStatus.SUSPENDED
-    context.suspension_reasons = ["Fixture: unrelated activation change for mutation check."]
-    context.credentials_status = CredentialsStatus.INVALID
+    context.suspension_reasons = ["Fixture: broker revoked venue permission for this account."]
     db_session.flush()
 
     after_instrument = (
@@ -1737,3 +1474,38 @@ def test_changing_activation_status_never_mutates_instrument_venue_instrument_or
     assert dict(after_instrument) == dict(before_instrument)
     assert dict(after_venue_instrument) == dict(before_venue_instrument)
     assert dict(after_capability) == dict(before_capability)
+
+
+def test_demo_and_real_can_have_independent_credentials_and_broker_permission(
+    db_session: Session,
+) -> None:
+    """DEMO and REAL share the same domain/catalog/business rules (one
+    table, two rows) but never share account/credentials/broker-permission
+    state — each row's credentials_status and venue_permission_status are
+    fully independent, even for the same owner+venue+account+product."""
+    owner = _make_owner(db_session, "owner-demo-real-independent@example.test")
+    venue = _make_venue(db_session)
+
+    demo_context = _make_execution_context(
+        db_session,
+        owner=owner,
+        venue=venue,
+        environment=ExecutionEnvironment.DEMO,
+        credentials_status=CredentialsStatus.CONFIGURED,
+        venue_permission_status=VenuePermissionStatus.GRANTED,
+    )
+    real_context = _make_execution_context(
+        db_session,
+        owner=owner,
+        venue=venue,
+        environment=ExecutionEnvironment.REAL,
+        credentials_status=CredentialsStatus.NOT_CONFIGURED,
+        venue_permission_status=VenuePermissionStatus.NOT_EVALUATED,
+    )
+
+    db_session.refresh(demo_context)
+    db_session.refresh(real_context)
+    assert demo_context.credentials_status == CredentialsStatus.CONFIGURED
+    assert demo_context.venue_permission_status == VenuePermissionStatus.GRANTED
+    assert real_context.credentials_status == CredentialsStatus.NOT_CONFIGURED
+    assert real_context.venue_permission_status == VenuePermissionStatus.NOT_EVALUATED

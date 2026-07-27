@@ -195,55 +195,22 @@ describe('CatalogService', () => {
       },
       product_type: { id: 'p-1', code: 'BINARY_OPTION', display_name: 'Binary option' },
       execution_environment: 'REAL',
-      jurisdiction: 'TEST_XX',
-      client_classification: 'TEST_RETAIL',
       credentials_status: 'NOT_CONFIGURED',
       venue_permission_status: 'NOT_EVALUATED',
-      regulatory_eligibility_status: 'NOT_EVALUATED',
       owner_authorization_status: 'NOT_AUTHORIZED',
       activation_status: 'SUSPENDED',
       suspension_reasons: ['TEST reason'],
-      regulatory_rules: [
-        {
-          id: 'rule-general',
-          jurisdiction: 'TEST_XX',
-          client_classification: null,
-          product_type_id: null,
-          venue_id: null,
-          effect: 'NOT_ELIGIBLE',
-          source_citation: 'TEST general rule',
-          verified_at: '2026-01-01T00:00:00Z',
-          effective_from: '2026-01-01T00:00:00Z',
-          effective_to: null,
-        },
-        {
-          id: 'rule-scoped',
-          jurisdiction: 'TEST_XX',
-          client_classification: 'TEST_RETAIL',
-          product_type_id: 'p-1',
-          venue_id: 'v-1',
-          effect: 'NOT_ELIGIBLE',
-          source_citation: 'TEST product-and-venue-scoped rule',
-          verified_at: '2026-01-01T00:00:00Z',
-          effective_from: '2026-01-01T00:00:00Z',
-          effective_to: null,
-        },
-      ],
     };
     req.flush({ items: [fixture], total: 1, limit: 50, offset: 0 });
 
     expect(result?.items[0]).toEqual(fixture);
     // NOT_CONFIGURED/NOT_EVALUATED must reach the caller as-is — never
-    // silently upgraded/downgraded to NOT_ELIGIBLE or a boolean.
+    // silently upgraded/downgraded to a boolean. venue_permission_status is
+    // the broker's own reported permission, normalized by Freyja — never an
+    // internal jurisdiction/regulatory determination
+    // (POINT1-CAPABILITY-API-CORRECTION-001).
     expect(result?.items[0].credentials_status).toBe('NOT_CONFIGURED');
-    expect(result?.items[0].regulatory_eligibility_status).toBe('NOT_EVALUATED');
-    // product_type_id/venue_id must pass through untransformed, distinguishing
-    // a general rule (both null) from one scoped to a product and venue.
-    const [general, scoped] = result?.items[0].regulatory_rules ?? [];
-    expect(general.product_type_id).toBeNull();
-    expect(general.venue_id).toBeNull();
-    expect(scoped.product_type_id).toBe('p-1');
-    expect(scoped.venue_id).toBe('v-1');
+    expect(result?.items[0].venue_permission_status).toBe('NOT_EVALUATED');
   });
 
   it('getExecutionContext() calls the context-by-id endpoint', () => {
@@ -313,7 +280,11 @@ describe('CatalogService', () => {
     expect(Object.keys(fixture).some((key) => SECRET_LIKE_KEY.test(key))).toBe(false);
   });
 
-  it('an ExecutionContextOut fixture exposes only status/evidence fields, never raw credentials or tokens', () => {
+  it('an ExecutionContextOut fixture exposes only status/evidence fields, never raw credentials, tokens, or a jurisdiction/regulatory determination', () => {
+    // POINT1-CAPABILITY-API-CORRECTION-001: jurisdiction, client_classification,
+    // regulatory_eligibility_status, and regulatory_rules were removed —
+    // Freyja does not maintain an internal regulatory-eligibility engine.
+    // venue_permission_status is the broker's own reported permission.
     const fixture: ExecutionContextOut = {
       id: 'ctx-1',
       account_key: 'ACC_1',
@@ -326,15 +297,11 @@ describe('CatalogService', () => {
       },
       product_type: { id: 'p-1', code: 'SPOT', display_name: 'Spot' },
       execution_environment: 'DEMO',
-      jurisdiction: 'TEST_XX',
-      client_classification: 'TEST_RETAIL',
       credentials_status: 'CONFIGURED',
       venue_permission_status: 'GRANTED',
-      regulatory_eligibility_status: 'ELIGIBLE',
       owner_authorization_status: 'AUTHORIZED',
       activation_status: 'ENABLED',
       suspension_reasons: null,
-      regulatory_rules: [],
     };
 
     expect(Object.keys(fixture).sort()).toEqual(
@@ -344,15 +311,11 @@ describe('CatalogService', () => {
         'venue',
         'product_type',
         'execution_environment',
-        'jurisdiction',
-        'client_classification',
         'credentials_status',
         'venue_permission_status',
-        'regulatory_eligibility_status',
         'owner_authorization_status',
         'activation_status',
         'suspension_reasons',
-        'regulatory_rules',
       ].sort(),
     );
     // credentials_status is a status enum (CONFIGURED/NOT_CONFIGURED/INVALID),
@@ -363,5 +326,13 @@ describe('CatalogService', () => {
       (key) => !key.endsWith('_status') && SECRET_LIKE_KEY.test(key),
     );
     expect(secretLikeKeys).toEqual([]);
+    for (const forbiddenKey of [
+      'jurisdiction',
+      'client_classification',
+      'regulatory_eligibility_status',
+      'regulatory_rules',
+    ]) {
+      expect(Object.keys(fixture)).not.toContain(forbiddenKey);
+    }
   });
 });

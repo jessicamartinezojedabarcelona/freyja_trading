@@ -124,27 +124,17 @@ export interface TechnicalCapabilityOut {
 
 export type ExecutionEnvironment = 'DEMO' | 'REAL';
 export type CredentialsStatus = 'NOT_CONFIGURED' | 'CONFIGURED' | 'INVALID';
+// Permission/availability as reported and normalized from the connected
+// broker/venue for this account — never a Freyja-computed legal or
+// regulatory decision (POINT1-CAPABILITY-API-CORRECTION-001). Freyja does
+// not model jurisdiction, client classification, or regulatory-rule
+// evidence anywhere in this contract.
 export type VenuePermissionStatus = 'NOT_EVALUATED' | 'GRANTED' | 'DENIED';
-export type RegulatoryEligibilityStatus = 'NOT_EVALUATED' | 'ELIGIBLE' | 'NOT_ELIGIBLE';
 export type OwnerAuthorizationStatus = 'NOT_AUTHORIZED' | 'AUTHORIZED';
 // An ExecutionContext's activation status — ENABLED never implies SUPPORTED
 // implies ENABLED, and NOT_CONFIGURED/SUSPENDED are distinct states, never
 // presented as "blocked" or "not eligible".
 export type ActivationStatus = 'NOT_CONFIGURED' | 'CONFIGURED' | 'ENABLED' | 'SUSPENDED';
-export type RegulatoryRuleEffect = 'ELIGIBLE' | 'NOT_ELIGIBLE';
-
-export interface RegulatoryRuleEvidenceOut {
-  id: string;
-  jurisdiction: string;
-  client_classification: string | null;
-  product_type_id: string | null;
-  venue_id: string | null;
-  effect: RegulatoryRuleEffect;
-  source_citation: string;
-  verified_at: string;
-  effective_from: string;
-  effective_to: string | null;
-}
 
 export interface ExecutionContextOut {
   id: string;
@@ -152,15 +142,11 @@ export interface ExecutionContextOut {
   venue: VenueOut;
   product_type: ProductTypeRef;
   execution_environment: ExecutionEnvironment;
-  jurisdiction: string;
-  client_classification: string;
   credentials_status: CredentialsStatus;
   venue_permission_status: VenuePermissionStatus;
-  regulatory_eligibility_status: RegulatoryEligibilityStatus;
   owner_authorization_status: OwnerAuthorizationStatus;
   activation_status: ActivationStatus;
   suspension_reasons: string[] | null;
-  regulatory_rules: RegulatoryRuleEvidenceOut[];
 }
 
 export interface InstrumentFilters {

@@ -49,9 +49,30 @@ Consulta el detalle completo y las justificaciones del stack en
   negocia (`Venue`) o se publican datos (`DataSource`) de un `Instrument`
   canónico, y el símbolo/contrato concreto de cada proveedor —
   `canonical_symbol` nunca cambia por ello. Sin credenciales, cuentas,
-  entorno DEMO/REAL ni autorización (ver `ExecutionContext`, pendiente de
-  `POINT1-CAPABILITY-001`); esta tarea no siembra proveedores reales, solo
-  crea el esquema y sus restricciones.
+  entorno DEMO/REAL ni autorización (ver `ExecutionContext` más abajo);
+  esta tarea no siembra proveedores reales, solo crea el esquema y sus
+  restricciones.
+- **Capacidad técnica y contexto de ejecución** (`POINT1-CAPABILITY-001`,
+  corregido por `POINT1-CAPABILITY-API-CORRECTION-001`): `TechnicalCapability`
+  describe qué sabe hacer técnicamente Freyja (o un venue/data source) para
+  un `Instrument` + timeframe — nunca una autorización. `ExecutionContext`
+  describe qué puede usar realmente la cuenta de una persona propietaria,
+  para un producto, en un entorno DEMO o REAL concreto.
+
+  **El broker conectado es la única autoridad sobre disponibilidad de
+  producto y permisos de cuenta — Freyja no interpreta ni aplica
+  legislación por país y no mantiene un catálogo legal/regulatorio
+  interno.** El broker conoce la cuenta y sus permisos, informa qué está
+  disponible, y Freyja normaliza y respeta esa respuesta en
+  `venue_permission_status`; un rechazo o una respuesta ausente/desconocida
+  del broker falla cerrado (nunca se interpreta como permiso concedido), y
+  Freyja nunca intenta eludir una restricción del broker. La autorización
+  explícita de la persona propietaria y los controles de riesgo de Freyja
+  siguen siendo requisitos obligatorios y separados: capacidad técnica,
+  permiso del broker y autorización del usuario son tres señales
+  independientes, y ninguna de ellas por sí sola activa trading REAL. Esta
+  tarea no implementa todavía conexión real a ningún broker ni habilita
+  ejecución REAL.
 - **Orquestador de calidad** (`scripts/quality.py`): punto de entrada
   único, reproducible y multiplataforma para ejecutar todos los controles
   locales de backend y frontend.
@@ -211,7 +232,7 @@ Consultar los heads disponibles:
 uv run alembic heads
 ```
 
-Actualmente existe un único head: `0011_capability_context (head)`.
+Actualmente existe un único head: `0012_remove_regulatory_engine (head)`.
 
 Consultar la revisión actual aplicada:
 
@@ -597,7 +618,7 @@ freyja_trading/
   `docker compose logs postgres`; normalmente indica que el proceso sigue
   inicializando o que las variables de entorno no son válidas. No borres
   el volumen como primera solución.
-- **`alembic current` aparece vacío o distinto de `0011_capability_context (head)`**:
+- **`alembic current` aparece vacío o distinto de `0012_remove_regulatory_engine (head)`**:
   ejecuta `uv run alembic upgrade head` desde `backend/` con PostgreSQL
   `healthy`. Un valor vacío es normal en una base de datos recién creada
   antes de aplicar migraciones.

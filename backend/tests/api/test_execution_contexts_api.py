@@ -1,6 +1,5 @@
 import uuid
 from collections.abc import Iterator
-from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,11 +12,7 @@ from freyja_backend.db.models.auth import AuthUser
 from freyja_backend.db.models.capability import (
     ActivationStatus,
     ExecutionContext,
-    ExecutionContextRegulatoryRule,
     ExecutionEnvironment,
-    RegulatoryEligibilityStatus,
-    RegulatoryRule,
-    RegulatoryRuleEffect,
 )
 from freyja_backend.db.models.provider import Venue, VenueType
 
@@ -30,14 +25,9 @@ _OWNER_B_IDENTIFIER = "owner-b@example.test"
 _PASSWORD = "correct-horse-battery-staple"
 
 _TEST_VENUE_CODE = "TEST_EC_API_EXCHANGE"
-_TEST_JURISDICTION = "TEST_XX"
-_TEST_CLASSIFICATION = "TEST_RETAIL"
-_TEST_CITATION = "TEST fixture citation — not a real regulatory source"
 
 _TABLES = (
-    "freyja2_execution_context_regulatory_rules",
     "freyja2_execution_contexts",
-    "freyja2_regulatory_rules",
     "freyja2_venues",
 )
 
@@ -99,8 +89,6 @@ def _make_context(
         "account_key": account_key,
         "execution_environment": environment,
         "product_type_id": product_type_id,
-        "jurisdiction": _TEST_JURISDICTION,
-        "client_classification": _TEST_CLASSIFICATION,
     }
     kwargs.update(overrides)
     context = ExecutionContext(**kwargs)
@@ -191,7 +179,7 @@ def test_suspended_binary_option_real_does_not_affect_spot_real(
         product_type_id=binary_id,
         environment=ExecutionEnvironment.REAL,
         activation_status=ActivationStatus.SUSPENDED,
-        suspension_reasons=["TEST fixture: binary options suspended in this jurisdiction"],
+        suspension_reasons=["TEST fixture: broker denied venue permission for BINARY_OPTION"],
     )
     _make_context(
         db_session,
@@ -209,13 +197,13 @@ def test_suspended_binary_option_real_does_not_affect_spot_real(
 
     assert by_product["BINARY_OPTION"]["activation_status"] == "SUSPENDED"
     assert by_product["BINARY_OPTION"]["suspension_reasons"] == [
-        "TEST fixture: binary options suspended in this jurisdiction"
+        "TEST fixture: broker denied venue permission for BINARY_OPTION"
     ]
     assert by_product["SPOT"]["activation_status"] == "NOT_CONFIGURED"
     assert by_product["SPOT"]["suspension_reasons"] is None
 
 
-def test_not_configured_and_not_evaluated_are_never_presented_as_not_eligible(
+def test_not_configured_and_not_evaluated_are_never_presented_as_denied(
     client: TestClient, db_session: Session
 ) -> None:
     owner = _create_owner(db_session, _OWNER_A_IDENTIFIER)
@@ -234,95 +222,102 @@ def test_not_configured_and_not_evaluated_are_never_presented_as_not_eligible(
     _login_as(client, _OWNER_A_IDENTIFIER)
     item = client.get(CONTEXTS_URL).json()["items"][0]
     assert item["activation_status"] == "NOT_CONFIGURED"
-    assert item["regulatory_eligibility_status"] == "NOT_EVALUATED"
-    assert item["activation_status"] != "NOT_ELIGIBLE"
-    assert item["regulatory_eligibility_status"] != "NOT_ELIGIBLE"
+    # venue_permission_status defaults to NOT_EVALUATED (broker not yet
+    # queried) — never silently presented as DENIED or coerced to a boolean.
+    assert item["venue_permission_status"] == "NOT_EVALUATED"
+    assert item["activation_status"] != "DENIED"
+    assert item["venue_permission_status"] != "DENIED"
 
 
-def test_multiple_regulatory_rules_appear_as_separate_evidence(
+@pytest.mark.parametrize(
+    "removed_param,removed_value",
+    [
+        ("jurisdiction", "ANY_XX"),
+        ("client_classification", "ANY_RETAIL"),
+        ("regulatory_eligibility_status", "NOT_EVALUATED"),
+    ],
+)
+def test_removed_regulatory_filters_return_422_not_silently_ignored(
+    client: TestClient, db_session: Session, removed_param: str, removed_value: str
+) -> None:
+    """POINT1-CAPABILITY-API-CORRECTION-001 (corrected after independent
+    audit): a filter this endpoint no longer supports must fail closed with
+    422 — silently ignoring it would let an old client believe the filter
+    had been applied when it was not."""
+    owner = _create_owner(db_session, _OWNER_A_IDENTIFIER)
+    venue = _make_venue(db_session)
+    product_type_id = _seeded_product_type_id(db_session, "SPOT")
+    _make_context(db_session, owner=owner, venue=venue, product_type_id=product_type_id)
+    db_session.commit()
+
+    _login_as(client, _OWNER_A_IDENTIFIER)
+    response = client.get(CONTEXTS_URL, params={removed_param: removed_value})
+    assert response.status_code == 422
+
+
+def test_unknown_arbitrary_query_param_returns_422(client: TestClient, db_session: Session) -> None:
+    owner = _create_owner(db_session, _OWNER_A_IDENTIFIER)
+    venue = _make_venue(db_session)
+    product_type_id = _seeded_product_type_id(db_session, "SPOT")
+    _make_context(db_session, owner=owner, venue=venue, product_type_id=product_type_id)
+    db_session.commit()
+
+    _login_as(client, _OWNER_A_IDENTIFIER)
+    response = client.get(CONTEXTS_URL, params={"totally_made_up_filter": "x"})
+    assert response.status_code == 422
+
+
+def test_valid_filters_still_return_200_and_filter_correctly(
     client: TestClient, db_session: Session
 ) -> None:
     owner = _create_owner(db_session, _OWNER_A_IDENTIFIER)
     venue = _make_venue(db_session)
-    binary_id = _seeded_product_type_id(db_session, "BINARY_OPTION")
     spot_id = _seeded_product_type_id(db_session, "SPOT")
-
-    context = _make_context(
-        db_session,
-        owner=owner,
-        venue=venue,
-        product_type_id=binary_id,
-        regulatory_eligibility_status=RegulatoryEligibilityStatus.NOT_ELIGIBLE,
-    )
-    # Four distinct regulatory scopes — product_type_id/venue_id come from
-    # RegulatoryRule itself, never reconstructed from the ExecutionContext,
-    # since a rule's own scope can differ from the context it applies to.
-    rule_general = RegulatoryRule(
-        jurisdiction=_TEST_JURISDICTION,
-        effect=RegulatoryRuleEffect.NOT_ELIGIBLE,
-        source_citation=_TEST_CITATION + " (general)",
-        verified_at=datetime.now(UTC),
-    )
-    rule_product_scoped = RegulatoryRule(
-        jurisdiction=_TEST_JURISDICTION,
-        product_type_id=spot_id,
-        effect=RegulatoryRuleEffect.NOT_ELIGIBLE,
-        source_citation=_TEST_CITATION + " (product-scoped)",
-        verified_at=datetime.now(UTC),
-    )
-    rule_venue_scoped = RegulatoryRule(
-        jurisdiction=_TEST_JURISDICTION,
-        venue_id=venue.id,
-        effect=RegulatoryRuleEffect.NOT_ELIGIBLE,
-        source_citation=_TEST_CITATION + " (venue-scoped)",
-        verified_at=datetime.now(UTC),
-    )
-    rule_product_and_venue_scoped = RegulatoryRule(
-        jurisdiction=_TEST_JURISDICTION,
-        client_classification=_TEST_CLASSIFICATION,
-        product_type_id=binary_id,
-        venue_id=venue.id,
-        effect=RegulatoryRuleEffect.NOT_ELIGIBLE,
-        source_citation=_TEST_CITATION + " (product-and-venue-scoped)",
-        verified_at=datetime.now(UTC),
-    )
-    rules = [rule_general, rule_product_scoped, rule_venue_scoped, rule_product_and_venue_scoped]
-    db_session.add_all(rules)
-    db_session.flush()
-    db_session.add_all(
-        [
-            ExecutionContextRegulatoryRule(
-                execution_context_id=context.id, regulatory_rule_id=rule.id
-            )
-            for rule in rules
-        ]
+    binary_id = _seeded_product_type_id(db_session, "BINARY_OPTION")
+    _make_context(db_session, owner=owner, venue=venue, product_type_id=spot_id)
+    _make_context(
+        db_session, owner=owner, venue=venue, product_type_id=binary_id, account_key="ACC_2"
     )
     db_session.commit()
 
     _login_as(client, _OWNER_A_IDENTIFIER)
-    item = client.get(CONTEXTS_URL).json()["items"][0]
-    assert len(item["regulatory_rules"]) == 4
-    by_citation = {rule["source_citation"]: rule for rule in item["regulatory_rules"]}
+    response = client.get(
+        CONTEXTS_URL,
+        params={
+            "venue_id": str(venue.id),
+            "product_type_id": str(spot_id),
+            "execution_environment": "DEMO",
+            "limit": 10,
+            "offset": 0,
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert body["items"][0]["product_type"]["code"] == "SPOT"
 
-    general = by_citation[_TEST_CITATION + " (general)"]
-    assert general["id"] == str(rule_general.id)
-    assert general["product_type_id"] is None
-    assert general["venue_id"] is None
 
-    product_scoped = by_citation[_TEST_CITATION + " (product-scoped)"]
-    assert product_scoped["id"] == str(rule_product_scoped.id)
-    assert product_scoped["product_type_id"] == str(spot_id)
-    assert product_scoped["venue_id"] is None
+def test_response_never_contains_a_regulatory_field(
+    client: TestClient, db_session: Session
+) -> None:
+    owner = _create_owner(db_session, _OWNER_A_IDENTIFIER)
+    venue = _make_venue(db_session)
+    product_type_id = _seeded_product_type_id(db_session, "SPOT")
+    _make_context(db_session, owner=owner, venue=venue, product_type_id=product_type_id)
+    db_session.commit()
 
-    venue_scoped = by_citation[_TEST_CITATION + " (venue-scoped)"]
-    assert venue_scoped["id"] == str(rule_venue_scoped.id)
-    assert venue_scoped["product_type_id"] is None
-    assert venue_scoped["venue_id"] == str(venue.id)
+    _login_as(client, _OWNER_A_IDENTIFIER)
+    response = client.get(CONTEXTS_URL)
+    assert response.status_code == 200
+    body = response.json()
 
-    product_and_venue_scoped = by_citation[_TEST_CITATION + " (product-and-venue-scoped)"]
-    assert product_and_venue_scoped["id"] == str(rule_product_and_venue_scoped.id)
-    assert product_and_venue_scoped["product_type_id"] == str(binary_id)
-    assert product_and_venue_scoped["venue_id"] == str(venue.id)
+    for forbidden_key in (
+        "jurisdiction",
+        "client_classification",
+        "regulatory_eligibility_status",
+        "regulatory_rules",
+    ):
+        assert forbidden_key not in body["items"][0]
 
 
 def test_venue_id_filter_is_applied(client: TestClient, db_session: Session) -> None:
@@ -386,70 +381,6 @@ def test_response_never_contains_technical_capability_fields(
         assert key not in item, (
             f"execution-context response leaked TechnicalCapability field {key!r}"
         )
-
-
-def test_listing_contexts_does_not_grow_query_count_with_more_rows(
-    client: TestClient, db_session: Session, auth_test_engine: Engine
-) -> None:
-    owner = _create_owner(db_session, _OWNER_A_IDENTIFIER)
-    venue = _make_venue(db_session)
-    spot_id = _seeded_product_type_id(db_session, "SPOT")
-
-    context = _make_context(
-        db_session, owner=owner, venue=venue, product_type_id=spot_id, account_key="ACC_BASE"
-    )
-    rule = RegulatoryRule(
-        jurisdiction=_TEST_JURISDICTION,
-        effect=RegulatoryRuleEffect.NOT_ELIGIBLE,
-        source_citation=_TEST_CITATION,
-        verified_at=datetime.now(UTC),
-    )
-    db_session.add(rule)
-    db_session.flush()
-    db_session.add(
-        ExecutionContextRegulatoryRule(execution_context_id=context.id, regulatory_rule_id=rule.id)
-    )
-    db_session.commit()
-
-    _login_as(client, _OWNER_A_IDENTIFIER)
-
-    def _count_queries() -> int:
-        counter = {"n": 0}
-
-        def _before_cursor_execute(*_args: object, **_kwargs: object) -> None:
-            counter["n"] += 1
-
-        event.listen(auth_test_engine, "before_cursor_execute", _before_cursor_execute)
-        try:
-            response = client.get(CONTEXTS_URL, params={"limit": 50, "offset": 0})
-            assert response.status_code == 200
-        finally:
-            event.remove(auth_test_engine, "before_cursor_execute", _before_cursor_execute)
-        return counter["n"]
-
-    before = _count_queries()
-
-    for i in range(3):
-        extra_context = _make_context(
-            db_session,
-            owner=owner,
-            venue=venue,
-            product_type_id=spot_id,
-            account_key=f"ACC_EXTRA_{i}",
-        )
-        db_session.add(
-            ExecutionContextRegulatoryRule(
-                execution_context_id=extra_context.id, regulatory_rule_id=rule.id
-            )
-        )
-    db_session.commit()
-
-    after = _count_queries()
-
-    assert before == after, (
-        "query count must stay constant as row count grows — a per-row query "
-        "would be an N+1 regression"
-    )
 
 
 def test_owner_cannot_list_another_owners_contexts(client: TestClient, db_session: Session) -> None:
@@ -523,3 +454,64 @@ def test_response_never_contains_secret_shaped_fields(
         lowered = key.lower()
         for bad in forbidden:
             assert bad not in lowered, f"response field {key!r} looks secret-shaped"
+
+
+def test_owner_with_no_contexts_gets_an_honest_empty_list(
+    client: TestClient, db_session: Session
+) -> None:
+    """Absence of any ExecutionContext row must never be presented as an
+    error or as a fabricated/default authorized context — a semantically
+    correct empty page, exactly like a filter matching nothing."""
+    _create_owner(db_session, _OWNER_A_IDENTIFIER)
+    _login_as(client, _OWNER_A_IDENTIFIER)
+
+    response = client.get(CONTEXTS_URL)
+    assert response.status_code == 200
+    assert response.json() == {"items": [], "total": 0, "limit": 50, "offset": 0}
+
+
+def test_listing_contexts_does_not_grow_query_count_with_more_rows(
+    client: TestClient, db_session: Session, auth_test_engine: Engine
+) -> None:
+    owner = _create_owner(db_session, _OWNER_A_IDENTIFIER)
+    venue = _make_venue(db_session)
+    spot_id = _seeded_product_type_id(db_session, "SPOT")
+    _make_context(
+        db_session, owner=owner, venue=venue, product_type_id=spot_id, account_key="ACC_BASE"
+    )
+    db_session.commit()
+
+    _login_as(client, _OWNER_A_IDENTIFIER)
+
+    def _count_queries() -> int:
+        counter = {"n": 0}
+
+        def _before_cursor_execute(*_args: object, **_kwargs: object) -> None:
+            counter["n"] += 1
+
+        event.listen(auth_test_engine, "before_cursor_execute", _before_cursor_execute)
+        try:
+            response = client.get(CONTEXTS_URL, params={"limit": 50, "offset": 0})
+            assert response.status_code == 200
+        finally:
+            event.remove(auth_test_engine, "before_cursor_execute", _before_cursor_execute)
+        return counter["n"]
+
+    before = _count_queries()
+
+    for i in range(3):
+        _make_context(
+            db_session,
+            owner=owner,
+            venue=venue,
+            product_type_id=spot_id,
+            account_key=f"ACC_EXTRA_{i}",
+        )
+    db_session.commit()
+
+    after = _count_queries()
+
+    assert before == after, (
+        "query count must stay constant as row count grows — a per-row query "
+        "would be an N+1 regression"
+    )
