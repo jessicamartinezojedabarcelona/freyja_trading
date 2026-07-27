@@ -107,7 +107,7 @@ def test_upgrade_downgrade_upgrade_cycle(temp_database_name: str) -> None:
             current = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-        assert current == "0011_capability_context"
+        assert current == "0012_remove_regulatory_engine"
 
         command.downgrade(cfg, "base")
         with engine.connect() as connection:
@@ -119,7 +119,7 @@ def test_upgrade_downgrade_upgrade_cycle(temp_database_name: str) -> None:
         command.upgrade(cfg, "head")
         with engine.connect() as connection:
             final = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert final == "0011_capability_context"
+        assert final == "0012_remove_regulatory_engine"
     finally:
         engine.dispose()
 
@@ -231,7 +231,7 @@ def test_upgrade_from_empty_to_head_reaches_expected_head_with_exact_seed(
             current = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            assert current == "0011_capability_context"
+            assert current == "0012_remove_regulatory_engine"
             counts = {
                 table: connection.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
                 for table in _CATALOG_TABLES
@@ -341,11 +341,15 @@ def test_upgrade_from_0010_to_0011_succeeds(temp_database_name: str) -> None:
 
 
 def test_0011_downgrade_upgrade_is_reversible(temp_database_name: str) -> None:
+    """Tests 0011's OWN downgrade/upgrade reversibility in isolation, pinned
+    to the 0011_capability_context revision explicitly (not "head", which has
+    since moved to 0012_remove_regulatory_engine — that revision's own
+    reversibility is covered separately below)."""
     temp_url = get_postgres_settings().url.set(database=temp_database_name)
     cfg = _alembic_config(temp_url)
     engine = create_engine(temp_url)
     try:
-        command.upgrade(cfg, "head")
+        command.upgrade(cfg, "0011_capability_context")
         with engine.connect() as connection:
             assert _existing_tables(connection, _CAPABILITY_TABLES) == set(_CAPABILITY_TABLES)
 
@@ -361,13 +365,249 @@ def test_0011_downgrade_upgrade_is_reversible(temp_database_name: str) -> None:
             }
             assert counts == _CANONICAL_COUNTS
 
-        command.upgrade(cfg, "head")
+        command.upgrade(cfg, "0011_capability_context")
         with engine.connect() as connection:
             assert _existing_tables(connection, _CAPABILITY_TABLES) == set(_CAPABILITY_TABLES)
             current = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
             assert current == "0011_capability_context"
+    finally:
+        engine.dispose()
+
+
+_REMOVED_REGULATORY_TABLES = (
+    "freyja2_regulatory_rules",
+    "freyja2_execution_context_regulatory_rules",
+)
+_EXECUTION_CONTEXT_REGULATORY_COLUMNS = (
+    "jurisdiction",
+    "client_classification",
+    "regulatory_eligibility_status",
+)
+
+
+def test_upgrade_from_0011_to_0012_removes_regulatory_engine(temp_database_name: str) -> None:
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, "0011_capability_context")
+        command.upgrade(cfg, "0012_remove_regulatory_engine")  # must not raise
+
+        with engine.connect() as connection:
+            current = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+            assert current == "0012_remove_regulatory_engine"
+            assert _existing_tables(connection, _REMOVED_REGULATORY_TABLES) == set()
+            for column in _EXECUTION_CONTEXT_REGULATORY_COLUMNS:
+                assert not _has_column(connection, "freyja2_execution_contexts", column)
+            # Never touches catalog/seed, provider mappings, or
+            # freyja2_technical_capabilities.
+            assert _existing_tables(connection, _PROVIDER_TABLES) == set(_PROVIDER_TABLES)
+            assert inspect(connection).has_table("freyja2_technical_capabilities")
+            counts = {
+                table: connection.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
+                for table in _CATALOG_TABLES
+            }
+            assert counts == _CANONICAL_COUNTS
+    finally:
+        engine.dispose()
+
+
+def test_0012_downgrade_upgrade_is_reversible(temp_database_name: str) -> None:
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, "head")
+        with engine.connect() as connection:
+            assert _existing_tables(connection, _REMOVED_REGULATORY_TABLES) == set()
+            for column in _EXECUTION_CONTEXT_REGULATORY_COLUMNS:
+                assert not _has_column(connection, "freyja2_execution_contexts", column)
+
+        command.downgrade(cfg, "0011_capability_context")
+        with engine.connect() as connection:
+            assert _existing_tables(connection, _REMOVED_REGULATORY_TABLES) == set(
+                _REMOVED_REGULATORY_TABLES
+            )
+            for column in _EXECUTION_CONTEXT_REGULATORY_COLUMNS:
+                assert _has_column(connection, "freyja2_execution_contexts", column)
+            # Existing ExecutionContext rows (none here, but the seed/
+            # catalog/provider data) remain untouched by the round trip.
+            counts = {
+                table: connection.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
+                for table in _CATALOG_TABLES
+            }
+            assert counts == _CANONICAL_COUNTS
+
+        command.upgrade(cfg, "head")
+        with engine.connect() as connection:
+            assert _existing_tables(connection, _REMOVED_REGULATORY_TABLES) == set()
+            current = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+            assert current == "0012_remove_regulatory_engine"
+    finally:
+        engine.dispose()
+
+
+def test_0012_upgrade_aborts_and_preserves_everything_when_regulatory_data_present(
+    temp_database_name: str,
+) -> None:
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, "0011_capability_context")
+
+        rule_id = uuid.uuid4()
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO freyja2_regulatory_rules "
+                    "(id, jurisdiction, effect, source_citation, verified_at) "
+                    "VALUES (:id, 'TEST_XX', 'NOT_ELIGIBLE', 'TEST fixture citation', now())"
+                ),
+                {"id": rule_id},
+            )
+
+        with pytest.raises(RuntimeError) as excinfo:
+            command.upgrade(cfg, "0012_remove_regulatory_engine")
+        # Row content (jurisdiction/citation values) must never leak into the
+        # abort message — only counts are reported.
+        assert "TEST_XX" not in str(excinfo.value)
+        assert "TEST fixture citation" not in str(excinfo.value)
+
+        with engine.connect() as connection:
+            current = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+            assert current == "0011_capability_context", "no partial upgrade may have occurred"
+            count = connection.execute(
+                text("SELECT COUNT(*) FROM freyja2_regulatory_rules")
+            ).scalar_one()
+            assert count == 1, "the regulatory row must survive the aborted upgrade untouched"
+            assert inspect(connection).has_table("freyja2_execution_context_regulatory_rules")
+    finally:
+        engine.dispose()
+
+
+def test_0012_upgrade_aborts_when_execution_context_exists_with_no_regulatory_rows(
+    temp_database_name: str,
+) -> None:
+    """Independent-audit regression: an ExecutionContext row with NO
+    RegulatoryRule/association attached used to sail past the old guard
+    (which only checked the two regulatory tables) and then silently lose
+    jurisdiction/client_classification/regulatory_eligibility_status when
+    the columns were dropped underneath it. upgrade() must now refuse to run
+    at all while freyja2_execution_contexts has any row, regardless of
+    whether any regulatory table has data."""
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, "0011_capability_context")
+
+        owner_id = uuid.uuid4()
+        venue_id = uuid.uuid4()
+        context_id = uuid.uuid4()
+        with engine.begin() as connection:
+            product_type_id = connection.execute(
+                text("SELECT id FROM freyja2_product_types WHERE code = 'SPOT'")
+            ).scalar_one()
+            connection.execute(
+                text(
+                    "INSERT INTO auth_users (id, identifier, password_hash, created_via) "
+                    "VALUES (:id, 'test-ec-guard-owner@example.test', 'not-a-real-hash', "
+                    "'SELF_REGISTRATION')"
+                ),
+                {"id": owner_id},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO freyja2_venues (id, code, display_name, venue_type, is_active) "
+                    "VALUES (:id, 'TEST_MIG_EC_GUARD_VENUE', 'Test Venue', 'EXCHANGE', true)"
+                ),
+                {"id": venue_id},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO freyja2_execution_contexts "
+                    "(id, owner_id, venue_id, account_key, execution_environment, "
+                    "product_type_id, jurisdiction, client_classification) "
+                    "VALUES (:id, :owner_id, :venue_id, 'TEST_ACC', 'DEMO', :product_type_id, "
+                    "'TEST_XX', 'TEST_RETAIL')"
+                ),
+                {
+                    "id": context_id,
+                    "owner_id": owner_id,
+                    "venue_id": venue_id,
+                    "product_type_id": product_type_id,
+                },
+            )
+
+        with pytest.raises(RuntimeError) as excinfo:
+            command.upgrade(cfg, "0012_remove_regulatory_engine")
+        assert "TEST_XX" not in str(excinfo.value)
+        assert "TEST_RETAIL" not in str(excinfo.value)
+
+        with engine.connect() as connection:
+            current = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+            assert current == "0011_capability_context", "no partial upgrade may have occurred"
+
+            row = connection.execute(
+                text(
+                    "SELECT jurisdiction, client_classification, account_key "
+                    "FROM freyja2_execution_contexts WHERE id = :id"
+                ),
+                {"id": context_id},
+            ).one()
+            assert row[0] == "TEST_XX"
+            assert row[1] == "TEST_RETAIL"
+            assert row[2] == "TEST_ACC"
+
+            for column in _EXECUTION_CONTEXT_REGULATORY_COLUMNS:
+                assert _has_column(connection, "freyja2_execution_contexts", column)
+            assert _existing_tables(connection, _REMOVED_REGULATORY_TABLES) == set(
+                _REMOVED_REGULATORY_TABLES
+            )
+    finally:
+        engine.dispose()
+
+
+def test_0012_upgrade_succeeds_when_execution_contexts_and_regulatory_tables_are_all_empty(
+    temp_database_name: str,
+) -> None:
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, "0011_capability_context")
+        with engine.connect() as connection:
+            assert (
+                connection.execute(
+                    text("SELECT COUNT(*) FROM freyja2_execution_contexts")
+                ).scalar_one()
+                == 0
+            )
+            assert (
+                connection.execute(
+                    text("SELECT COUNT(*) FROM freyja2_regulatory_rules")
+                ).scalar_one()
+                == 0
+            )
+
+        command.upgrade(cfg, "0012_remove_regulatory_engine")  # must not raise
+
+        with engine.connect() as connection:
+            current = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+            assert current == "0012_remove_regulatory_engine"
     finally:
         engine.dispose()
 
