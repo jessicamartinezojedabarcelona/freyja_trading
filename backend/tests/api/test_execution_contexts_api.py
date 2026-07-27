@@ -320,6 +320,69 @@ def test_response_never_contains_a_regulatory_field(
         assert forbidden_key not in body["items"][0]
 
 
+def test_venue_id_filter_is_applied(client: TestClient, db_session: Session) -> None:
+    owner = _create_owner(db_session, _OWNER_A_IDENTIFIER)
+    venue_a = _make_venue(db_session, "TEST_EC_API_VENUE_A")
+    venue_b = _make_venue(db_session, "TEST_EC_API_VENUE_B")
+    product_type_id = _seeded_product_type_id(db_session, "SPOT")
+
+    _make_context(db_session, owner=owner, venue=venue_a, product_type_id=product_type_id)
+    _make_context(
+        db_session,
+        owner=owner,
+        venue=venue_b,
+        product_type_id=product_type_id,
+        account_key="TEST_ACCOUNT_2",
+    )
+    db_session.commit()
+
+    _login_as(client, _OWNER_A_IDENTIFIER)
+    body = client.get(CONTEXTS_URL, params={"venue_id": str(venue_a.id)}).json()
+    assert body["total"] == 1
+    assert body["items"][0]["venue"]["id"] == str(venue_a.id)
+
+
+def test_invalid_execution_environment_filter_returns_422(
+    client: TestClient, db_session: Session
+) -> None:
+    _create_owner(db_session, _OWNER_A_IDENTIFIER)
+    _login_as(client, _OWNER_A_IDENTIFIER)
+    response = client.get(CONTEXTS_URL, params={"execution_environment": "NOT_A_REAL_ENVIRONMENT"})
+    assert response.status_code == 422
+
+
+def test_response_never_contains_technical_capability_fields(
+    client: TestClient, db_session: Session
+) -> None:
+    """ExecutionContext and TechnicalCapability are separate concerns
+    (POINT1-CAPABILITY-001) — an /execution-contexts response must never
+    carry technical-capability status fields."""
+    owner = _create_owner(db_session, _OWNER_A_IDENTIFIER)
+    venue = _make_venue(db_session)
+    product_type_id = _seeded_product_type_id(db_session, "SPOT")
+    _make_context(db_session, owner=owner, venue=venue, product_type_id=product_type_id)
+    db_session.commit()
+
+    _login_as(client, _OWNER_A_IDENTIFIER)
+    item = client.get(CONTEXTS_URL).json()["items"][0]
+
+    forbidden_keys = (
+        "market_data_status",
+        "signal_detection_status",
+        "backtest_status",
+        "demo_execution_status",
+        "real_execution_status",
+        "settlement_status",
+        "reason_unavailable",
+        "timeframe",
+        "instrument",
+    )
+    for key in forbidden_keys:
+        assert key not in item, (
+            f"execution-context response leaked TechnicalCapability field {key!r}"
+        )
+
+
 def test_owner_cannot_list_another_owners_contexts(client: TestClient, db_session: Session) -> None:
     owner_a = _create_owner(db_session, _OWNER_A_IDENTIFIER)
     _create_owner(db_session, _OWNER_B_IDENTIFIER)

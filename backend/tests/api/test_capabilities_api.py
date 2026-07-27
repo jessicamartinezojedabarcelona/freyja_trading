@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
@@ -257,6 +257,170 @@ def test_future_effective_from_is_not_current_even_without_effective_to(
         },
     ).json()
     assert history_response["total"] == 1
+
+
+def test_timeframe_id_filter_is_applied(client: TestClient, db_session: Session) -> None:
+    _login(client, db_session)
+    instrument_id = _seeded_instrument_id(db_session, "CRYPTO", "SPOT", "BTC/USDT")
+    one_minute_id = _seeded_timeframe_id(db_session, "1m")
+    five_minute_id = _seeded_timeframe_id(db_session, "5m")
+    venue = _make_venue(db_session)
+
+    db_session.add_all(
+        [
+            TechnicalCapability(
+                instrument_id=instrument_id,
+                timeframe_id=one_minute_id,
+                venue_id=venue.id,
+                market_data_status=CapabilityStatus.SUPPORTED,
+            ),
+            TechnicalCapability(
+                instrument_id=instrument_id,
+                timeframe_id=five_minute_id,
+                venue_id=venue.id,
+                market_data_status=CapabilityStatus.NOT_EVALUATED,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    response = client.get(CAPABILITIES_URL, params={"timeframe_id": str(one_minute_id)})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert body["items"][0]["timeframe"]["id"] == str(one_minute_id)
+
+
+def test_response_never_contains_execution_context_fields(
+    client: TestClient, db_session: Session
+) -> None:
+    """Capabilities and ExecutionContext are separate concerns (POINT1-
+    CAPABILITY-001) — a /capabilities response must never carry
+    activation/eligibility/credential fields that belong only to
+    ExecutionContext."""
+    _login(client, db_session)
+    instrument_id = _seeded_instrument_id(db_session, "CRYPTO", "SPOT", "BTC/USDT")
+    timeframe_id = _seeded_timeframe_id(db_session, "1m")
+    venue = _make_venue(db_session)
+    db_session.add(
+        TechnicalCapability(
+            instrument_id=instrument_id,
+            timeframe_id=timeframe_id,
+            venue_id=venue.id,
+            market_data_status=CapabilityStatus.SUPPORTED,
+        )
+    )
+    db_session.commit()
+
+    response = client.get(CAPABILITIES_URL, params={"instrument_id": str(instrument_id)})
+    item = response.json()["items"][0]
+
+    forbidden_keys = (
+        "activation_status",
+        "credentials_status",
+        "venue_permission_status",
+        "regulatory_eligibility_status",
+        "owner_authorization_status",
+        "suspension_reasons",
+        "jurisdiction",
+        "client_classification",
+        "account_key",
+        "execution_environment",
+    )
+    for key in forbidden_keys:
+        assert key not in item, f"capability response leaked ExecutionContext field {key!r}"
+
+
+def test_response_never_contains_secret_shaped_fields(
+    client: TestClient, db_session: Session
+) -> None:
+    _login(client, db_session)
+    instrument_id = _seeded_instrument_id(db_session, "CRYPTO", "SPOT", "BTC/USDT")
+    timeframe_id = _seeded_timeframe_id(db_session, "1m")
+    venue = _make_venue(db_session)
+    db_session.add(
+        TechnicalCapability(
+            instrument_id=instrument_id,
+            timeframe_id=timeframe_id,
+            venue_id=venue.id,
+            market_data_status=CapabilityStatus.SUPPORTED,
+        )
+    )
+    db_session.commit()
+
+    response = client.get(CAPABILITIES_URL, params={"instrument_id": str(instrument_id)})
+    body = response.json()
+
+    def _walk(value: object) -> Iterator[str]:
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                yield key
+                yield from _walk(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                yield from _walk(nested)
+
+    forbidden = ("password", "secret", "token", "api_key", "apikey", "credential_value", "hash")
+    for key in _walk(body):
+        lowered = key.lower()
+        for bad in forbidden:
+            assert bad not in lowered, f"response field {key!r} looks secret-shaped"
+
+
+def test_listing_capabilities_does_not_grow_query_count_with_more_rows(
+    client: TestClient, db_session: Session, auth_test_engine: Engine
+) -> None:
+    _login(client, db_session)
+    instrument_id = _seeded_instrument_id(db_session, "CRYPTO", "SPOT", "BTC/USDT")
+    timeframe_ids = [
+        _seeded_timeframe_id(db_session, code) for code in ("1m", "5m", "15m", "1h", "4h")
+    ]
+    venue = _make_venue(db_session)
+    db_session.add(
+        TechnicalCapability(
+            instrument_id=instrument_id,
+            timeframe_id=timeframe_ids[0],
+            venue_id=venue.id,
+            market_data_status=CapabilityStatus.SUPPORTED,
+        )
+    )
+    db_session.commit()
+
+    def _count_queries() -> int:
+        counter = {"n": 0}
+
+        def _before_cursor_execute(*_args: object, **_kwargs: object) -> None:
+            counter["n"] += 1
+
+        event.listen(auth_test_engine, "before_cursor_execute", _before_cursor_execute)
+        try:
+            response = client.get(CAPABILITIES_URL, params={"limit": 50, "offset": 0})
+            assert response.status_code == 200
+        finally:
+            event.remove(auth_test_engine, "before_cursor_execute", _before_cursor_execute)
+        return counter["n"]
+
+    before = _count_queries()
+
+    db_session.add_all(
+        [
+            TechnicalCapability(
+                instrument_id=instrument_id,
+                timeframe_id=timeframe_id,
+                venue_id=venue.id,
+                market_data_status=CapabilityStatus.SUPPORTED,
+            )
+            for timeframe_id in timeframe_ids[1:]
+        ]
+    )
+    db_session.commit()
+
+    after = _count_queries()
+
+    assert before == after, (
+        "query count must stay constant as row count grows — a per-row query "
+        "would be an N+1 regression"
+    )
 
 
 def test_get_capability_404_for_missing_id(client: TestClient, db_session: Session) -> None:

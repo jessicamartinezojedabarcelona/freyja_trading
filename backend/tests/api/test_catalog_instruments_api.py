@@ -198,6 +198,75 @@ def test_pagination_order_is_stable_across_pages(client: TestClient, db_session:
     ]
 
 
+def test_is_active_filter_true_false_and_omitted(
+    client: TestClient, db_session: Session, _extra_test_instrument: uuid.UUID
+) -> None:
+    _login(client, db_session)
+    db_session.execute(
+        text("UPDATE freyja2_instruments SET is_active = false WHERE instrument_id = :id"),
+        {"id": _extra_test_instrument},
+    )
+    db_session.commit()
+
+    active_only = client.get(INSTRUMENTS_URL, params={"symbol": _TEST_SYMBOL, "is_active": "true"})
+    assert active_only.json()["total"] == 0
+
+    inactive_only = client.get(
+        INSTRUMENTS_URL, params={"symbol": _TEST_SYMBOL, "is_active": "false"}
+    )
+    assert inactive_only.json()["total"] == 1
+    assert inactive_only.json()["items"][0]["is_active"] is False
+
+    omitted = client.get(INSTRUMENTS_URL, params={"symbol": _TEST_SYMBOL})
+    assert omitted.json()["total"] == 1, "omitting is_active must not implicitly filter"
+
+
+def test_is_active_rejects_non_boolean_value(client: TestClient, db_session: Session) -> None:
+    _login(client, db_session)
+    response = client.get(INSTRUMENTS_URL, params={"is_active": "maybe"})
+    assert response.status_code == 422
+
+
+def test_invalid_market_and_product_type_codes_return_empty_not_error(
+    client: TestClient, db_session: Session
+) -> None:
+    _login(client, db_session)
+    response = client.get(INSTRUMENTS_URL, params={"market_code": "DOES_NOT_EXIST"})
+    assert response.status_code == 200
+    assert response.json() == {"items": [], "total": 0, "limit": 50, "offset": 0}
+
+    response = client.get(INSTRUMENTS_URL, params={"product_type_code": "DOES_NOT_EXIST"})
+    assert response.status_code == 200
+    assert response.json() == {"items": [], "total": 0, "limit": 50, "offset": 0}
+
+
+def test_response_never_contains_secret_shaped_fields(
+    client: TestClient, db_session: Session
+) -> None:
+    _login(client, db_session)
+    response = client.get(
+        INSTRUMENTS_URL, params={"market_code": "CRYPTO", "product_type_code": "SPOT"}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] > 0
+
+    def _walk(value: object) -> Iterator[str]:
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                yield key
+                yield from _walk(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                yield from _walk(nested)
+
+    forbidden = ("password", "secret", "token", "api_key", "apikey", "credential_value", "hash")
+    for key in _walk(body):
+        lowered = key.lower()
+        for bad in forbidden:
+            assert bad not in lowered, f"response field {key!r} looks secret-shaped"
+
+
 def test_listing_instruments_does_not_grow_query_count_with_more_rows(
     client: TestClient, db_session: Session, auth_test_engine: Engine
 ) -> None:

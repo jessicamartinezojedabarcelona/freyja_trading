@@ -526,6 +526,100 @@ def test_reapplying_verification_across_full_seed_is_idempotent(
     assert before == after
 
 
+# --- Item 1b: idempotent re-application of the real migration body ---------
+
+
+def test_reapplying_0007_migration_body_is_idempotent(
+    isolated_migrated_database: tuple[Config, Engine],
+) -> None:
+    """Beyond re-verifying (Item 1 above), re-executing 0007_seed_catalog_v1's
+    actual upgrade() against a database that already holds the exact v1 seed
+    must not fail, duplicate rows, or alter anything — insert-or-verify, not
+    insert-or-error. `command.stamp` only rewinds the alembic_version
+    pointer; it never touches a single seed row itself."""
+    cfg, engine = isolated_migrated_database
+    command.upgrade(cfg, "0007_seed_catalog_v1")
+
+    with engine.connect() as connection:
+        before = _snapshot_catalog(connection)
+
+    command.stamp(cfg, "0006_catalog_display_names")
+    command.upgrade(cfg, "0007_seed_catalog_v1")  # re-runs the same upgrade() body
+
+    with engine.connect() as connection:
+        after = _snapshot_catalog(connection)
+        assert _current_revision(connection) == "0007_seed_catalog_v1"
+
+    assert after == before
+
+
+# --- Item 1c: timestamps are excluded from the canonical contract ----------
+
+
+def test_timestamps_are_never_part_of_the_canonical_contract(
+    isolated_seeded_connection: Connection,
+) -> None:
+    """created_at/updated_at are database-generated bookkeeping, never a
+    natural key or compare_column (catalog_seed_v1.py, line ~497) — mutating
+    them on seeded rows must never be flagged as a divergence, and a full
+    fail-closed downgrade must still succeed cleanly afterwards."""
+    connection = isolated_seeded_connection
+
+    market_table_spec = next(
+        spec
+        for spec in seed_spec.CATALOG_ROW_SPECS
+        if spec.table.name == "freyja2_underlying_markets"
+    )
+    instrument_table_spec = next(
+        spec for spec in seed_spec.CATALOG_ROW_SPECS if spec.table.name == "freyja2_instruments"
+    )
+
+    connection.execute(
+        text(
+            "UPDATE freyja2_underlying_markets "
+            "SET created_at = created_at - INTERVAL '10 years', "
+            "updated_at = now() + INTERVAL '10 years'"
+        )
+    )
+    connection.execute(
+        text(
+            "UPDATE freyja2_instruments "
+            "SET created_at = created_at - INTERVAL '10 years', "
+            "updated_at = now() + INTERVAL '10 years'"
+        )
+    )
+    connection.commit()
+
+    for row in market_table_spec.rows:
+        assert seed_spec.verify_row(
+            connection,
+            market_table_spec.table,
+            market_table_spec.id_column,
+            market_table_spec.natural_key_columns,
+            row,
+            market_table_spec.compare_columns,
+        )
+    for row in instrument_table_spec.rows:
+        assert seed_spec.verify_row(
+            connection,
+            instrument_table_spec.table,
+            instrument_table_spec.id_column,
+            instrument_table_spec.natural_key_columns,
+            row,
+            instrument_table_spec.compare_columns,
+        )
+    # verify_row's SELECTs auto-began a transaction on this connection —
+    # commit it before a *different* engine runs the downgrade below, or
+    # that DROP TABLE deadlocks waiting on this connection's own lock.
+    connection.commit()
+
+    cfg = _alembic_config()
+    cfg.attributes["database_url"] = connection.engine.url
+    command.downgrade(cfg, "0006_catalog_display_names")  # must not raise
+    with connection.engine.connect() as post_downgrade_connection:
+        assert _count(post_downgrade_connection, "freyja2_underlying_markets") == 0
+
+
 # --- Items 2-7: is_active=false is a divergence, per table -----------------
 
 
