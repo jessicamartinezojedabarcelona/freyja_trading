@@ -41,16 +41,25 @@ depends_on: str | Sequence[str] | None = None
 #
 # It never touches freyja2_instruments, any catalog/seed table, any
 # freyja2_venues/freyja2_data_sources/provider-mapping table, or
-# freyja2_technical_capabilities. Existing freyja2_execution_contexts rows
-# are preserved (only 3 of their columns are dropped; the rows themselves
-# are never deleted).
+# freyja2_technical_capabilities.
 #
-# SAFETY (fail-closed): if freyja2_regulatory_rules or
-# freyja2_execution_context_regulatory_rules contain any row, upgrade()
-# aborts BEFORE issuing any DDL — this migration has no replacement internal
-# regulatory model to migrate that data into, and never silently discards
-# it. The abort message reports only row COUNTS, never row content (no
-# jurisdiction, citation, or classification value is ever printed).
+# SAFETY (fail-closed, corrected after independent audit 2026-07-27): the
+# original version of this migration only aborted when
+# freyja2_regulatory_rules or freyja2_execution_context_regulatory_rules had
+# rows, then unconditionally dropped jurisdiction/client_classification/
+# regulatory_eligibility_status from every freyja2_execution_contexts row —
+# silent data loss for any ExecutionContext that existed without an
+# associated RegulatoryRule. upgrade() now also aborts if
+# freyja2_execution_contexts itself has ANY row, before issuing any DDL. Do
+# NOT describe this migration as "preserving" ExecutionContext rows: it does
+# not migrate or drop rows, it refuses to run at all unless
+# freyja2_execution_contexts (and both regulatory tables) are completely
+# empty. This migration has no replacement internal regulatory model and no
+# migration path for existing regulatory or execution-context data — it is
+# schema-only, exactly like 0011 was. The abort message reports only row
+# COUNTS and table/column NAMES, never row content (no jurisdiction,
+# citation, classification, account_key, or any other column value is ever
+# printed).
 #
 # REVERSIBILITY LIMIT (downgrade): downgrade() structurally recreates the
 # 0011 schema (tables, columns, constraints, enums) exactly, but never
@@ -66,32 +75,47 @@ depends_on: str | Sequence[str] | None = None
 
 
 class RegulatoryDataPresentError(RuntimeError):
-    """Raised when the regulatory tables are not empty at upgrade time. See
-    the module docstring for the required manual remediation — this
-    migration never deletes regulatory data silently."""
+    """Raised when freyja2_regulatory_rules,
+    freyja2_execution_context_regulatory_rules, or freyja2_execution_contexts
+    are not empty at upgrade time. See the module docstring for the required
+    manual remediation — this migration never deletes or alters any of that
+    data silently, and never proceeds partially."""
 
 
-def _fail_if_regulatory_data_present() -> None:
+def _fail_if_data_present_that_would_be_lost() -> None:
     bind = op.get_bind()
     rule_count = bind.execute(sa.text("SELECT COUNT(*) FROM freyja2_regulatory_rules")).scalar_one()
     association_count = bind.execute(
         sa.text("SELECT COUNT(*) FROM freyja2_execution_context_regulatory_rules")
     ).scalar_one()
-    if rule_count or association_count:
+    # An ExecutionContext row with no RegulatoryRule/association attached
+    # would otherwise sail through the check above untouched, only to have
+    # jurisdiction/client_classification/regulatory_eligibility_status
+    # silently dropped from underneath it below — that is exactly the
+    # silent-data-loss bug this guard exists to prevent.
+    execution_context_count = bind.execute(
+        sa.text("SELECT COUNT(*) FROM freyja2_execution_contexts")
+    ).scalar_one()
+    if rule_count or association_count or execution_context_count:
         raise RegulatoryDataPresentError(
             "POINT1-CAPABILITY-API-CORRECTION-001: refusing to upgrade past "
             "0011_capability_context — freyja2_regulatory_rules has "
-            f"{rule_count} row(s) and freyja2_execution_context_regulatory_rules "
-            f"has {association_count} row(s) (counts only; row content is "
-            "intentionally never included in this error). This migration has "
-            "no automatic replacement for that data and never deletes it "
-            "silently. Export/archive the existing rows out-of-band first, "
-            "then re-run this migration against an empty regulatory dataset."
+            f"{rule_count} row(s), freyja2_execution_context_regulatory_rules "
+            f"has {association_count} row(s), and freyja2_execution_contexts "
+            f"has {execution_context_count} row(s) (counts and structural "
+            "names only; row content is never included in this error). This "
+            "migration is schema-only and has no automatic way to migrate "
+            "regulatory data or ExecutionContext rows into the corrected "
+            "shape — it never deletes, drops columns from, or otherwise "
+            "alters existing data. Every one of these tables must be empty "
+            "before this migration can run. Archive/export/handle the "
+            "existing data out-of-band first, then re-run this migration "
+            "against a fully empty dataset."
         )
 
 
 def upgrade() -> None:
-    _fail_if_regulatory_data_present()
+    _fail_if_data_present_that_would_be_lost()
 
     op.drop_index(
         "ix_freyja2_execution_context_regulatory_rules_rule_id",

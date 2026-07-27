@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from freyja_backend.api.deps import CurrentUser, DbSession, PageParamsDep
 from freyja_backend.application import execution_context_service
@@ -17,12 +17,34 @@ router = APIRouter(prefix="/execution-contexts", tags=["execution-contexts"])
 # branch to accidentally leak through a different message.
 _CONTEXT_NOT_FOUND = "Contexto de ejecución no encontrado."
 
+# POINT1-CAPABILITY-API-CORRECTION-001 (corrected after independent audit):
+# this is the exhaustive, current contract for GET /execution-contexts query
+# params. A retired filter (jurisdiction, client_classification,
+# regulatory_eligibility_status — removed along with the internal
+# regulatory-eligibility engine) or any other unrecognized parameter must
+# fail closed with 422, never be silently ignored — silently ignoring a
+# filter a client still sends risks that client believing the filter was
+# applied when it was not.
+_ALLOWED_LIST_QUERY_PARAMS = frozenset(
+    {"limit", "offset", "venue_id", "product_type_id", "execution_environment"}
+)
+
+
+def _reject_unknown_query_params(request: Request) -> None:
+    unknown = sorted(set(request.query_params.keys()) - _ALLOWED_LIST_QUERY_PARAMS)
+    if unknown:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Parámetro(s) de consulta no reconocido(s): {unknown}",
+        )
+
 
 @router.get("", response_model=Page[ExecutionContextOut])
 def list_execution_contexts(
     db: DbSession,
     current_user: CurrentUser,
     page: PageParamsDep,
+    _reject_unknown: Annotated[None, Depends(_reject_unknown_query_params)],
     venue_id: Annotated[UUID | None, Query()] = None,
     product_type_id: Annotated[UUID | None, Query()] = None,
     execution_environment: Annotated[ExecutionEnvironment | None, Query()] = None,

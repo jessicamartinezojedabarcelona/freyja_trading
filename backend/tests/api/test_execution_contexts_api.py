@@ -229,14 +229,21 @@ def test_not_configured_and_not_evaluated_are_never_presented_as_denied(
     assert item["venue_permission_status"] != "DENIED"
 
 
-def test_api_does_not_accept_or_return_regulatory_fields(
-    client: TestClient, db_session: Session
+@pytest.mark.parametrize(
+    "removed_param,removed_value",
+    [
+        ("jurisdiction", "ANY_XX"),
+        ("client_classification", "ANY_RETAIL"),
+        ("regulatory_eligibility_status", "NOT_EVALUATED"),
+    ],
+)
+def test_removed_regulatory_filters_return_422_not_silently_ignored(
+    client: TestClient, db_session: Session, removed_param: str, removed_value: str
 ) -> None:
-    """POINT1-CAPABILITY-API-CORRECTION-001: jurisdiction/client_classification
-    filters are not part of this endpoint's contract (unknown query params
-    are simply ignored, never erroring or silently re-filtering), and the
-    response body must never contain a regulatory field — there is no
-    internal regulatory-eligibility engine anymore."""
+    """POINT1-CAPABILITY-API-CORRECTION-001 (corrected after independent
+    audit): a filter this endpoint no longer supports must fail closed with
+    422 — silently ignoring it would let an old client believe the filter
+    had been applied when it was not."""
     owner = _create_owner(db_session, _OWNER_A_IDENTIFIER)
     venue = _make_venue(db_session)
     product_type_id = _seeded_product_type_id(db_session, "SPOT")
@@ -244,12 +251,65 @@ def test_api_does_not_accept_or_return_regulatory_fields(
     db_session.commit()
 
     _login_as(client, _OWNER_A_IDENTIFIER)
+    response = client.get(CONTEXTS_URL, params={removed_param: removed_value})
+    assert response.status_code == 422
+
+
+def test_unknown_arbitrary_query_param_returns_422(client: TestClient, db_session: Session) -> None:
+    owner = _create_owner(db_session, _OWNER_A_IDENTIFIER)
+    venue = _make_venue(db_session)
+    product_type_id = _seeded_product_type_id(db_session, "SPOT")
+    _make_context(db_session, owner=owner, venue=venue, product_type_id=product_type_id)
+    db_session.commit()
+
+    _login_as(client, _OWNER_A_IDENTIFIER)
+    response = client.get(CONTEXTS_URL, params={"totally_made_up_filter": "x"})
+    assert response.status_code == 422
+
+
+def test_valid_filters_still_return_200_and_filter_correctly(
+    client: TestClient, db_session: Session
+) -> None:
+    owner = _create_owner(db_session, _OWNER_A_IDENTIFIER)
+    venue = _make_venue(db_session)
+    spot_id = _seeded_product_type_id(db_session, "SPOT")
+    binary_id = _seeded_product_type_id(db_session, "BINARY_OPTION")
+    _make_context(db_session, owner=owner, venue=venue, product_type_id=spot_id)
+    _make_context(
+        db_session, owner=owner, venue=venue, product_type_id=binary_id, account_key="ACC_2"
+    )
+    db_session.commit()
+
+    _login_as(client, _OWNER_A_IDENTIFIER)
     response = client.get(
-        CONTEXTS_URL, params={"jurisdiction": "ANY_XX", "client_classification": "ANY_RETAIL"}
+        CONTEXTS_URL,
+        params={
+            "venue_id": str(venue.id),
+            "product_type_id": str(spot_id),
+            "execution_environment": "DEMO",
+            "limit": 10,
+            "offset": 0,
+        },
     )
     assert response.status_code == 200
     body = response.json()
-    assert body["total"] == 1, "unknown filters must be ignored, never applied or erroring"
+    assert body["total"] == 1
+    assert body["items"][0]["product_type"]["code"] == "SPOT"
+
+
+def test_response_never_contains_a_regulatory_field(
+    client: TestClient, db_session: Session
+) -> None:
+    owner = _create_owner(db_session, _OWNER_A_IDENTIFIER)
+    venue = _make_venue(db_session)
+    product_type_id = _seeded_product_type_id(db_session, "SPOT")
+    _make_context(db_session, owner=owner, venue=venue, product_type_id=product_type_id)
+    db_session.commit()
+
+    _login_as(client, _OWNER_A_IDENTIFIER)
+    response = client.get(CONTEXTS_URL)
+    assert response.status_code == 200
+    body = response.json()
 
     for forbidden_key in (
         "jurisdiction",
