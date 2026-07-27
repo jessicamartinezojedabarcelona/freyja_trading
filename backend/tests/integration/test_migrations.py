@@ -372,6 +372,213 @@ def test_0011_downgrade_upgrade_is_reversible(temp_database_name: str) -> None:
         engine.dispose()
 
 
+def test_sequential_walk_upgrades_and_downgrades_one_revision_at_a_time(
+    temp_database_name: str,
+) -> None:
+    """POINT1-TEST-001: every Freyja 2.0 migration must apply cleanly one
+    step at a time in both directions, not merely as part of a single
+    upgrade(head)/downgrade(base) jump — a broken intermediate revision
+    could otherwise hide behind Alembic's own step-chaining."""
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        script = ScriptDirectory.from_config(cfg)
+        revisions = list(script.walk_revisions(base="base", head="head"))
+        ordered = [r.revision for r in reversed(revisions)]
+        assert len(ordered) >= 11
+
+        for revision in ordered:
+            command.upgrade(cfg, revision)
+            with engine.connect() as connection:
+                current = connection.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).scalar_one()
+                assert current == revision
+
+        for revision in reversed(ordered[:-1]):
+            command.downgrade(cfg, revision)
+            with engine.connect() as connection:
+                current = connection.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).scalar_one()
+                assert current == revision
+
+        command.downgrade(cfg, "base")
+        with engine.connect() as connection:
+            remaining = connection.execute(
+                text("SELECT COUNT(*) FROM alembic_version")
+            ).scalar_one()
+            assert remaining == 0
+    finally:
+        engine.dispose()
+
+
+def test_catalog_provider_capability_migrations_never_alter_unrelated_auth_data(
+    temp_database_name: str,
+) -> None:
+    """A manually-created auth user, present before any catalog table
+    exists (0004), must survive byte-for-byte through the entire
+    catalog/seed/provider/capability build-out (0005-0011) and back down
+    again — proving those migrations only ever add their own tables and
+    never touch auth_users via an incidental ALTER, CASCADE, or trigger."""
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, "0004_remove_email_verification")
+
+        user_id = uuid.uuid4()
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO auth_users (id, identifier, password_hash, created_via) "
+                    "VALUES (:id, 'legacy@example.test', 'not-a-real-hash', 'SELF_REGISTRATION')"
+                ),
+                {"id": user_id},
+            )
+
+        def _snapshot_user(connection: Connection) -> tuple[object, ...]:
+            row = connection.execute(
+                text(
+                    "SELECT identifier, password_hash, is_active, created_via "
+                    "FROM auth_users WHERE id = :id"
+                ),
+                {"id": user_id},
+            ).one()
+            return tuple(row)
+
+        with engine.connect() as connection:
+            before = _snapshot_user(connection)
+
+        command.upgrade(cfg, "head")
+        with engine.connect() as connection:
+            assert _snapshot_user(connection) == before
+
+        command.downgrade(cfg, "0004_remove_email_verification")
+        with engine.connect() as connection:
+            assert _snapshot_user(connection) == before
+    finally:
+        engine.dispose()
+
+
+def _enum_labels(connection: Connection, enum_name: str) -> set[str]:
+    rows = connection.execute(
+        text(
+            "SELECT enumlabel FROM pg_enum e "
+            "JOIN pg_type t ON t.oid = e.enumtypid "
+            "WHERE t.typname = :enum_name"
+        ),
+        {"enum_name": enum_name},
+    ).all()
+    return {row[0] for row in rows}
+
+
+def _schema_fingerprint(connection: Connection, tables: tuple[str, ...]) -> dict[str, object]:
+    inspector = inspect(connection)
+    fingerprint: dict[str, object] = {}
+    for table in tables:
+        fingerprint[table] = {
+            "columns": sorted((c["name"], str(c["type"])) for c in inspector.get_columns(table)),
+            "indexes": sorted(
+                (ix["name"], tuple(ix["column_names"]), ix.get("unique", False))
+                for ix in inspector.get_indexes(table)
+            ),
+            "check_constraints": sorted(
+                str(cc["name"]) for cc in inspector.get_check_constraints(table)
+            ),
+            "foreign_keys": sorted(
+                (fk["name"], tuple(fk["constrained_columns"]), fk["referred_table"])
+                for fk in inspector.get_foreign_keys(table)
+            ),
+            "unique_constraints": sorted(
+                (uc["name"], tuple(uc["column_names"]))
+                for uc in inspector.get_unique_constraints(table)
+            ),
+        }
+    return fingerprint
+
+
+_PROVIDER_ENUMS = (
+    "freyja2_venue_type",
+    "freyja2_data_source_type",
+    "freyja2_data_source_instrument_purpose",
+)
+
+_CAPABILITY_ENUMS = (
+    "freyja2_capability_status",
+    "freyja2_execution_environment",
+    "freyja2_credentials_status",
+    "freyja2_venue_permission_status",
+    "freyja2_regulatory_eligibility_status",
+    "freyja2_owner_authorization_status",
+    "freyja2_activation_status",
+    "freyja2_regulatory_rule_effect",
+)
+
+
+def test_provider_schema_enums_indexes_checks_fks_survive_downgrade_upgrade_roundtrip(
+    temp_database_name: str,
+) -> None:
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, "0010_provider_mappings")
+        with engine.connect() as connection:
+            before_schema = _schema_fingerprint(connection, _PROVIDER_TABLES)
+            before_enums = {name: _enum_labels(connection, name) for name in _PROVIDER_ENUMS}
+        assert all(before_enums.values()), "expected non-empty enum labels before round trip"
+
+        command.downgrade(cfg, "0009_seed_integrity_guard")
+        with engine.connect() as connection:
+            inspector = inspect(connection)
+            assert not any(inspector.has_table(t) for t in _PROVIDER_TABLES)
+            for name in _PROVIDER_ENUMS:
+                assert _enum_labels(connection, name) == set()
+
+        command.upgrade(cfg, "0010_provider_mappings")
+        with engine.connect() as connection:
+            after_schema = _schema_fingerprint(connection, _PROVIDER_TABLES)
+            after_enums = {name: _enum_labels(connection, name) for name in _PROVIDER_ENUMS}
+
+        assert after_schema == before_schema
+        assert after_enums == before_enums
+    finally:
+        engine.dispose()
+
+
+def test_capability_schema_enums_indexes_checks_fks_survive_downgrade_upgrade_roundtrip(
+    temp_database_name: str,
+) -> None:
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, "head")
+        with engine.connect() as connection:
+            before_schema = _schema_fingerprint(connection, _CAPABILITY_TABLES)
+            before_enums = {name: _enum_labels(connection, name) for name in _CAPABILITY_ENUMS}
+        assert all(before_enums.values()), "expected non-empty enum labels before round trip"
+
+        command.downgrade(cfg, "0010_provider_mappings")
+        with engine.connect() as connection:
+            inspector = inspect(connection)
+            assert not any(inspector.has_table(t) for t in _CAPABILITY_TABLES)
+            for name in _CAPABILITY_ENUMS:
+                assert _enum_labels(connection, name) == set()
+
+        command.upgrade(cfg, "head")
+        with engine.connect() as connection:
+            after_schema = _schema_fingerprint(connection, _CAPABILITY_TABLES)
+            after_enums = {name: _enum_labels(connection, name) for name in _CAPABILITY_ENUMS}
+
+        assert after_schema == before_schema
+        assert after_enums == before_enums
+    finally:
+        engine.dispose()
+
+
 def test_manual_row_at_0005_blocks_upgrade_to_0006_and_is_preserved(
     temp_database_name: str,
 ) -> None:

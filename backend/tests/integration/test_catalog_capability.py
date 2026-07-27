@@ -1,13 +1,18 @@
 import uuid
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
-from sqlalchemy import inspect, text
+from alembic.config import Config
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
+from alembic import command
+from freyja_backend.core.database import get_postgres_settings
 from freyja_backend.db.models.auth import AuthUser, UserOrigin
 from freyja_backend.db.models.capability import (
     ActivationStatus,
@@ -23,7 +28,15 @@ from freyja_backend.db.models.capability import (
     TechnicalCapability,
     VenuePermissionStatus,
 )
-from freyja_backend.db.models.provider import DataSource, DataSourceType, Venue, VenueType
+from freyja_backend.db.models.provider import (
+    DataSource,
+    DataSourceType,
+    Venue,
+    VenueInstrument,
+    VenueType,
+)
+
+BACKEND_DIR = Path(__file__).resolve().parents[2]
 
 _CAPABILITY_TABLES = frozenset(
     {
@@ -1283,3 +1296,444 @@ def test_fk_prevents_deleting_a_timeframe_referenced_by_technical_capability(
         )
         db_session.flush()
     db_session.rollback()
+
+
+# --- POINT1-TEST-001: capability-layer analog of the architectural case ----
+# (SPOT vs BINARY_OPTION on the same symbol text getting independent
+# TechnicalCapability rows) -- uses its own throwaway database, never the
+# shared auth_test_engine/db_session, so the temporary BINARY_OPTION
+# instrument never touches the approved v1 seed.
+
+
+def _alembic_config() -> Config:
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    return cfg
+
+
+@pytest.fixture
+def isolated_seeded_database() -> Iterator[Engine]:
+    settings = get_postgres_settings()
+    admin_url = settings.url.set(database="postgres")
+    admin_engine = create_engine(admin_url, isolation_level="AUTOCOMMIT")
+    db_name = f"freyja_test_{uuid.uuid4().hex[:12]}"
+
+    with admin_engine.connect() as connection:
+        connection.execute(text(f'CREATE DATABASE "{db_name}"'))
+
+    try:
+        temp_url = settings.url.set(database=db_name)
+        cfg = _alembic_config()
+        cfg.attributes["database_url"] = temp_url
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(temp_url)
+        try:
+            yield engine
+        finally:
+            engine.dispose()
+    finally:
+        with admin_engine.connect() as connection:
+            connection.execute(
+                text(
+                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                    "WHERE datname = :db_name AND pid <> pg_backend_pid()"
+                ),
+                {"db_name": db_name},
+            )
+            connection.execute(text(f'DROP DATABASE IF EXISTS "{db_name}"'))
+        admin_engine.dispose()
+
+
+def test_spot_and_binary_option_on_same_symbol_get_independent_capability_rows(
+    isolated_seeded_database: Engine,
+) -> None:
+    """CRYPTO x SPOT x BTC/USDT and CRYPTO x BINARY_OPTION x BTC/USDT are
+    distinct canonical instruments sharing symbol text (test_catalog_provider.
+    py proves this at the catalog/provider layer) — this proves the same
+    independence one layer up: each gets its own TechnicalCapability row,
+    and a status change on one never touches the other."""
+    engine = isolated_seeded_database
+    with engine.begin() as connection:
+        crypto_market_id = connection.execute(
+            text("SELECT id FROM freyja2_underlying_markets WHERE code = 'CRYPTO'")
+        ).scalar_one()
+        spot_product_id = connection.execute(
+            text("SELECT id FROM freyja2_product_types WHERE code = 'SPOT'")
+        ).scalar_one()
+        binary_product_id = connection.execute(
+            text("SELECT id FROM freyja2_product_types WHERE code = 'BINARY_OPTION'")
+        ).scalar_one()
+        spot_btc_usdt_id = connection.execute(
+            text(
+                "SELECT instrument_id FROM freyja2_instruments "
+                "WHERE underlying_market_id = :market_id AND product_type_id = :product_id "
+                "AND canonical_symbol = 'BTC/USDT'"
+            ),
+            {"market_id": crypto_market_id, "product_id": spot_product_id},
+        ).scalar_one()
+        one_minute_id = connection.execute(
+            text("SELECT id FROM freyja2_timeframes WHERE code = '1m'")
+        ).scalar_one()
+
+        binary_instrument_id = uuid.uuid4()
+        connection.execute(
+            text(
+                "INSERT INTO freyja2_instruments "
+                "(instrument_id, underlying_market_id, product_type_id, canonical_symbol, "
+                "underlying_instrument_id, is_active) "
+                "VALUES (:id, :market_id, :product_id, 'BTC/USDT', :underlying, true)"
+            ),
+            {
+                "id": binary_instrument_id,
+                "market_id": crypto_market_id,
+                "product_id": binary_product_id,
+                "underlying": spot_btc_usdt_id,
+            },
+        )
+
+        venue_id = uuid.uuid4()
+        connection.execute(
+            text(
+                "INSERT INTO freyja2_venues (id, code, display_name, venue_type, is_active) "
+                "VALUES (:id, 'TEST_CAP_ARCH_VENUE', 'Test Venue', 'EXCHANGE', true)"
+            ),
+            {"id": venue_id},
+        )
+
+        spot_capability_id = uuid.uuid4()
+        connection.execute(
+            text(
+                "INSERT INTO freyja2_technical_capabilities "
+                "(id, instrument_id, venue_id, timeframe_id, market_data_status, "
+                "signal_detection_status, backtest_status, demo_execution_status, "
+                "real_execution_status, settlement_status, effective_from) "
+                "VALUES (:id, :instrument_id, :venue_id, :timeframe_id, 'SUPPORTED', "
+                "'NOT_EVALUATED', 'NOT_EVALUATED', 'NOT_EVALUATED', 'NOT_EVALUATED', "
+                "'NOT_APPLICABLE', now())"
+            ),
+            {
+                "id": spot_capability_id,
+                "instrument_id": spot_btc_usdt_id,
+                "venue_id": venue_id,
+                "timeframe_id": one_minute_id,
+            },
+        )
+        binary_capability_id = uuid.uuid4()
+        connection.execute(
+            text(
+                "INSERT INTO freyja2_technical_capabilities "
+                "(id, instrument_id, venue_id, timeframe_id, market_data_status, "
+                "signal_detection_status, backtest_status, demo_execution_status, "
+                "real_execution_status, settlement_status, reason_unavailable, "
+                "effective_from) "
+                "VALUES (:id, :instrument_id, :venue_id, :timeframe_id, 'NOT_SUPPORTED', "
+                "'NOT_EVALUATED', 'NOT_EVALUATED', 'NOT_APPLICABLE', 'NOT_APPLICABLE', "
+                "'NOT_APPLICABLE', :reason, now())"
+            ),
+            {
+                "id": binary_capability_id,
+                "instrument_id": binary_instrument_id,
+                "venue_id": venue_id,
+                "timeframe_id": one_minute_id,
+                "reason": "TEST fixture reason — not real supportability evidence",
+            },
+        )
+
+        spot_status = connection.execute(
+            text("SELECT market_data_status FROM freyja2_technical_capabilities WHERE id = :id"),
+            {"id": spot_capability_id},
+        ).scalar_one()
+        binary_status = connection.execute(
+            text("SELECT market_data_status FROM freyja2_technical_capabilities WHERE id = :id"),
+            {"id": binary_capability_id},
+        ).scalar_one()
+
+    assert spot_status == "SUPPORTED"
+    assert binary_status == "NOT_SUPPORTED"
+
+
+# --- POINT1-TEST-001: technical capability status != authorization ----------
+
+
+def test_supported_capability_without_any_execution_context_grants_no_authorization(
+    db_session: Session,
+) -> None:
+    """A TechnicalCapability row expresses what the venue/Freyja can
+    technically do — it never creates, implies, or substitutes for an
+    ExecutionContext. Marking real_execution_status SUPPORTED must not leave
+    any owner authorized to trade it absent an actual ExecutionContext row."""
+    venue = _make_venue(db_session)
+    instrument_id = _seeded_instrument_id(db_session, "CRYPTO", "SPOT", "BTC/USDT")
+    timeframe_id = _seeded_timeframe_id(db_session, "1m")
+
+    capability = _make_capability(
+        db_session,
+        instrument_id=instrument_id,
+        timeframe_id=timeframe_id,
+        venue_id=venue.id,
+        market_data_status=CapabilityStatus.SUPPORTED,
+        signal_detection_status=CapabilityStatus.SUPPORTED,
+        backtest_status=CapabilityStatus.SUPPORTED,
+        demo_execution_status=CapabilityStatus.SUPPORTED,
+        real_execution_status=CapabilityStatus.SUPPORTED,
+    )
+    assert capability.real_execution_status == CapabilityStatus.SUPPORTED
+
+    context_count = (
+        db_session.query(ExecutionContext).filter(ExecutionContext.venue_id == venue.id).count()
+    )
+    assert context_count == 0, (
+        "a fully SUPPORTED capability must not create or imply any "
+        "ExecutionContext — technical support is never authorization"
+    )
+
+
+# --- POINT1-TEST-001: each of the four substatuses independently blocks ----
+# ENABLED, including the default NOT_EVALUATED/NOT_CONFIGURED states -------
+
+
+@pytest.mark.parametrize(
+    "blocking_field,blocking_value",
+    [
+        ("credentials_status", CredentialsStatus.NOT_CONFIGURED),
+        ("venue_permission_status", VenuePermissionStatus.NOT_EVALUATED),
+        ("regulatory_eligibility_status", RegulatoryEligibilityStatus.NOT_EVALUATED),
+        ("owner_authorization_status", OwnerAuthorizationStatus.NOT_AUTHORIZED),
+    ],
+)
+def test_enabled_is_blocked_by_each_substatus_individually_including_defaults(
+    db_session: Session, blocking_field: str, blocking_value: object
+) -> None:
+    """test_enabled_requires_all_four_positive_substatuses (above) only
+    exercises venue_permission_status=DENIED as the failing dimension. This
+    parametrizes across all four, including the DEFAULT NOT_EVALUATED/
+    NOT_CONFIGURED states — proving NOT_EVALUATED is never silently treated
+    as positive/permitted by the CHECK constraint."""
+    owner = _make_owner(db_session, f"owner-blocked-{blocking_field}@example.test")
+    venue = _make_venue(db_session)
+
+    kwargs = _enabled_context_kwargs()
+    kwargs[blocking_field] = blocking_value
+
+    db_session.add(
+        ExecutionContext(
+            **_execution_context_kwargs(
+                db_session,
+                owner=owner,
+                venue=venue,
+                environment=ExecutionEnvironment.REAL,
+                **kwargs,
+            )
+        )
+    )
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+# --- POINT1-TEST-001: broader forbidden-column guard for capability tables --
+
+
+_FORBIDDEN_OPERATIONAL_SUBSTRINGS = (
+    "balance",
+    "order",
+    "position",
+    "credential",
+    "fill",
+    "pnl",
+)
+
+
+def test_capability_tables_have_no_account_balance_order_or_position_columns(
+    auth_test_engine: Engine,
+) -> None:
+    """Broader than test_no_new_table_has_secret_shaped_columns (secrets
+    only) — this guards against operational/trading state (balances,
+    orders, positions) leaking into what must remain pure capability/
+    eligibility/activation bookkeeping. account_key/execution_environment/
+    demo_execution_status/real_execution_status are legitimate columns here
+    and must never trip this check, hence the narrower substring list vs.
+    test_catalog_provider.py's _FORBIDDEN_COLUMN_SUBSTRINGS. Columns ending
+    in _status are exempt from this check (e.g. credentials_status) — they
+    only ever carry an enum tag, never the credential/balance/order value
+    itself."""
+    inspector = inspect(auth_test_engine)
+    for table in _CAPABILITY_TABLES:
+        for column in inspector.get_columns(table):
+            column_name = column["name"].lower()
+            if column_name.endswith("_status"):
+                continue
+            for forbidden in _FORBIDDEN_OPERATIONAL_SUBSTRINGS:
+                assert forbidden not in column_name, (
+                    f"{table}.{column['name']} looks like operational trading state "
+                    f"(matches {forbidden!r}) — forbidden by POINT1-CAPABILITY-001"
+                )
+
+
+# --- POINT1-TEST-001: Spain/retail binary-options SUSPENDED via real -------
+# regulatory evidence, without a global BINARY_OPTION ban --------------------
+
+
+def test_binary_option_suspended_via_regulatory_rule_evidence_does_not_ban_it_globally(
+    db_session: Session,
+) -> None:
+    """A TEST_XX/retail context trading BINARY_OPTION is SUSPENDED, backed by
+    a real RegulatoryRule(effect=NOT_ELIGIBLE) scoped to that product,
+    evidenced via the ExecutionContextRegulatoryRule association — while a
+    second jurisdiction's BINARY_OPTION context remains fully ENABLED and
+    unaffected. BINARY_OPTION itself is never disabled as a ProductType."""
+    venue = _make_venue(db_session)
+    binary_id = _seeded_product_type_id(db_session, "BINARY_OPTION")
+
+    suspended_owner = _make_owner(db_session, "owner-es-retail-binary@example.test")
+    rule = _make_regulatory_rule(
+        db_session,
+        jurisdiction=_TEST_JURISDICTION,
+        client_classification=_TEST_CLASSIFICATION,
+        product_type_id=binary_id,
+        effect=RegulatoryRuleEffect.NOT_ELIGIBLE,
+        source_citation="TEST fixture citation — simulated ES/retail binary-options restriction",
+    )
+    suspended_context = _make_execution_context(
+        db_session,
+        owner=suspended_owner,
+        venue=venue,
+        product_type_id=binary_id,
+        environment=ExecutionEnvironment.REAL,
+        jurisdiction=_TEST_JURISDICTION,
+        client_classification=_TEST_CLASSIFICATION,
+        regulatory_eligibility_status=RegulatoryEligibilityStatus.NOT_ELIGIBLE,
+        activation_status=ActivationStatus.SUSPENDED,
+        suspension_reasons=[f"Fixture: {rule.source_citation}"],
+    )
+    db_session.add(
+        ExecutionContextRegulatoryRule(
+            execution_context_id=suspended_context.id, regulatory_rule_id=rule.id
+        )
+    )
+    db_session.flush()
+
+    other_jurisdiction_owner = _make_owner(
+        db_session, "owner-other-jurisdiction-binary@example.test"
+    )
+    other_context = _make_execution_context(
+        db_session,
+        owner=other_jurisdiction_owner,
+        venue=venue,
+        product_type_id=binary_id,
+        environment=ExecutionEnvironment.REAL,
+        jurisdiction="TEST_YY",
+        **_enabled_context_kwargs(),
+    )
+
+    db_session.refresh(suspended_context)
+    db_session.refresh(other_context)
+
+    assert suspended_context.activation_status == ActivationStatus.SUSPENDED
+    assert suspended_context.regulatory_eligibility_status == (
+        RegulatoryEligibilityStatus.NOT_ELIGIBLE
+    )
+    # The other jurisdiction's BINARY_OPTION context is completely
+    # unaffected — BINARY_OPTION itself was never globally disabled.
+    assert other_context.activation_status == ActivationStatus.ENABLED
+    assert other_context.regulatory_eligibility_status == RegulatoryEligibilityStatus.ELIGIBLE
+
+    product_type_still_exists = db_session.execute(
+        text("SELECT is_active FROM freyja2_product_types WHERE id = :id"), {"id": binary_id}
+    ).scalar_one()
+    assert product_type_still_exists is True
+
+
+# --- POINT1-TEST-001: changing activation_status mutates nothing else ------
+
+
+def test_changing_activation_status_never_mutates_instrument_venue_instrument_or_capability(
+    db_session: Session,
+) -> None:
+    venue = _make_venue(db_session)
+    instrument_id = _seeded_instrument_id(db_session, "CRYPTO", "SPOT", "BTC/USDT")
+    timeframe_id = _seeded_timeframe_id(db_session, "1m")
+
+    db_session.add(
+        VenueInstrument(
+            venue_id=venue.id, instrument_id=instrument_id, provider_symbol="TEST_ACT_STATUS_BTC"
+        )
+    )
+    db_session.flush()
+
+    capability = _make_capability(
+        db_session,
+        instrument_id=instrument_id,
+        timeframe_id=timeframe_id,
+        venue_id=venue.id,
+        market_data_status=CapabilityStatus.SUPPORTED,
+    )
+
+    owner = _make_owner(db_session, "owner-activation-mutation-check@example.test")
+    context = _make_execution_context(db_session, owner=owner, venue=venue)
+
+    before_instrument = (
+        db_session.execute(
+            text("SELECT * FROM freyja2_instruments WHERE instrument_id = :id"),
+            {"id": instrument_id},
+        )
+        .mappings()
+        .one()
+    )
+    before_venue_instrument = (
+        db_session.execute(
+            text(
+                "SELECT * FROM freyja2_venue_instruments "
+                "WHERE venue_id = :venue_id AND instrument_id = :instrument_id"
+            ),
+            {"venue_id": venue.id, "instrument_id": instrument_id},
+        )
+        .mappings()
+        .one()
+    )
+    before_capability = (
+        db_session.execute(
+            text("SELECT * FROM freyja2_technical_capabilities WHERE id = :id"),
+            {"id": capability.id},
+        )
+        .mappings()
+        .one()
+    )
+
+    context.activation_status = ActivationStatus.SUSPENDED
+    context.suspension_reasons = ["Fixture: unrelated activation change for mutation check."]
+    context.credentials_status = CredentialsStatus.INVALID
+    db_session.flush()
+
+    after_instrument = (
+        db_session.execute(
+            text("SELECT * FROM freyja2_instruments WHERE instrument_id = :id"),
+            {"id": instrument_id},
+        )
+        .mappings()
+        .one()
+    )
+    after_venue_instrument = (
+        db_session.execute(
+            text(
+                "SELECT * FROM freyja2_venue_instruments "
+                "WHERE venue_id = :venue_id AND instrument_id = :instrument_id"
+            ),
+            {"venue_id": venue.id, "instrument_id": instrument_id},
+        )
+        .mappings()
+        .one()
+    )
+    after_capability = (
+        db_session.execute(
+            text("SELECT * FROM freyja2_technical_capabilities WHERE id = :id"),
+            {"id": capability.id},
+        )
+        .mappings()
+        .one()
+    )
+
+    assert dict(after_instrument) == dict(before_instrument)
+    assert dict(after_venue_instrument) == dict(before_venue_instrument)
+    assert dict(after_capability) == dict(before_capability)

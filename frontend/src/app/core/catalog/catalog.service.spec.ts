@@ -1,10 +1,14 @@
-import { provideHttpClient } from '@angular/common/http';
+import { HttpErrorResponse, provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 
 import { API_BASE_URL } from '../config/api.config';
 import { CatalogService } from './catalog.service';
-import { ExecutionContextOut, Page, TechnicalCapabilityOut } from './catalog.models';
+import { ExecutionContextOut, InstrumentOut, Page, TechnicalCapabilityOut } from './catalog.models';
+
+/** Any key matching this pattern would mean a secret/credential leaked into
+ * a read-only catalog contract — none of these DTOs should ever carry one. */
+const SECRET_LIKE_KEY = /secret|password|token|credential|api[_-]?key|private[_-]?key/i;
 
 describe('CatalogService', () => {
   let service: CatalogService;
@@ -50,6 +54,48 @@ describe('CatalogService', () => {
     expect(result).toEqual({ items: [], total: 0, limit: 50, offset: 0 });
   });
 
+  it('getInstruments() passes a populated page through untransformed', () => {
+    let result: Page<InstrumentOut> | undefined;
+    service.getInstruments().subscribe((page) => (result = page));
+
+    const fixture: InstrumentOut = {
+      instrument_id: 'i-1',
+      market: { id: 'm-1', code: 'CRYPTO', display_name: 'Crypto' },
+      product_type: { id: 'p-1', code: 'SPOT', display_name: 'Spot' },
+      canonical_symbol: 'BTC/USDT',
+      base_asset: { id: 'a-btc', code: 'BTC', display_name: 'Bitcoin' },
+      quote_asset: { id: 'a-usdt', code: 'USDT', display_name: 'Tether' },
+      underlying_asset: null,
+      underlying_instrument_id: null,
+      is_active: true,
+      timeframes: [{ id: 'tf-1', code: '1m', display_name: '1 minute', duration_seconds: 60 }],
+    };
+    httpMock
+      .expectOne(`${API_BASE_URL}/catalog/instruments`)
+      .flush({ items: [fixture], total: 1, limit: 50, offset: 0 });
+
+    expect(result?.items[0]).toEqual(fixture);
+  });
+
+  it('getInstruments() propagates an HTTP error and never emits fallback data', () => {
+    let nextCalled = false;
+    let receivedError: HttpErrorResponse | undefined;
+    service.getInstruments().subscribe({
+      next: () => (nextCalled = true),
+      error: (err: HttpErrorResponse) => (receivedError = err),
+    });
+
+    httpMock
+      .expectOne(`${API_BASE_URL}/catalog/instruments`)
+      .flush(
+        { detail: 'Internal server error' },
+        new HttpErrorResponse({ status: 500, statusText: 'Internal Server Error' }),
+      );
+
+    expect(nextCalled).toBe(false);
+    expect(receivedError?.status).toBe(500);
+  });
+
   it('getInstrument() calls the instrument-by-id endpoint', () => {
     service.getInstrument('instrument-1').subscribe();
     const req = httpMock.expectOne(`${API_BASE_URL}/catalog/instruments/instrument-1`);
@@ -80,6 +126,15 @@ describe('CatalogService', () => {
     const req = httpMock.expectOne(`${API_BASE_URL}/catalog/data-sources`);
     expect(req.request.method).toBe('GET');
     req.flush({ items: [], total: 0, limit: 50, offset: 0 });
+  });
+
+  it('getDataSources() only sends filters that were actually provided', () => {
+    service.getDataSources({ isActive: true, limit: 10, offset: 20 }).subscribe();
+    const req = httpMock.expectOne((r) => r.url === `${API_BASE_URL}/catalog/data-sources`);
+    expect(req.request.params.get('is_active')).toBe('true');
+    expect(req.request.params.get('limit')).toBe('10');
+    expect(req.request.params.get('offset')).toBe('20');
+    req.flush({ items: [], total: 0, limit: 10, offset: 20 });
   });
 
   it('getCapabilities() forwards include_history and preserves all 5 statuses untransformed', () => {
@@ -196,5 +251,117 @@ describe('CatalogService', () => {
     const req = httpMock.expectOne(`${API_BASE_URL}/execution-contexts/ctx-1`);
     expect(req.request.method).toBe('GET');
     req.flush({});
+  });
+
+  it('getExecutionContext() propagates a 404 and never invents a fallback context', () => {
+    let nextCalled = false;
+    let receivedError: HttpErrorResponse | undefined;
+    service.getExecutionContext('missing-ctx').subscribe({
+      next: () => (nextCalled = true),
+      error: (err: HttpErrorResponse) => (receivedError = err),
+    });
+
+    httpMock
+      .expectOne(`${API_BASE_URL}/execution-contexts/missing-ctx`)
+      .flush(
+        { detail: 'Not found' },
+        new HttpErrorResponse({ status: 404, statusText: 'Not Found' }),
+      );
+
+    expect(nextCalled).toBe(false);
+    expect(receivedError?.status).toBe(404);
+  });
+
+  // Architectural gap (documented, not a defect): there is no catalog UI
+  // component in this repo yet — CatalogService has zero consumers
+  // (see frontend/src/app/app.routes.ts, which declares no catalog route,
+  // and `grep -r CatalogService frontend/src` finds only this spec file).
+  // Loading/empty/error/retry states at the *component* level are therefore
+  // NOT APPLICABLE for POINT1-TEST-001: there is no productive UI to exercise
+  // them against, and building one is out of scope (no new business/UI
+  // functionality per this task's mandate). This gap is called out in the
+  // final report for a possible follow-up frontend task.
+
+  it('an InstrumentOut fixture exposes only documented catalog fields, never credentials or secrets', () => {
+    const fixture: InstrumentOut = {
+      instrument_id: 'i-1',
+      market: { id: 'm-1', code: 'CRYPTO', display_name: 'Crypto' },
+      product_type: { id: 'p-1', code: 'SPOT', display_name: 'Spot' },
+      canonical_symbol: 'BTC/USDT',
+      base_asset: { id: 'a-btc', code: 'BTC', display_name: 'Bitcoin' },
+      quote_asset: { id: 'a-usdt', code: 'USDT', display_name: 'Tether' },
+      underlying_asset: null,
+      underlying_instrument_id: null,
+      is_active: true,
+      timeframes: [],
+    };
+
+    expect(Object.keys(fixture).sort()).toEqual(
+      [
+        'instrument_id',
+        'market',
+        'product_type',
+        'canonical_symbol',
+        'base_asset',
+        'quote_asset',
+        'underlying_asset',
+        'underlying_instrument_id',
+        'is_active',
+        'timeframes',
+      ].sort(),
+    );
+    expect(Object.keys(fixture).some((key) => SECRET_LIKE_KEY.test(key))).toBe(false);
+  });
+
+  it('an ExecutionContextOut fixture exposes only status/evidence fields, never raw credentials or tokens', () => {
+    const fixture: ExecutionContextOut = {
+      id: 'ctx-1',
+      account_key: 'ACC_1',
+      venue: {
+        id: 'v-1',
+        code: 'TEST',
+        display_name: 'Test',
+        venue_type: 'EXCHANGE',
+        is_active: true,
+      },
+      product_type: { id: 'p-1', code: 'SPOT', display_name: 'Spot' },
+      execution_environment: 'DEMO',
+      jurisdiction: 'TEST_XX',
+      client_classification: 'TEST_RETAIL',
+      credentials_status: 'CONFIGURED',
+      venue_permission_status: 'GRANTED',
+      regulatory_eligibility_status: 'ELIGIBLE',
+      owner_authorization_status: 'AUTHORIZED',
+      activation_status: 'ENABLED',
+      suspension_reasons: null,
+      regulatory_rules: [],
+    };
+
+    expect(Object.keys(fixture).sort()).toEqual(
+      [
+        'id',
+        'account_key',
+        'venue',
+        'product_type',
+        'execution_environment',
+        'jurisdiction',
+        'client_classification',
+        'credentials_status',
+        'venue_permission_status',
+        'regulatory_eligibility_status',
+        'owner_authorization_status',
+        'activation_status',
+        'suspension_reasons',
+        'regulatory_rules',
+      ].sort(),
+    );
+    // credentials_status is a status enum (CONFIGURED/NOT_CONFIGURED/INVALID),
+    // never the credential value itself — *_status fields are exempt from
+    // the secret-like-key check below since they only ever carry enum tags.
+    expect(['NOT_CONFIGURED', 'CONFIGURED', 'INVALID']).toContain(fixture.credentials_status);
+    const secretLikeKeys = Object.keys(fixture).filter(
+      (key) => !key.endsWith('_status') && SECRET_LIKE_KEY.test(key),
+    );
+    expect(secretLikeKeys).toEqual([]);
   });
 });

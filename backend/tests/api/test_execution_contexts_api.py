@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
@@ -323,6 +323,133 @@ def test_multiple_regulatory_rules_appear_as_separate_evidence(
     assert product_and_venue_scoped["id"] == str(rule_product_and_venue_scoped.id)
     assert product_and_venue_scoped["product_type_id"] == str(binary_id)
     assert product_and_venue_scoped["venue_id"] == str(venue.id)
+
+
+def test_venue_id_filter_is_applied(client: TestClient, db_session: Session) -> None:
+    owner = _create_owner(db_session, _OWNER_A_IDENTIFIER)
+    venue_a = _make_venue(db_session, "TEST_EC_API_VENUE_A")
+    venue_b = _make_venue(db_session, "TEST_EC_API_VENUE_B")
+    product_type_id = _seeded_product_type_id(db_session, "SPOT")
+
+    _make_context(db_session, owner=owner, venue=venue_a, product_type_id=product_type_id)
+    _make_context(
+        db_session,
+        owner=owner,
+        venue=venue_b,
+        product_type_id=product_type_id,
+        account_key="TEST_ACCOUNT_2",
+    )
+    db_session.commit()
+
+    _login_as(client, _OWNER_A_IDENTIFIER)
+    body = client.get(CONTEXTS_URL, params={"venue_id": str(venue_a.id)}).json()
+    assert body["total"] == 1
+    assert body["items"][0]["venue"]["id"] == str(venue_a.id)
+
+
+def test_invalid_execution_environment_filter_returns_422(
+    client: TestClient, db_session: Session
+) -> None:
+    _create_owner(db_session, _OWNER_A_IDENTIFIER)
+    _login_as(client, _OWNER_A_IDENTIFIER)
+    response = client.get(CONTEXTS_URL, params={"execution_environment": "NOT_A_REAL_ENVIRONMENT"})
+    assert response.status_code == 422
+
+
+def test_response_never_contains_technical_capability_fields(
+    client: TestClient, db_session: Session
+) -> None:
+    """ExecutionContext and TechnicalCapability are separate concerns
+    (POINT1-CAPABILITY-001) — an /execution-contexts response must never
+    carry technical-capability status fields."""
+    owner = _create_owner(db_session, _OWNER_A_IDENTIFIER)
+    venue = _make_venue(db_session)
+    product_type_id = _seeded_product_type_id(db_session, "SPOT")
+    _make_context(db_session, owner=owner, venue=venue, product_type_id=product_type_id)
+    db_session.commit()
+
+    _login_as(client, _OWNER_A_IDENTIFIER)
+    item = client.get(CONTEXTS_URL).json()["items"][0]
+
+    forbidden_keys = (
+        "market_data_status",
+        "signal_detection_status",
+        "backtest_status",
+        "demo_execution_status",
+        "real_execution_status",
+        "settlement_status",
+        "reason_unavailable",
+        "timeframe",
+        "instrument",
+    )
+    for key in forbidden_keys:
+        assert key not in item, (
+            f"execution-context response leaked TechnicalCapability field {key!r}"
+        )
+
+
+def test_listing_contexts_does_not_grow_query_count_with_more_rows(
+    client: TestClient, db_session: Session, auth_test_engine: Engine
+) -> None:
+    owner = _create_owner(db_session, _OWNER_A_IDENTIFIER)
+    venue = _make_venue(db_session)
+    spot_id = _seeded_product_type_id(db_session, "SPOT")
+
+    context = _make_context(
+        db_session, owner=owner, venue=venue, product_type_id=spot_id, account_key="ACC_BASE"
+    )
+    rule = RegulatoryRule(
+        jurisdiction=_TEST_JURISDICTION,
+        effect=RegulatoryRuleEffect.NOT_ELIGIBLE,
+        source_citation=_TEST_CITATION,
+        verified_at=datetime.now(UTC),
+    )
+    db_session.add(rule)
+    db_session.flush()
+    db_session.add(
+        ExecutionContextRegulatoryRule(execution_context_id=context.id, regulatory_rule_id=rule.id)
+    )
+    db_session.commit()
+
+    _login_as(client, _OWNER_A_IDENTIFIER)
+
+    def _count_queries() -> int:
+        counter = {"n": 0}
+
+        def _before_cursor_execute(*_args: object, **_kwargs: object) -> None:
+            counter["n"] += 1
+
+        event.listen(auth_test_engine, "before_cursor_execute", _before_cursor_execute)
+        try:
+            response = client.get(CONTEXTS_URL, params={"limit": 50, "offset": 0})
+            assert response.status_code == 200
+        finally:
+            event.remove(auth_test_engine, "before_cursor_execute", _before_cursor_execute)
+        return counter["n"]
+
+    before = _count_queries()
+
+    for i in range(3):
+        extra_context = _make_context(
+            db_session,
+            owner=owner,
+            venue=venue,
+            product_type_id=spot_id,
+            account_key=f"ACC_EXTRA_{i}",
+        )
+        db_session.add(
+            ExecutionContextRegulatoryRule(
+                execution_context_id=extra_context.id, regulatory_rule_id=rule.id
+            )
+        )
+    db_session.commit()
+
+    after = _count_queries()
+
+    assert before == after, (
+        "query count must stay constant as row count grows — a per-row query "
+        "would be an N+1 regression"
+    )
 
 
 def test_owner_cannot_list_another_owners_contexts(client: TestClient, db_session: Session) -> None:

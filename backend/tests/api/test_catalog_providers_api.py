@@ -154,6 +154,83 @@ def test_mappings_separate_venue_and_data_source_and_never_confuse_provider_symb
     assert ds_mapping["data_source"]["code"] == _TEST_SOURCE_CODE
 
 
+def test_venues_and_data_sources_is_active_filter_true_false_and_omitted(
+    client: TestClient, db_session: Session
+) -> None:
+    _login(client, db_session)
+    venue = _make_venue(db_session)
+    venue.is_active = False
+    source = _make_data_source(db_session)
+    source.is_active = False
+    db_session.commit()
+
+    active_venues = client.get(VENUES_URL, params={"is_active": "true"}).json()
+    assert all(v["code"] != _TEST_VENUE_CODE for v in active_venues["items"])
+
+    inactive_venues = client.get(VENUES_URL, params={"is_active": "false"}).json()
+    assert any(v["code"] == _TEST_VENUE_CODE for v in inactive_venues["items"])
+
+    all_venues = client.get(VENUES_URL).json()
+    assert any(v["code"] == _TEST_VENUE_CODE for v in all_venues["items"])
+
+    active_sources = client.get(DATA_SOURCES_URL, params={"is_active": "true"}).json()
+    assert all(ds["code"] != _TEST_SOURCE_CODE for ds in active_sources["items"])
+
+    inactive_sources = client.get(DATA_SOURCES_URL, params={"is_active": "false"}).json()
+    assert any(ds["code"] == _TEST_SOURCE_CODE for ds in inactive_sources["items"])
+
+
+def test_venues_is_active_rejects_non_boolean_value(
+    client: TestClient, db_session: Session
+) -> None:
+    _login(client, db_session)
+    response = client.get(VENUES_URL, params={"is_active": "maybe"})
+    assert response.status_code == 422
+
+
+def test_venues_data_sources_and_mappings_never_contain_secret_shaped_fields(
+    client: TestClient, db_session: Session
+) -> None:
+    _login(client, db_session)
+    instrument_id = _seeded_instrument_id(db_session, "CRYPTO", "SPOT", "BTC/USDT")
+    venue = _make_venue(db_session)
+    source = _make_data_source(db_session)
+    db_session.add(
+        VenueInstrument(venue_id=venue.id, instrument_id=instrument_id, provider_symbol="XBTUSDT")
+    )
+    db_session.add(
+        DataSourceInstrument(
+            data_source_id=source.id,
+            instrument_id=instrument_id,
+            provider_symbol="BTCUSDT.A",
+            purpose=DataSourceInstrumentPurpose.ANALYSIS,
+        )
+    )
+    db_session.commit()
+
+    def _walk(value: object) -> Iterator[str]:
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                yield key
+                yield from _walk(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                yield from _walk(nested)
+
+    forbidden = ("password", "secret", "token", "api_key", "apikey", "credential_value", "hash")
+
+    bodies = [
+        client.get(VENUES_URL).json(),
+        client.get(DATA_SOURCES_URL).json(),
+        client.get(f"/api/v1/catalog/instruments/{instrument_id}/mappings").json(),
+    ]
+    for body in bodies:
+        for key in _walk(body):
+            lowered = key.lower()
+            for bad in forbidden:
+                assert bad not in lowered, f"response field {key!r} looks secret-shaped"
+
+
 def test_mappings_404_for_missing_instrument(client: TestClient, db_session: Session) -> None:
     _login(client, db_session)
     response = client.get(f"/api/v1/catalog/instruments/{uuid.uuid4()}/mappings")
