@@ -1,16 +1,10 @@
 import uuid
-from collections.abc import Sequence
 from dataclasses import dataclass
 
 from sqlalchemy import Select, and_, func, select
 from sqlalchemy.orm import Session
 
-from freyja_backend.db.models.capability import (
-    ExecutionContext,
-    ExecutionContextRegulatoryRule,
-    ExecutionEnvironment,
-    RegulatoryRule,
-)
+from freyja_backend.db.models.capability import ExecutionContext, ExecutionEnvironment
 from freyja_backend.db.models.catalog import ProductType
 from freyja_backend.db.models.provider import Venue
 
@@ -94,22 +88,3 @@ def get_execution_context(
     return ExecutionContextRow(
         execution_context=execution_context, venue=venue, product_type=product_type
     )
-
-
-def load_regulatory_rules_for_contexts(
-    session: Session, context_ids: Sequence[uuid.UUID]
-) -> dict[uuid.UUID, list[RegulatoryRule]]:
-    if not context_ids:
-        return {}
-    stmt = (
-        select(ExecutionContextRegulatoryRule.execution_context_id, RegulatoryRule)
-        .join(
-            RegulatoryRule, RegulatoryRule.id == ExecutionContextRegulatoryRule.regulatory_rule_id
-        )
-        .where(ExecutionContextRegulatoryRule.execution_context_id.in_(context_ids))
-        .order_by(RegulatoryRule.jurisdiction, RegulatoryRule.id)
-    )
-    result: dict[uuid.UUID, list[RegulatoryRule]] = {}
-    for context_id, rule in session.execute(stmt).all():
-        result.setdefault(context_id, []).append(rule)
-    return result

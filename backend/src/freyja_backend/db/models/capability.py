@@ -18,32 +18,47 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from freyja_backend.db.base import Base
 
-# Capability / eligibility / activation tables (POINT1-CAPABILITY-001).
-# Three concepts are kept physically and conceptually separate, never
-# collapsed into a single `enabled`/`supported`/`real_execution` boolean:
+# Capability / activation tables (POINT1-CAPABILITY-001, corrected by
+# POINT1-CAPABILITY-API-CORRECTION-001). Two concepts are kept physically and
+# conceptually separate, never collapsed into a single
+# `enabled`/`supported`/`real_execution` boolean:
 #
 #   1. TechnicalCapability   — what Freyja (or a venue/data source) knows how
 #                              to do for an Instrument + venue-or-source +
 #                              timeframe combination.
-#   2. RegulatoryRule        — what is permitted, restricted, or not yet
-#                              evaluated for a jurisdiction/client
-#                              classification/product/venue combination.
-#   3. ExecutionContext      — what a specific owner's account may actually
+#   2. ExecutionContext      — what a specific owner's account may actually
 #                              use, for a specific product, in a specific
 #                              environment (DEMO/REAL), right now.
 #
+# ARCHITECTURAL DECISION (POINT1-CAPABILITY-API-CORRECTION-001): Freyja does
+# not interpret or apply per-jurisdiction legislation, and does not maintain
+# an internal legal/regulatory catalog. The connected broker is the sole
+# authority over product availability and account permissions: the broker
+# knows the account and its permissions, the broker reports what is
+# available, and Freyja normalizes and respects that response — a rejection
+# or an absence of information from the broker fails closed
+# (venue_permission_status stays/goes to a non-positive state), never
+# silently treated as permitted. Freyja never attempts to route around a
+# broker restriction. There is no jurisdiction/client_classification/
+# RegulatoryRule modeling anywhere in this module; a prior revision's
+# internal regulatory-eligibility engine was removed by migration
+# 0012_remove_regulatory_engine — see that migration for the removal itself
+# and its documented reversibility limits. Technical
+# capability, broker-reported permission, and user authorization remain
+# three independent signals: none of them alone activates REAL trading.
+#
 # Instrument/Venue/DataSource/Timeframe/ProductType (POINT1-DB-001,
 # POINT1-PROVIDER-001) are referenced by FK only, never modified, and never
-# gain permission, availability, activation, jurisdiction, or DEMO/REAL
-# columns themselves.
+# gain permission, availability, activation, or DEMO/REAL columns
+# themselves.
 #
 # No credentials, tokens, API keys, or other secret material are stored
 # anywhere here — only opaque status enums and `account_key`, an internal,
 # opaque, non-secret identifier for which of an owner's several accounts at
 # a venue a context refers to (see ExecutionContext). No CASCADE on any FK:
 # deleting a referenced Instrument/Venue/DataSource/Timeframe/ProductType/
-# AuthUser/RegulatoryRule/ExecutionContext fails closed instead of silently
-# discarding capability/eligibility/activation history.
+# AuthUser/ExecutionContext fails closed instead of silently discarding
+# capability/activation history.
 
 
 class CapabilityStatus(enum.StrEnum):
@@ -83,15 +98,18 @@ class CredentialsStatus(enum.StrEnum):
 
 
 class VenuePermissionStatus(enum.StrEnum):
+    """Permission/availability as reported and normalized from the
+    connected broker/venue for this account — never a Freyja-computed legal
+    or regulatory decision. GRANTED means the broker has confirmed the
+    account may use this venue for the relevant product; DENIED means the
+    broker has explicitly refused it; NOT_EVALUATED means Freyja has not yet
+    queried or received a broker response. A broker rejection or an absent/
+    unknown response is never read as GRANTED — see ExecutionContext's
+    ENABLED CHECK."""
+
     NOT_EVALUATED = "NOT_EVALUATED"
     GRANTED = "GRANTED"
     DENIED = "DENIED"
-
-
-class RegulatoryEligibilityStatus(enum.StrEnum):
-    NOT_EVALUATED = "NOT_EVALUATED"
-    ELIGIBLE = "ELIGIBLE"
-    NOT_ELIGIBLE = "NOT_ELIGIBLE"
 
 
 class OwnerAuthorizationStatus(enum.StrEnum):
@@ -103,8 +121,10 @@ class ActivationStatus(enum.StrEnum):
     """An ExecutionContext's activation status. ENABLED is only reachable
     (enforced physically by a CHECK constraint on ExecutionContext, not
     merely by convention) when credentials_status, venue_permission_status,
-    regulatory_eligibility_status, and owner_authorization_status are all
-    simultaneously in their positive state."""
+    and owner_authorization_status are all simultaneously in their positive
+    state. Explicit user authorization and Freyja's own risk controls remain
+    separate, mandatory requirements — none of technical capability, broker
+    permission, or user authorization alone activates REAL trading."""
 
     NOT_CONFIGURED = "NOT_CONFIGURED"
     CONFIGURED = "CONFIGURED"
@@ -112,16 +132,11 @@ class ActivationStatus(enum.StrEnum):
     SUSPENDED = "SUSPENDED"
 
 
-class RegulatoryRuleEffect(enum.StrEnum):
-    ELIGIBLE = "ELIGIBLE"
-    NOT_ELIGIBLE = "NOT_ELIGIBLE"
-
-
 class TechnicalCapability(Base):
     """What Freyja (and/or a venue/data source) is technically capable of
     for one Instrument + (venue XOR data source) + Timeframe combination —
-    never an authorization, never an activation. A row here never implies a
-    RegulatoryRule permits use, nor that any ExecutionContext may enable it.
+    never an authorization, never an activation. A row here never implies
+    the broker permits use, nor that any ExecutionContext may enable it.
 
     A DataSource is market-data-only by construction (POINT1-PROVIDER-001):
     it never executes or settles anything, so a data-source-linked row must
@@ -276,88 +291,6 @@ class TechnicalCapability(Base):
         )
 
 
-class RegulatoryRule(Base):
-    """A versionable, citable regulatory determination — never inferred,
-    never invented. jurisdiction is a free, non-blank/trimmed identifier
-    (e.g. an ISO country/region code); client_classification, product_type,
-    and venue are nullable, meaning the rule applies regardless of that
-    dimension when left unset. source_citation and verified_at exist so the
-    rule is always traceable to an actual official source someone can
-    review — never asserted without evidence.
-
-    A RegulatoryRule may be associated with zero, one, or several
-    ExecutionContext rows (and vice versa) through the
-    ExecutionContextRegulatoryRule association table — a context's
-    regulatory eligibility may depend on more than one rule/evidence
-    simultaneously."""
-
-    __tablename__ = "freyja2_regulatory_rules"
-    __table_args__ = (
-        CheckConstraint(
-            "char_length(btrim(jurisdiction)) > 0",
-            name="ck_freyja2_regulatory_rules_jurisdiction_not_blank",
-        ),
-        CheckConstraint(
-            "jurisdiction = btrim(jurisdiction)",
-            name="ck_freyja2_regulatory_rules_jurisdiction_trimmed",
-        ),
-        CheckConstraint(
-            "client_classification IS NULL OR ("
-            "char_length(btrim(client_classification)) > 0 "
-            "AND client_classification = btrim(client_classification)"
-            ")",
-            name="ck_freyja2_regulatory_rules_client_classification_shape",
-        ),
-        CheckConstraint(
-            "char_length(btrim(source_citation)) > 0",
-            name="ck_freyja2_regulatory_rules_source_citation_not_blank",
-        ),
-        CheckConstraint(
-            "source_citation = btrim(source_citation)",
-            name="ck_freyja2_regulatory_rules_source_citation_trimmed",
-        ),
-        CheckConstraint(
-            "effective_to IS NULL OR effective_to > effective_from",
-            name="ck_freyja2_regulatory_rules_valid_effective_window",
-        ),
-        Index("ix_freyja2_regulatory_rules_jurisdiction", "jurisdiction"),
-        Index("ix_freyja2_regulatory_rules_product_type_id", "product_type_id"),
-        Index("ix_freyja2_regulatory_rules_venue_id", "venue_id"),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    jurisdiction: Mapped[str] = mapped_column(String(32), nullable=False)
-    client_classification: Mapped[str | None] = mapped_column(String(32))
-    product_type_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("freyja2_product_types.id")
-    )
-    venue_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("freyja2_venues.id")
-    )
-    effect: Mapped[RegulatoryRuleEffect] = mapped_column(
-        Enum(RegulatoryRuleEffect, name="freyja2_regulatory_rule_effect", native_enum=True),
-        nullable=False,
-    )
-    effective_from: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
-    effective_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    source_citation: Mapped[str] = mapped_column(Text(), nullable=False)
-    verified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
-    )
-
-    def __repr__(self) -> str:
-        return (
-            f"RegulatoryRule(id={self.id!r}, jurisdiction={self.jurisdiction!r}, "
-            f"effect={self.effect!r})"
-        )
-
-
 class ExecutionContext(Base):
     """What a specific owner's account may actually use, for a specific
     product, in a specific execution_environment (DEMO or REAL), at a
@@ -373,26 +306,27 @@ class ExecutionContext(Base):
     Freyja/the owner purely for bookkeeping, so two different accounts at
     the same venue+environment+product never collide, and the same account
     can hold independent contexts per product (e.g. BINARY_OPTION REAL
-    SUSPENDED while SPOT REAL is independently NOT_CONFIGURED/ELIGIBLE for
-    the very same account).
+    SUSPENDED while SPOT REAL is independently NOT_CONFIGURED for the very
+    same account).
 
     No credentials, tokens, or secret material are stored — only status
     enums and the opaque account_key. activation_status = ENABLED is
     enforced physically (CHECK below) to require credentials_status =
-    CONFIGURED, venue_permission_status = GRANTED,
-    regulatory_eligibility_status = ELIGIBLE, and owner_authorization_status
-    = AUTHORIZED simultaneously — no combination of contradictory values can
-    be persisted as ENABLED.
+    CONFIGURED, venue_permission_status = GRANTED (i.e. the broker has
+    confirmed this account may use this venue/product), and
+    owner_authorization_status = AUTHORIZED simultaneously — no combination
+    of contradictory values can be persisted as ENABLED. Freyja does not
+    additionally gate ENABLED on any internal jurisdiction/regulatory
+    determination: availability and permissions are the broker's authority,
+    normalized here as venue_permission_status, and a broker denial or an
+    unevaluated/unknown broker response fails closed exactly like a missing
+    credential or a missing user authorization does.
 
     A SUSPENDED context (e.g. BINARY_OPTION REAL for a specific
-    owner/account/jurisdiction) never implies a global product suspension —
-    it is scoped to exactly this (owner, venue, account, environment,
-    product) row; a different product_type_id for the very same account is
-    an entirely independent row.
-
-    Regulatory dependency is modeled through the
-    ExecutionContextRegulatoryRule association table (zero, one, or several
-    RegulatoryRule rows may apply), never through a single FK column here.
+    owner/account) never implies a global product suspension — it is scoped
+    to exactly this (owner, venue, account, environment, product) row; a
+    different product_type_id for the very same account is an entirely
+    independent row.
     """
 
     __tablename__ = "freyja2_execution_contexts"
@@ -401,7 +335,6 @@ class ExecutionContext(Base):
             "activation_status <> 'ENABLED' OR ("
             "credentials_status = 'CONFIGURED' "
             "AND venue_permission_status = 'GRANTED' "
-            "AND regulatory_eligibility_status = 'ELIGIBLE' "
             "AND owner_authorization_status = 'AUTHORIZED'"
             ")",
             name="ck_freyja2_execution_contexts_enabled_requires_all_positive",
@@ -422,22 +355,6 @@ class ExecutionContext(Base):
         CheckConstraint(
             "freyja2_text_array_all_nonblank(suspension_reasons)",
             name="ck_freyja2_execution_contexts_suspension_reasons_elements_valid",
-        ),
-        CheckConstraint(
-            "char_length(btrim(jurisdiction)) > 0",
-            name="ck_freyja2_execution_contexts_jurisdiction_not_blank",
-        ),
-        CheckConstraint(
-            "jurisdiction = btrim(jurisdiction)",
-            name="ck_freyja2_execution_contexts_jurisdiction_trimmed",
-        ),
-        CheckConstraint(
-            "char_length(btrim(client_classification)) > 0",
-            name="ck_freyja2_execution_contexts_client_classification_not_blank",
-        ),
-        CheckConstraint(
-            "client_classification = btrim(client_classification)",
-            name="ck_freyja2_execution_contexts_client_classification_trimmed",
         ),
         CheckConstraint(
             "char_length(btrim(account_key)) > 0",
@@ -482,8 +399,6 @@ class ExecutionContext(Base):
     product_type_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("freyja2_product_types.id"), nullable=False
     )
-    jurisdiction: Mapped[str] = mapped_column(String(32), nullable=False)
-    client_classification: Mapped[str] = mapped_column(String(32), nullable=False)
     credentials_status: Mapped[CredentialsStatus] = mapped_column(
         Enum(CredentialsStatus, name="freyja2_credentials_status", native_enum=True),
         nullable=False,
@@ -493,15 +408,6 @@ class ExecutionContext(Base):
         Enum(VenuePermissionStatus, name="freyja2_venue_permission_status", native_enum=True),
         nullable=False,
         default=VenuePermissionStatus.NOT_EVALUATED,
-    )
-    regulatory_eligibility_status: Mapped[RegulatoryEligibilityStatus] = mapped_column(
-        Enum(
-            RegulatoryEligibilityStatus,
-            name="freyja2_regulatory_eligibility_status",
-            native_enum=True,
-        ),
-        nullable=False,
-        default=RegulatoryEligibilityStatus.NOT_EVALUATED,
     )
     owner_authorization_status: Mapped[OwnerAuthorizationStatus] = mapped_column(
         Enum(OwnerAuthorizationStatus, name="freyja2_owner_authorization_status", native_enum=True),
@@ -527,36 +433,4 @@ class ExecutionContext(Base):
             f"venue_id={self.venue_id!r}, account_key={self.account_key!r}, "
             f"execution_environment={self.execution_environment!r}, "
             f"activation_status={self.activation_status!r})"
-        )
-
-
-class ExecutionContextRegulatoryRule(Base):
-    """Explicit many-to-many association: a context's regulatory
-    eligibility may depend on zero, one, or several RegulatoryRule rows
-    simultaneously (e.g. a general MiFID retail-derivatives rule AND a
-    country-specific binary-option ban both citable for the same context).
-    The composite primary key IS the uniqueness guarantee — the same
-    (execution_context, regulatory_rule) pair can never be inserted twice.
-    No CASCADE on either FK: deleting a referenced ExecutionContext or
-    RegulatoryRule while an association row still cites it fails closed."""
-
-    __tablename__ = "freyja2_execution_context_regulatory_rules"
-    __table_args__ = (
-        Index("ix_freyja2_execution_context_regulatory_rules_rule_id", "regulatory_rule_id"),
-    )
-
-    execution_context_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("freyja2_execution_contexts.id"), primary_key=True
-    )
-    regulatory_rule_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("freyja2_regulatory_rules.id"), primary_key=True
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
-
-    def __repr__(self) -> str:
-        return (
-            f"ExecutionContextRegulatoryRule(execution_context_id={self.execution_context_id!r}, "
-            f"regulatory_rule_id={self.regulatory_rule_id!r})"
         )
