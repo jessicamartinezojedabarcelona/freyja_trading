@@ -18,7 +18,7 @@ def set_session_cookie(response: Response, *, token: str, max_age_seconds: int) 
         max_age=max_age_seconds,
         httponly=True,
         secure=settings.cookie_secure,
-        samesite="strict",
+        samesite=settings.cookie_samesite,
         path="/",
     )
 
@@ -30,7 +30,7 @@ def clear_session_cookie(response: Response) -> None:
         path="/",
         httponly=True,
         secure=settings.cookie_secure,
-        samesite="strict",
+        samesite=settings.cookie_samesite,
     )
 
 
@@ -43,7 +43,7 @@ def ensure_csrf_cookie(existing_value: str | None, response: Response) -> str:
         max_age=_CSRF_COOKIE_MAX_AGE_SECONDS,
         httponly=False,
         secure=settings.cookie_secure,
-        samesite="strict",
+        samesite=settings.cookie_samesite,
         path="/",
     )
     return token
@@ -56,5 +56,5 @@ def clear_csrf_cookie(response: Response) -> None:
         path="/",
         httponly=False,
         secure=settings.cookie_secure,
-        samesite="strict",
+        samesite=settings.cookie_samesite,
     )

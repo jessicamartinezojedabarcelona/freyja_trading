@@ -53,6 +53,23 @@ def test_production_succeeds_with_all_required_variables_overridden(
     assert settings.cookie_secure is True
 
 
+def test_production_cookie_samesite_is_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Render deploys frontend and backend as separate onrender.com
+    subdomains — different sites, not just different origins. SameSite=Strict
+    (or Lax) cannot be sent cross-site at all, so production must use None
+    (paired with Secure=true, asserted above)."""
+    _set_env(monkeypatch)
+    _clear_smtp_env(monkeypatch)
+    settings = _settings()
+    assert settings.cookie_samesite == "none"
+
+
+def test_non_production_cookie_samesite_is_strict(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FREYJA_ENVIRONMENT", "development")
+    settings = _settings()
+    assert settings.cookie_samesite == "strict"
+
+
 def test_production_succeeds_with_no_smtp_variables_at_all(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
