@@ -112,8 +112,9 @@ services:
         # separate places (Render dashboard here; GitHub secret for the
         # workflow's own connectivity check).
 
-  - type: static
+  - type: web
     name: freyja-frontend
+    runtime: static
     # No "region" field: Render serves static sites over a global CDN rather
     # than a single compute region, so the "coherent EU region" requirement
     # applies to the Web Service above (the only resource in this Blueprint
@@ -146,7 +147,8 @@ services:
         # changes, with no manual edit to this file or to the frontend
         # environment files ever required.
     routes:
-      - path: /*
+      - type: rewrite
+        source: /*
         destination: /index.html
         # SPA rewrite: any path not matching a real static asset falls back
         # to index.html so Angular's client-side router can handle it.
