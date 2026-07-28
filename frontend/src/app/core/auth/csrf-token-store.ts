@@ -1,6 +1,6 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
-import { Observable, catchError, map, of, shareReplay, throwError } from 'rxjs';
+import { Observable, finalize, map, of, shareReplay } from 'rxjs';
 
 import { API_BASE_URL } from '../config/api.config';
 import { CsrfTokenResponse } from './auth.models';
@@ -30,6 +30,31 @@ export class CsrfTokenStore {
       return of(this.token);
     }
 
+    return this.fetchToken();
+  }
+
+  /**
+   * Atomically invalidates the cached token and fetches a fresh one — used
+   * when a request comes back rejected as CSRF-invalid (a stale cookie, or
+   * one from before a logout). Deliberately routes through the same
+   * inFlight$ guard as ensureToken(): if two mutations are rejected around
+   * the same time, both call refreshToken(), but only the first actually
+   * starts a GET /auth/csrf — the second reuses that same in-flight
+   * Observable instead of firing a second concurrent renewal, which would
+   * otherwise leave the two mutations retrying with mismatched
+   * cookie/token pairs.
+   */
+  refreshToken(): Observable<string> {
+    this.token = null;
+    return this.fetchToken();
+  }
+
+  clear(): void {
+    this.token = null;
+    this.inFlight$ = null;
+  }
+
+  private fetchToken(): Observable<string> {
     if (!this.inFlight$) {
       this.inFlight$ = this.http.get<CsrfTokenResponse>(`${API_BASE_URL}/auth/csrf`).pipe(
         map((response) => {
@@ -39,19 +64,17 @@ export class CsrfTokenStore {
           this.token = response.csrf_token;
           return response.csrf_token;
         }),
-        catchError((error: unknown) => {
+        // Resets on both success and failure — a resolved fetch has
+        // already cached its token on `this.token` (so ensureToken()'s
+        // fast path takes over), and a failed one must not leave a dead
+        // in-flight reference blocking the next real attempt.
+        finalize(() => {
           this.inFlight$ = null;
-          return throwError(() => error);
         }),
         shareReplay(1),
       );
     }
 
     return this.inFlight$;
-  }
-
-  clear(): void {
-    this.token = null;
-    this.inFlight$ = null;
   }
 }

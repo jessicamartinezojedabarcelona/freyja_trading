@@ -46,13 +46,17 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
             return throwError(() => error);
           }
           // The CSRF cookie/token can go stale mid-session (expiry, or a
-          // logout that this same browser tab missed clearing) — clear the
-          // store, fetch exactly one fresh token, and resend the original
-          // request exactly once. No catchError wraps this second attempt:
-          // a repeat CSRF-invalid response propagates as-is rather than
-          // retrying again.
-          csrfStore.clear();
-          return csrfStore.ensureToken().pipe(switchMap((freshToken) => sendWithToken(freshToken)));
+          // logout this same browser tab missed clearing). refreshToken()
+          // atomically invalidates the cache and fetches exactly one fresh
+          // token — if another mutation was rejected around the same time
+          // and is also calling refreshToken(), both share the single
+          // in-flight renewal instead of each starting their own, so they
+          // never end up retrying with mismatched cookie/token pairs. No
+          // catchError wraps this second attempt: a repeat CSRF-invalid
+          // response propagates as-is rather than retrying again.
+          return csrfStore
+            .refreshToken()
+            .pipe(switchMap((freshToken) => sendWithToken(freshToken)));
         }),
       ),
     ),

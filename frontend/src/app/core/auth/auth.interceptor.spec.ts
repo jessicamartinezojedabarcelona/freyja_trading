@@ -165,6 +165,43 @@ describe('authInterceptor', () => {
     httpMock.expectNone(`${API_BASE_URL}/auth/csrf`);
   });
 
+  it('collapses two concurrent CSRF-invalid rejections into a single renewal, shared by both retries', () => {
+    // Reproduces the race the audit found: two mutations rejected with 403
+    // "CSRF inválido." around the same time must not each call clear() +
+    // fetch independently — refreshToken() has to make them share the one
+    // in-flight renewal, or they could retry with mismatched cookie/header
+    // pairs.
+    http.post(`${API_BASE_URL}/auth/login`, {}).subscribe();
+    http.post(`${API_BASE_URL}/auth/register`, {}).subscribe();
+
+    httpMock
+      .expectOne(`${API_BASE_URL}/auth/csrf`)
+      .flush({ status: 'ok', csrf_token: 'stale-token' });
+
+    const firstLoginAttempt = httpMock.expectOne(`${API_BASE_URL}/auth/login`);
+    const firstRegisterAttempt = httpMock.expectOne(`${API_BASE_URL}/auth/register`);
+    expect(firstLoginAttempt.request.headers.get('X-CSRF-Token')).toBe('stale-token');
+    expect(firstRegisterAttempt.request.headers.get('X-CSRF-Token')).toBe('stale-token');
+
+    // Both rejected as CSRF-invalid, one right after the other.
+    firstLoginAttempt.flush(CSRF_INVALID, CSRF_INVALID_OPTS);
+    firstRegisterAttempt.flush(CSRF_INVALID, CSRF_INVALID_OPTS);
+
+    // Exactly one renewal GET is pending — expectOne throws if a second one
+    // was also fired, which is the whole point of this test.
+    const renewal = httpMock.expectOne(`${API_BASE_URL}/auth/csrf`);
+    renewal.flush({ status: 'ok', csrf_token: 'renewed-token' });
+
+    const retriedLogin = httpMock.expectOne(`${API_BASE_URL}/auth/login`);
+    const retriedRegister = httpMock.expectOne(`${API_BASE_URL}/auth/register`);
+    expect(retriedLogin.request.headers.get('X-CSRF-Token')).toBe('renewed-token');
+    expect(retriedRegister.request.headers.get('X-CSRF-Token')).toBe('renewed-token');
+    retriedLogin.flush({});
+    retriedRegister.flush({});
+
+    httpMock.expectNone(`${API_BASE_URL}/auth/csrf`);
+  });
+
   it('fetches a fresh token for the next mutation after the store is cleared (e.g. by logout)', () => {
     // AuthService.logout() calls csrfStore.clear() directly — this
     // reproduces that effect without going through AuthService, since this
