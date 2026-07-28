@@ -77,8 +77,11 @@ def get_csrf(request: Request, response: Response) -> CsrfTokenOut:
     (separate onrender.com subdomains), so `document.cookie` cannot read a
     host-only cookie set by the backend — the double-submit comparison only
     works if the frontend gets the token some other way and keeps it in
-    memory to attach as the X-CSRF-Token header itself."""
+    memory to attach as the X-CSRF-Token header itself. Cache-Control:
+    no-store: an intermediary or the browser's own HTTP cache must never
+    serve a stale token/cookie pair for this endpoint."""
     token = ensure_csrf_cookie(request.cookies.get("freyja_csrf"), response)
+    response.headers["Cache-Control"] = "no-store"
     return CsrfTokenOut(status="ok", csrf_token=token)
 
 

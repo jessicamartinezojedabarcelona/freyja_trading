@@ -33,6 +33,9 @@ export class CsrfTokenStore {
     if (!this.inFlight$) {
       this.inFlight$ = this.http.get<CsrfTokenResponse>(`${API_BASE_URL}/auth/csrf`).pipe(
         map((response) => {
+          if (!response.csrf_token) {
+            throw new Error('GET /auth/csrf devolvió un csrf_token vacío.');
+          }
           this.token = response.csrf_token;
           return response.csrf_token;
         }),

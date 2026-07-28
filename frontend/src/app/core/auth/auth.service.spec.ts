@@ -71,6 +71,28 @@ describe('AuthService', () => {
     expect(service.currentUser()).toBeNull();
   });
 
+  it('logout() clears the CsrfTokenStore, so the next prime fetches a fresh token', () => {
+    // The backend deletes the CSRF cookie on logout — an in-memory token
+    // from before logout would be stale for whatever comes next.
+    service.primeCsrf().subscribe();
+    httpMock
+      .expectOne(`${API_BASE_URL}/auth/csrf`)
+      .flush({ status: 'ok', csrf_token: 'pre-logout-token' });
+
+    service.logout().subscribe();
+    httpMock.expectOne(`${API_BASE_URL}/auth/logout`).flush(null);
+
+    // If the store had NOT been cleared, ensureToken() would resolve from
+    // its cache with no new HTTP call at all.
+    let resolvedAfterLogout: string | undefined;
+    service.primeCsrf().subscribe((token) => (resolvedAfterLogout = token));
+    httpMock
+      .expectOne(`${API_BASE_URL}/auth/csrf`)
+      .flush({ status: 'ok', csrf_token: 'post-logout-token' });
+
+    expect(resolvedAfterLogout).toBe('post-logout-token');
+  });
+
   it('register() posts email and password', () => {
     service.register('newuser@example.test', 'a-strong-password-123').subscribe();
 

@@ -33,9 +33,17 @@ export class AuthService {
   }
 
   logout(): Observable<void> {
-    return this.http
-      .post<void>(`${API_BASE_URL}/auth/logout`, {})
-      .pipe(tap(() => this.currentUserSignal.set(null)));
+    return this.http.post<void>(`${API_BASE_URL}/auth/logout`, {}).pipe(
+      tap(() => {
+        this.currentUserSignal.set(null);
+        // The backend deletes the CSRF cookie on logout — an in-memory
+        // token from before would be stale for the next login and could
+        // 403. The interceptor's own retry-once-on-403 covers the case
+        // where this is missed for some other reason, but clearing here
+        // avoids relying on that fallback at all.
+        this.csrfStore.clear();
+      }),
+    );
   }
 
   me(): Observable<AuthUser> {

@@ -69,6 +69,24 @@ describe('CsrfTokenStore', () => {
     expect(resolved).toBe('retry-token');
   });
 
+  it('rejects and does not cache an empty csrf_token', () => {
+    let receivedError: unknown;
+    store.ensureToken().subscribe({ error: (error: unknown) => (receivedError = error) });
+    httpMock.expectOne(`${API_BASE_URL}/auth/csrf`).flush({ status: 'ok', csrf_token: '' });
+
+    expect(receivedError).toBeDefined();
+
+    // Not cached: a later call fetches again instead of resolving an
+    // empty string from memory.
+    let resolved: string | undefined;
+    store.ensureToken().subscribe((token) => (resolved = token));
+    httpMock
+      .expectOne(`${API_BASE_URL}/auth/csrf`)
+      .flush({ status: 'ok', csrf_token: 'valid-token' });
+
+    expect(resolved).toBe('valid-token');
+  });
+
   it('never stores the token in localStorage or sessionStorage', () => {
     store.ensureToken().subscribe();
     httpMock

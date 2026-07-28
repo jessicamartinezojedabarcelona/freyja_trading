@@ -1,9 +1,18 @@
-import { HttpClient, provideHttpClient, withInterceptors } from '@angular/common/http';
+import {
+  HttpClient,
+  HttpErrorResponse,
+  provideHttpClient,
+  withInterceptors,
+} from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 
 import { API_BASE_URL } from '../config/api.config';
 import { authInterceptor } from './auth.interceptor';
+import { CsrfTokenStore } from './csrf-token-store';
+
+const CSRF_INVALID = { detail: 'CSRF inválido.' };
+const CSRF_INVALID_OPTS = { status: 403, statusText: 'Forbidden' };
 
 describe('authInterceptor', () => {
   let http: HttpClient;
@@ -91,5 +100,91 @@ describe('authInterceptor', () => {
     expect(registerReq.request.headers.get('X-CSRF-Token')).toBe('shared-token');
     loginReq.flush({});
     registerReq.flush({});
+  });
+
+  it('retries exactly once with a fresh token when a mutation is rejected as CSRF invalid', () => {
+    // Reproduces an expired CSRF cookie/token mid-session: the first
+    // attempt carries a token the backend no longer accepts.
+    let succeeded = false;
+    http.post(`${API_BASE_URL}/auth/login`, {}).subscribe(() => (succeeded = true));
+
+    httpMock
+      .expectOne(`${API_BASE_URL}/auth/csrf`)
+      .flush({ status: 'ok', csrf_token: 'stale-token' });
+
+    const firstAttempt = httpMock.expectOne(`${API_BASE_URL}/auth/login`);
+    expect(firstAttempt.request.headers.get('X-CSRF-Token')).toBe('stale-token');
+    firstAttempt.flush(CSRF_INVALID, CSRF_INVALID_OPTS);
+
+    const renewal = httpMock.expectOne(`${API_BASE_URL}/auth/csrf`);
+    renewal.flush({ status: 'ok', csrf_token: 'fresh-token' });
+
+    const retryAttempt = httpMock.expectOne(`${API_BASE_URL}/auth/login`);
+    expect(retryAttempt.request.headers.get('X-CSRF-Token')).toBe('fresh-token');
+    retryAttempt.flush({ id: 'user-id', identifier: 'owner@example.test' });
+
+    expect(succeeded).toBe(true);
+  });
+
+  it('propagates a second CSRF-invalid 403 without retrying again', () => {
+    let receivedError: HttpErrorResponse | undefined;
+    http
+      .post(`${API_BASE_URL}/auth/login`, {})
+      .subscribe({ error: (error: HttpErrorResponse) => (receivedError = error) });
+
+    httpMock
+      .expectOne(`${API_BASE_URL}/auth/csrf`)
+      .flush({ status: 'ok', csrf_token: 'stale-token' });
+    httpMock.expectOne(`${API_BASE_URL}/auth/login`).flush(CSRF_INVALID, CSRF_INVALID_OPTS);
+
+    httpMock
+      .expectOne(`${API_BASE_URL}/auth/csrf`)
+      .flush({ status: 'ok', csrf_token: 'fresh-token' });
+    // The retry also comes back CSRF-invalid: no third attempt, no third
+    // CSRF fetch — the error is simply returned to the caller.
+    httpMock.expectOne(`${API_BASE_URL}/auth/login`).flush(CSRF_INVALID, CSRF_INVALID_OPTS);
+
+    expect(receivedError?.status).toBe(403);
+    httpMock.expectNone(`${API_BASE_URL}/auth/csrf`);
+    httpMock.expectNone(`${API_BASE_URL}/auth/login`);
+  });
+
+  it('does not retry a 403 that is not a CSRF failure', () => {
+    let receivedError: HttpErrorResponse | undefined;
+    http
+      .post(`${API_BASE_URL}/auth/login`, {})
+      .subscribe({ error: (error: HttpErrorResponse) => (receivedError = error) });
+
+    httpMock.expectOne(`${API_BASE_URL}/auth/csrf`).flush({ status: 'ok', csrf_token: 'token' });
+    httpMock
+      .expectOne(`${API_BASE_URL}/auth/login`)
+      .flush({ detail: 'Credenciales incorrectas.' }, { status: 403, statusText: 'Forbidden' });
+
+    expect(receivedError?.status).toBe(403);
+    expect(receivedError?.error?.detail).toBe('Credenciales incorrectas.');
+    httpMock.expectNone(`${API_BASE_URL}/auth/csrf`);
+  });
+
+  it('fetches a fresh token for the next mutation after the store is cleared (e.g. by logout)', () => {
+    // AuthService.logout() calls csrfStore.clear() directly — this
+    // reproduces that effect without going through AuthService, since this
+    // spec only wires up the interceptor.
+    const csrfStore = TestBed.inject(CsrfTokenStore);
+
+    http.post(`${API_BASE_URL}/auth/login`, {}).subscribe();
+    httpMock
+      .expectOne(`${API_BASE_URL}/auth/csrf`)
+      .flush({ status: 'ok', csrf_token: 'pre-logout-token' });
+    httpMock.expectOne(`${API_BASE_URL}/auth/login`).flush({});
+
+    csrfStore.clear();
+
+    http.post(`${API_BASE_URL}/auth/login`, {}).subscribe();
+    httpMock
+      .expectOne(`${API_BASE_URL}/auth/csrf`)
+      .flush({ status: 'ok', csrf_token: 'post-logout-token' });
+    const secondLoginReq = httpMock.expectOne(`${API_BASE_URL}/auth/login`);
+    expect(secondLoginReq.request.headers.get('X-CSRF-Token')).toBe('post-logout-token');
+    secondLoginReq.flush({});
   });
 });

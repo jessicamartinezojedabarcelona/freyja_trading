@@ -146,6 +146,11 @@ def test_csrf_cookie_is_not_httponly(client: TestClient) -> None:
     assert "httponly" not in csrf_cookie.lower()
 
 
+def test_csrf_endpoint_sets_cache_control_no_store(client: TestClient) -> None:
+    response = client.get(CSRF_URL)
+    assert response.headers.get("cache-control") == "no-store"
+
+
 def test_csrf_endpoint_returns_token_in_body_matching_cookie(client: TestClient) -> None:
     """The frontend runs on a different origin than the backend in
     production, so it cannot read the freyja_csrf cookie via document.cookie

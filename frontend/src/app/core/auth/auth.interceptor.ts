@@ -1,12 +1,21 @@
-import { HttpInterceptorFn } from '@angular/common/http';
+import { HttpErrorResponse, HttpInterceptorFn } from '@angular/common/http';
 import { inject } from '@angular/core';
-import { switchMap } from 'rxjs';
+import { catchError, switchMap, throwError } from 'rxjs';
 
 import { API_BASE_URL } from '../config/api.config';
 import { CsrfTokenStore } from './csrf-token-store';
 
 const CSRF_HEADER_NAME = 'X-CSRF-Token';
+const CSRF_INVALID_DETAIL = 'CSRF inválido.';
 const STATE_CHANGING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+function isCsrfInvalidResponse(error: unknown): error is HttpErrorResponse {
+  return (
+    error instanceof HttpErrorResponse &&
+    error.status === 403 &&
+    (error.error as { detail?: unknown } | null)?.detail === CSRF_INVALID_DETAIL
+  );
+}
 
 export const authInterceptor: HttpInterceptorFn = (req, next) => {
   if (!req.url.startsWith(API_BASE_URL)) {
@@ -26,9 +35,26 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
   // primed it yet — this is what eliminates the fire-and-forget race that
   // used to let a mutation go out before the token existed.
   const csrfStore = inject(CsrfTokenStore);
-  return csrfStore
-    .ensureToken()
-    .pipe(
-      switchMap((token) => next(outgoing.clone({ setHeaders: { [CSRF_HEADER_NAME]: token } }))),
-    );
+  const sendWithToken = (token: string) =>
+    next(outgoing.clone({ setHeaders: { [CSRF_HEADER_NAME]: token } }));
+
+  return csrfStore.ensureToken().pipe(
+    switchMap((token) =>
+      sendWithToken(token).pipe(
+        catchError((error: unknown) => {
+          if (!isCsrfInvalidResponse(error)) {
+            return throwError(() => error);
+          }
+          // The CSRF cookie/token can go stale mid-session (expiry, or a
+          // logout that this same browser tab missed clearing) — clear the
+          // store, fetch exactly one fresh token, and resend the original
+          // request exactly once. No catchError wraps this second attempt:
+          // a repeat CSRF-invalid response propagates as-is rather than
+          // retrying again.
+          csrfStore.clear();
+          return csrfStore.ensureToken().pipe(switchMap((freshToken) => sendWithToken(freshToken)));
+        }),
+      ),
+    ),
+  );
 };
