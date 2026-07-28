@@ -4,19 +4,26 @@ import { Observable, tap } from 'rxjs';
 
 import { API_BASE_URL } from '../config/api.config';
 import { AuthUser, StatusResponse } from './auth.models';
+import { CsrfTokenStore } from './csrf-token-store';
 
 @Injectable({ providedIn: 'root' })
 export class AuthService {
   private readonly http = inject(HttpClient);
+  private readonly csrfStore = inject(CsrfTokenStore);
   private readonly currentUserSignal = signal<AuthUser | null>(null);
 
   readonly currentUser = this.currentUserSignal.asReadonly();
 
   /** Single-responsibility CSRF priming: issues/renews the freyja_csrf
-   * cookie. Creates no session and returns no user data — safe to call from
-   * a fully anonymous, cookie-less browser on first load. */
-  primeCsrf(): Observable<StatusResponse> {
-    return this.http.get<StatusResponse>(`${API_BASE_URL}/auth/csrf`);
+   * cookie and stores the token in memory via CsrfTokenStore. Creates no
+   * session and returns no user data — safe to call from a fully
+   * anonymous, cookie-less browser on first load. Harmless to call more
+   * than once: the store dedupes concurrent fetches and caches the
+   * result, so this is purely an optimization — the interceptor's own
+   * ensureToken() call is what actually guarantees no mutation is sent
+   * before a token exists. */
+  primeCsrf(): Observable<string> {
+    return this.csrfStore.ensureToken();
   }
 
   login(identifier: string, password: string): Observable<AuthUser> {

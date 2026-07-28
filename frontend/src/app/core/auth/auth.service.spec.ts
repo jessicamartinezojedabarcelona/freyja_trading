@@ -35,13 +35,15 @@ describe('AuthService', () => {
     expect(service.currentUser()).toEqual({ id: 'user-id', identifier: 'owner@example.test' });
   });
 
-  it('primeCsrf() issues a GET to /auth/csrf and does not touch currentUser', () => {
-    service.primeCsrf().subscribe();
+  it('primeCsrf() issues a GET to /auth/csrf, resolves the token, and does not touch currentUser', () => {
+    let resolvedToken: string | undefined;
+    service.primeCsrf().subscribe((token) => (resolvedToken = token));
 
     const req = httpMock.expectOne(`${API_BASE_URL}/auth/csrf`);
     expect(req.request.method).toBe('GET');
-    req.flush({ status: 'ok' });
+    req.flush({ status: 'ok', csrf_token: 'some-test-token' });
 
+    expect(resolvedToken).toBe('some-test-token');
     expect(service.currentUser()).toBeNull();
   });
 

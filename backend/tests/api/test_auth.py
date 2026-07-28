@@ -1,4 +1,5 @@
 import httpx2
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -16,6 +17,21 @@ OWNER_PASSWORD = "correct-horse-battery-staple"
 WRONG_PASSWORD = "definitely-the-wrong-password"
 
 GENERIC_LOGIN_ERROR = "Credenciales incorrectas."
+
+# Mirrors the real cross-site Render topology (AUTH-CSRF-CROSS-ORIGIN-001):
+# frontend and backend on different onrender.com subdomains — different
+# sites, not just different origins.
+_PRODUCTION_ENV = {
+    "FREYJA_ENVIRONMENT": "production",
+    "FREYJA_RATE_LIMIT_HMAC_KEY": "a-real-secret-key-value",
+    "FREYJA_FRONTEND_ORIGIN": "https://freyja-frontend-lwy0.onrender.com",
+    "FREYJA_ALLOWED_HOSTS": "freyja-backend-lwy0.onrender.com",
+}
+
+
+def _set_production_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key, value in _PRODUCTION_ENV.items():
+        monkeypatch.setenv(key, value)
 
 
 def _create_owner(db_session: Session) -> None:
@@ -128,6 +144,111 @@ def test_csrf_cookie_is_not_httponly(client: TestClient) -> None:
     set_cookie_headers = response.headers.get_list("set-cookie")
     csrf_cookie = next(h for h in set_cookie_headers if h.startswith("freyja_csrf="))
     assert "httponly" not in csrf_cookie.lower()
+
+
+def test_csrf_endpoint_returns_token_in_body_matching_cookie(client: TestClient) -> None:
+    """The frontend runs on a different origin than the backend in
+    production, so it cannot read the freyja_csrf cookie via document.cookie
+    — the body is the only channel it can actually use to obtain the token."""
+    response = client.get(CSRF_URL)
+
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["csrf_token"]
+    assert body["csrf_token"] == response.cookies.get("freyja_csrf")
+
+
+def test_login_succeeds_using_csrf_token_read_from_response_body(
+    client: TestClient, db_session: Session
+) -> None:
+    """Reproduces the real cross-origin topology end to end: the token used
+    for the X-CSRF-Token header comes from the JSON body of GET /auth/csrf
+    (what a frontend kept it in memory from), not from reading the cookie
+    jar directly."""
+    _create_owner(db_session)
+    csrf_response = client.get(CSRF_URL)
+    token_from_body = csrf_response.json()["csrf_token"]
+
+    response = client.post(
+        LOGIN_URL,
+        json={"identifier": OWNER_IDENTIFIER, "password": OWNER_PASSWORD},
+        headers={"X-CSRF-Token": token_from_body},
+    )
+    assert response.status_code == 200
+
+
+def test_production_environment_cookies_are_secure_and_samesite_none(
+    client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cross-site production topology (separate onrender.com subdomains):
+    both the CSRF and session cookies must be Secure and SameSite=None, or a
+    real browser would refuse to send them back on the cross-site request in
+    the first place.
+
+    Uses an https:// base_url deliberately: httpx's cookie jar (like a real
+    browser) refuses to resend a Secure cookie over a plain http:// request,
+    so this is the one test in the module that cannot reuse the default
+    http://localhost client — it would otherwise fail for the same reason a
+    misconfigured Secure cookie would fail in a real browser."""
+    _create_owner(db_session)
+    _set_production_env(monkeypatch)
+
+    with TestClient(client.app, base_url="https://localhost") as https_client:
+        csrf_response = https_client.get(CSRF_URL)
+        csrf_cookie = next(
+            header
+            for header in csrf_response.headers.get_list("set-cookie")
+            if header.startswith("freyja_csrf=")
+        )
+        assert "secure" in csrf_cookie.lower()
+        assert "samesite=none" in csrf_cookie.lower()
+
+        token = csrf_response.json()["csrf_token"]
+        login_response = https_client.post(
+            LOGIN_URL,
+            json={"identifier": OWNER_IDENTIFIER, "password": OWNER_PASSWORD},
+            headers={"X-CSRF-Token": token},
+        )
+        assert login_response.status_code == 200
+        session_cookie = next(
+            header
+            for header in login_response.headers.get_list("set-cookie")
+            if header.startswith("freyja_session=")
+        )
+        assert "secure" in session_cookie.lower()
+        assert "samesite=none" in session_cookie.lower()
+        assert "httponly" in session_cookie.lower()
+
+
+def test_login_missing_csrf_header_is_still_403_in_production(
+    client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """require_csrf stays enforced regardless of environment — the
+    SameSite=None/Secure change only affects whether the browser sends the
+    cookie back, never whether the server checks it."""
+    _create_owner(db_session)
+    _set_production_env(monkeypatch)
+
+    client.get(CSRF_URL)
+    response = client.post(
+        LOGIN_URL, json={"identifier": OWNER_IDENTIFIER, "password": OWNER_PASSWORD}
+    )
+    assert response.status_code == 403
+
+
+def test_login_divergent_csrf_header_is_still_403_in_production(
+    client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _create_owner(db_session)
+    _set_production_env(monkeypatch)
+
+    client.get(CSRF_URL)
+    response = client.post(
+        LOGIN_URL,
+        json={"identifier": OWNER_IDENTIFIER, "password": OWNER_PASSWORD},
+        headers={"X-CSRF-Token": "not-the-real-csrf-token"},
+    )
+    assert response.status_code == 403
 
 
 def test_login_wrong_password_is_generic_401(client: TestClient, db_session: Session) -> None:

@@ -55,6 +55,18 @@ class Settings(BaseSettings):
         return self.environment == "production"
 
     @property
+    def cookie_samesite(self) -> Literal["strict", "none"]:
+        # Render deploys the frontend and backend as separate onrender.com
+        # subdomains — different sites for SameSite purposes, not merely
+        # different origins on a shared registrable domain. SameSite=Strict
+        # (or Lax) cannot be sent on that cross-site request at all, so
+        # production needs None (paired with Secure=true, already enforced by
+        # cookie_secure). Every other environment keeps the stricter default:
+        # this must stay environment-driven, never a hardcoded Render/
+        # onrender.com hostname check.
+        return "none" if self.environment == "production" else "strict"
+
+    @property
     def allowed_hosts_list(self) -> list[str]:
         return [host.strip() for host in self.allowed_hosts.split(",") if host.strip()]
 

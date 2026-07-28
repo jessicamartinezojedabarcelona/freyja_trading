@@ -60,14 +60,26 @@ class StatusOut(BaseModel):
     message: str | None = None
 
 
-@router.get("/csrf", response_model=StatusOut, status_code=status.HTTP_200_OK)
-def get_csrf(request: Request, response: Response) -> StatusOut:
+class CsrfTokenOut(BaseModel):
+    status: str
+    csrf_token: str
+
+
+@router.get("/csrf", response_model=CsrfTokenOut, status_code=status.HTTP_200_OK)
+def get_csrf(request: Request, response: Response) -> CsrfTokenOut:
     """Single-responsibility endpoint: issues/renews the CSRF cookie. Creates
     no session, requires no session, and returns no user information — safe
     to call from a fully anonymous browser before login/register/forgot/
-    reset."""
-    ensure_csrf_cookie(request.cookies.get("freyja_csrf"), response)
-    return StatusOut(status="ok")
+    reset.
+
+    The token is also returned in the response body (not only the cookie):
+    the frontend runs on a different origin than the backend in production
+    (separate onrender.com subdomains), so `document.cookie` cannot read a
+    host-only cookie set by the backend — the double-submit comparison only
+    works if the frontend gets the token some other way and keeps it in
+    memory to attach as the X-CSRF-Token header itself."""
+    token = ensure_csrf_cookie(request.cookies.get("freyja_csrf"), response)
+    return CsrfTokenOut(status="ok", csrf_token=token)
 
 
 @router.post(
