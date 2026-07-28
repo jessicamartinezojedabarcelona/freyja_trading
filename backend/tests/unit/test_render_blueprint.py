@@ -22,11 +22,29 @@ def test_render_yaml_exists_and_is_non_empty() -> None:
 
 
 def test_render_yaml_declares_exactly_two_services() -> None:
+    """Render's Blueprint schema has no `type: static` — a static site is a
+    `type: web` service with `runtime: static` set. Both services here
+    (freyja-backend, a real web service, and freyja-frontend, a static
+    site) are declared as `type: web`; `runtime: static` is what
+    distinguishes the frontend as a static site. Counts only top-level
+    service entries ("- type: web") — the frontend's `fromService: {type:
+    web, ...}` reference to the backend also contains the substring "type:
+    web" but is not itself a service declaration."""
     content = _RENDER_YAML.read_text(encoding="utf-8")
-    assert "type: web" in content
-    assert "type: static" in content
+    assert content.count("- type: web") == 2
+    assert "runtime: static" in content
     assert "name: freyja-backend" in content
     assert "name: freyja-frontend" in content
+
+
+def test_frontend_spa_route_uses_valid_rewrite_syntax() -> None:
+    """Render's route schema requires `type: rewrite` and `source:` (not the
+    invalid `path:` key) for a catch-all SPA fallback to index.html."""
+    content = _RENDER_YAML.read_text(encoding="utf-8")
+    assert "type: rewrite" in content
+    assert "source: /*" in content
+    assert "destination: /index.html" in content
+    assert "path: /*" not in content
 
 
 def test_render_yaml_has_no_render_managed_database() -> None:
