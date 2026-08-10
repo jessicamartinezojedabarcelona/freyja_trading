@@ -11,9 +11,12 @@
 # + frontend, against an ephemeral CI-only Postgres — never against Neon),
 # then applies Alembic migrations against Neon's *direct* (unpooled)
 # connection and verifies `current` == `heads`, and only if all of that
-# succeeds, triggers Render's deploy hooks for both services. It provisions
-# nothing, creates no Render/Neon resources, and reads no secret value into
-# logs.
+# succeeds, deploys both Render services and waits for Render's own,
+# officially documented API to confirm each one is actually "live" at the
+# exact commit requested (DEPLOY-VERIFY-001) — a deploy hook merely
+# accepting the request is never treated as a finished, successful deploy.
+# It provisions nothing, creates no Render/Neon resources, and reads no
+# secret value into logs.
 name: Deploy Preview (manual)
 
 on:
@@ -204,23 +207,50 @@ jobs:
           print('Neon DATABASE_URL (pooled) is reachable')
           "
 
-      # --- Only now, trigger Render's deploy hooks, pinned to this exact
-      # validated commit (never "whatever is latest on main") ---
+      # --- Only now, deploy each Render service pinned to this exact
+      # validated commit (never "whatever is latest on main"), and do not
+      # succeed until Render's own API confirms it is actually live there
+      # (DEPLOY-VERIFY-001 — a deploy hook accepting the request is not the
+      # same thing as a deploy finishing, or finishing successfully) ---
 
-      - name: Trigger Render backend deploy hook (pinned to this commit)
+      - name: Deploy backend on Render and confirm it is live at this commit
         env:
           RENDER_BACKEND_DEPLOY_HOOK: ${{ secrets.RENDER_BACKEND_DEPLOY_HOOK }}
-        # Render's deploy hook URLs already carry a `?key=...` query
-        # parameter (per Render's own documentation); appending `&ref=<sha>`
-        # deploys that exact commit instead of the latest one on the
-        # service's tracked branch. GITHUB_SHA is the full 40-character SHA
-        # of the commit this workflow is running against — the same one
-        # backend quality controls, the Neon migration, and the readiness
-        # check above all just validated. Never echoed: curl receives it
-        # only via shell variable expansion, never printed or logged.
-        run: curl --fail --silent --show-error -X POST "${RENDER_BACKEND_DEPLOY_HOOK}&ref=${GITHUB_SHA}"
+          RENDER_BACKEND_SERVICE_ID: ${{ secrets.RENDER_BACKEND_SERVICE_ID }}
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+        # scripts/render_deploy.py (repo root; stdlib-only, no new backend
+        # dependency) triggers the deploy hook exactly once — pinned to
+        # GITHUB_SHA via the `ref` query parameter, same as before — then
+        # polls Render's official, documented
+        # `GET /v1/services/{serviceId}/deploys/{deployId}` endpoint (never
+        # a deploy hook response) until it reports `status: "live"` on that
+        # exact commit, a documented failure/cancellation status, or the
+        # timeout below elapses. Secret values are read from the named env
+        # vars inside the script and are never printed, echoed, or included
+        # in any error message. `--project backend` only selects the
+        # already-installed Python 3.12 environment; the script itself runs
+        # from the repo root, where it lives.
+        run: |
+          uv run --project backend python scripts/render_deploy.py \
+            --service-name backend \
+            --hook-url-env RENDER_BACKEND_DEPLOY_HOOK \
+            --service-id-env RENDER_BACKEND_SERVICE_ID \
+            --api-key-env RENDER_API_KEY \
+            --sha "${GITHUB_SHA}" \
+            --timeout-seconds 600 \
+            --poll-interval-seconds 15
 
-      - name: Trigger Render frontend deploy hook (pinned to this commit)
+      - name: Deploy frontend on Render and confirm it is live at this commit
         env:
           RENDER_FRONTEND_DEPLOY_HOOK: ${{ secrets.RENDER_FRONTEND_DEPLOY_HOOK }}
-        run: curl --fail --silent --show-error -X POST "${RENDER_FRONTEND_DEPLOY_HOOK}&ref=${GITHUB_SHA}"
+          RENDER_FRONTEND_SERVICE_ID: ${{ secrets.RENDER_FRONTEND_SERVICE_ID }}
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+        run: |
+          uv run --project backend python scripts/render_deploy.py \
+            --service-name frontend \
+            --hook-url-env RENDER_FRONTEND_DEPLOY_HOOK \
+            --service-id-env RENDER_FRONTEND_SERVICE_ID \
+            --api-key-env RENDER_API_KEY \
+            --sha "${GITHUB_SHA}" \
+            --timeout-seconds 600 \
+            --poll-interval-seconds 15

@@ -9,6 +9,9 @@ _REQUIRED_SECRETS = (
     "NEON_DATABASE_DIRECT_URL",
     "RENDER_BACKEND_DEPLOY_HOOK",
     "RENDER_FRONTEND_DEPLOY_HOOK",
+    "RENDER_API_KEY",
+    "RENDER_BACKEND_SERVICE_ID",
+    "RENDER_FRONTEND_SERVICE_ID",
 )
 
 _SUSPICIOUS_LITERAL_VALUE_PATTERN = re.compile(
@@ -62,7 +65,7 @@ def test_guards_against_running_on_a_ref_other_than_main() -> None:
     assert "refs/heads/main" in code_only
 
 
-def test_references_all_four_required_secrets_by_exact_name() -> None:
+def test_references_all_seven_required_secrets_by_exact_name() -> None:
     code_only = _code_only_content()
     for secret_name in _REQUIRED_SECRETS:
         assert f"secrets.{secret_name}" in code_only, f"expected secrets.{secret_name} to be used"
@@ -118,20 +121,22 @@ def test_both_neon_migration_steps_set_pooled_and_direct_urls() -> None:
 
 def test_deploy_hooks_pin_the_exact_validated_commit() -> None:
     """Deploy hooks must never deploy 'whatever is latest' — they deploy the
-    exact commit this workflow run validated, via Render's documented `ref`
-    query parameter appended to the hook URL, using GitHub's own
-    GITHUB_SHA (no separate declaration needed — GitHub Actions provides it
-    automatically to every step)."""
+    exact commit this workflow run validated, using GitHub's own GITHUB_SHA
+    (no separate declaration needed — GitHub Actions provides it
+    automatically to every step). The workflow's job is only to pass that
+    SHA through to scripts/render_deploy.py via --sha for both services;
+    that script is what appends Render's documented `ref` query parameter
+    to the hook URL (verified independently, at the unit level, in
+    test_render_deploy_script.py::test_trigger_deploy_posts_exactly_once_and_pins_the_ref).
+    """
     code_only = _code_only_content()
-    assert "&ref=${GITHUB_SHA}" in code_only or "&ref=$GITHUB_SHA" in code_only
-    backend_hook_line = next(
-        line for line in code_only.splitlines() if "RENDER_BACKEND_DEPLOY_HOOK}" in line
-    )
-    frontend_hook_line = next(
-        line for line in code_only.splitlines() if "RENDER_FRONTEND_DEPLOY_HOOK}" in line
-    )
-    assert "ref=" in backend_hook_line
-    assert "ref=" in frontend_hook_line
+    assert code_only.count('--sha "${GITHUB_SHA}"') == 2
+
+    steps = _content().split("- name:")
+    backend_step = next(step for step in steps if "Deploy backend on Render" in step)
+    frontend_step = next(step for step in steps if "Deploy frontend on Render" in step)
+    assert "--sha" in backend_step
+    assert "--sha" in frontend_step
 
 
 def test_readiness_check_step_declares_no_smtp_placeholders() -> None:
