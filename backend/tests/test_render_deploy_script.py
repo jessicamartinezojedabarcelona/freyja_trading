@@ -128,10 +128,28 @@ def test_fetch_deploy_status_parses_status_and_commit_id() -> None:
     )
 
 
-def test_fetch_deploy_status_fails_on_non_200() -> None:
+def test_fetch_deploy_status_fails_on_an_unexpected_non_200_status() -> None:
+    get = FakeGetSequence([(500, "")])
+
+    with pytest.raises(render_deploy.RenderDeployError, match="HTTP 500"):
+        render_deploy.fetch_deploy_status(FAKE_SERVICE_ID, "dep-abc", FAKE_API_KEY, http_get=get)
+
+
+@pytest.mark.parametrize("status_code", [401, 403])
+def test_fetch_deploy_status_fails_immediately_on_401_or_403(status_code: int) -> None:
+    get = FakeGetSequence([(status_code, "")])
+
+    with pytest.raises(render_deploy.RenderDeployError, match=f"HTTP {status_code}"):
+        render_deploy.fetch_deploy_status(FAKE_SERVICE_ID, "dep-abc", FAKE_API_KEY, http_get=get)
+
+
+def test_fetch_deploy_status_raises_a_distinct_not_yet_visible_error_on_404() -> None:
+    # 404 must never be silently treated as success, and must be
+    # distinguishable from a definitive failure — only wait_for_live_deploy
+    # is allowed to interpret it as "retry within the grace period".
     get = FakeGetSequence([(404, "")])
 
-    with pytest.raises(render_deploy.RenderDeployError, match="HTTP 404"):
+    with pytest.raises(render_deploy._DeployNotYetVisibleError):
         render_deploy.fetch_deploy_status(FAKE_SERVICE_ID, "dep-abc", FAKE_API_KEY, http_get=get)
 
 
@@ -292,6 +310,118 @@ def test_wait_for_live_deploy_rejects_non_positive_timeout_or_interval() -> None
             poll_interval_seconds=0,
         )
 
+    with pytest.raises(ValueError):
+        render_deploy.wait_for_live_deploy(
+            FAKE_SERVICE_ID,
+            "dep-abc",
+            FAKE_API_KEY,
+            EXPECTED_SHA,
+            timeout_seconds=60,
+            poll_interval_seconds=5,
+            visibility_timeout_seconds=0,
+        )
+
+
+# --- wait_for_live_deploy: transient 404s before Render indexes the deploy -
+
+
+def test_wait_for_live_deploy_retries_through_a_transient_404_then_succeeds() -> None:
+    get = FakeGetSequence(
+        [
+            (404, ""),
+            (404, ""),
+            (200, {"status": "live", "commit": {"id": EXPECTED_SHA}}),
+        ]
+    )
+    clock = FakeClock()
+
+    result = render_deploy.wait_for_live_deploy(
+        FAKE_SERVICE_ID,
+        "dep-abc",
+        FAKE_API_KEY,
+        EXPECTED_SHA,
+        timeout_seconds=600,
+        poll_interval_seconds=15,
+        http_get=get,
+        sleep=clock.sleep,
+        now=clock.now,
+    )
+
+    assert result.status == "live"
+    assert len(get.calls) == 3
+    assert clock.sleep_calls == [15, 15]
+
+
+def test_wait_for_live_deploy_fails_once_404_persists_beyond_the_visibility_grace_period() -> None:
+    def get(_url: str, _api_key: str) -> tuple[int, str]:
+        return 404, ""
+
+    clock = FakeClock()
+
+    with pytest.raises(render_deploy.RenderDeployError, match="HTTP 404"):
+        render_deploy.wait_for_live_deploy(
+            FAKE_SERVICE_ID,
+            "dep-abc",
+            FAKE_API_KEY,
+            EXPECTED_SHA,
+            timeout_seconds=600,
+            poll_interval_seconds=15,
+            visibility_timeout_seconds=60,
+            http_get=get,
+            sleep=clock.sleep,
+            now=clock.now,
+        )
+
+    # never gave up before the full, documented 60s grace period elapsed —
+    # and never anywhere near the unrelated 600s overall timeout either.
+    assert clock.now() >= 60
+    assert clock.now() < 600
+
+
+def test_wait_for_live_deploy_never_lets_a_persistent_404_masquerade_as_success() -> None:
+    def get(_url: str, _api_key: str) -> tuple[int, str]:
+        return 404, ""
+
+    clock = FakeClock()
+
+    with pytest.raises(render_deploy.RenderDeployError):
+        render_deploy.wait_for_live_deploy(
+            FAKE_SERVICE_ID,
+            "dep-abc",
+            FAKE_API_KEY,
+            EXPECTED_SHA,
+            timeout_seconds=600,
+            poll_interval_seconds=15,
+            visibility_timeout_seconds=60,
+            http_get=get,
+            sleep=clock.sleep,
+            now=clock.now,
+        )
+
+
+@pytest.mark.parametrize("status_code", [401, 403])
+def test_wait_for_live_deploy_fails_immediately_on_401_or_403_without_retrying(
+    status_code: int,
+) -> None:
+    get = FakeGetSequence([(status_code, "")])
+    clock = FakeClock()
+
+    with pytest.raises(render_deploy.RenderDeployError, match=f"HTTP {status_code}"):
+        render_deploy.wait_for_live_deploy(
+            FAKE_SERVICE_ID,
+            "dep-abc",
+            FAKE_API_KEY,
+            EXPECTED_SHA,
+            timeout_seconds=600,
+            poll_interval_seconds=15,
+            http_get=get,
+            sleep=clock.sleep,
+            now=clock.now,
+        )
+
+    assert len(get.calls) == 1
+    assert clock.sleep_calls == []
+
 
 # --- verify_deploy: end-to-end, exactly one trigger even across many polls -
 
@@ -350,6 +480,35 @@ def test_verify_deploy_never_re_triggers_after_a_failure_status() -> None:
     assert len(post.calls) == 1
 
 
+def test_verify_deploy_triggers_exactly_once_even_with_several_transient_404s() -> None:
+    post = FakePost(200, {"deploy": {"id": "dep-once"}})
+    get = FakeGetSequence(
+        [
+            (404, ""),
+            (404, ""),
+            (200, {"status": "live", "commit": {"id": EXPECTED_SHA}}),
+        ]
+    )
+    clock = FakeClock()
+
+    result = render_deploy.verify_deploy(
+        hook_url=FAKE_HOOK_URL,
+        service_id=FAKE_SERVICE_ID,
+        api_key=FAKE_API_KEY,
+        sha=EXPECTED_SHA,
+        timeout_seconds=600,
+        poll_interval_seconds=15,
+        http_post=post,
+        http_get=get,
+        sleep=clock.sleep,
+        now=clock.now,
+    )
+
+    assert result.deploy_id == "dep-once"
+    assert len(post.calls) == 1
+    assert len(get.calls) == 3
+
+
 # --- secrets never leak into error messages or stdout/stderr ---------------
 
 
@@ -361,6 +520,29 @@ def test_error_messages_never_contain_the_hook_url_or_the_api_key() -> None:
 
     assert FAKE_HOOK_URL not in str(excinfo.value)
     assert "super-secret-hook-key" not in str(excinfo.value)
+
+
+def test_persistent_404_error_message_never_contains_the_api_key() -> None:
+    def get(_url: str, _api_key: str) -> tuple[int, str]:
+        return 404, ""
+
+    clock = FakeClock()
+
+    with pytest.raises(render_deploy.RenderDeployError) as excinfo:
+        render_deploy.wait_for_live_deploy(
+            FAKE_SERVICE_ID,
+            "dep-abc",
+            FAKE_API_KEY,
+            EXPECTED_SHA,
+            timeout_seconds=600,
+            poll_interval_seconds=15,
+            visibility_timeout_seconds=60,
+            http_get=get,
+            sleep=clock.sleep,
+            now=clock.now,
+        )
+
+    assert FAKE_API_KEY not in str(excinfo.value)
 
 
 def test_main_success_path_prints_no_secret_and_returns_zero(

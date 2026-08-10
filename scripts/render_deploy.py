@@ -28,6 +28,16 @@ from typing import Callable
 
 RENDER_API_BASE = "https://api.render.com/v1"
 
+# Margen máximo, en segundos, durante el que un HTTP 404 al consultar un
+# despliegue recién disparado se trata como "todavía no visible en la API
+# de Render" en vez de un fallo definitivo. Observado en producción: el
+# hook del frontend devuelve un deploy ID válido, pero la primera consulta
+# inmediata a ese ID puede responder 404 durante unos segundos antes de que
+# Render lo indexe. Deliberadamente independiente de timeout_seconds (el
+# plazo para llegar a "live"): son dos preguntas distintas ("¿existe ya
+# este despliegue?" vs. "¿ya terminó?").
+DEPLOY_VISIBILITY_GRACE_SECONDS = 60
+
 # Valores de "status" documentados oficialmente por la API de Render para
 # un despliegue: https://api-docs.render.com/reference/retrieve-deploy
 SUCCESS_STATUS = "live"
@@ -53,6 +63,15 @@ IN_PROGRESS_STATUSES = frozenset(
 
 class RenderDeployError(Exception):
     """Un despliegue no pudo dispararse o no se pudo confirmar 'live' en el SHA esperado."""
+
+
+class _DeployNotYetVisibleError(Exception):
+    """El despliegue devolvió HTTP 404 al consultarlo: aún no indexado por Render.
+
+    Interno: solo `wait_for_live_deploy` debe capturarlo, y únicamente para
+    decidir si reintentar dentro del margen de `DEPLOY_VISIBILITY_GRACE_SECONDS`.
+    Cualquier otro código de error (401, 403, 5xx, etc.) sigue siendo un
+    `RenderDeployError` inmediato y definitivo, sin reintento."""
 
 
 @dataclass(frozen=True)
@@ -145,6 +164,8 @@ def fetch_deploy_status(
     """Consulta el estado de un despliegue vía la API oficial de Render (solo lectura)."""
     url = f"{RENDER_API_BASE}/services/{service_id}/deploys/{deploy_id}"
     status_code, body = http_get(url, api_key)
+    if status_code == 404:
+        raise _DeployNotYetVisibleError(deploy_id)
     if status_code != 200:
         raise RenderDeployError(
             f"No se pudo consultar el estado del despliegue {deploy_id} en Render "
@@ -179,6 +200,7 @@ def wait_for_live_deploy(
     *,
     timeout_seconds: int,
     poll_interval_seconds: int,
+    visibility_timeout_seconds: int = DEPLOY_VISIBILITY_GRACE_SECONDS,
     http_get: HttpGet = _http_get,
     sleep: Callable[[float], None] = time.sleep,
     now: Callable[[], float] = time.monotonic,
@@ -187,17 +209,44 @@ def wait_for_live_deploy(
 
     Nunca vuelve a disparar el despliegue: solo realiza consultas GET de solo
     lectura contra la API oficial de Render, con un intervalo y un tiempo
-    máximo de espera finitos.
+    máximo de espera finitos. Un HTTP 404 se trata como "todavía no visible"
+    y se reintenta durante como mucho `visibility_timeout_seconds`; cualquier
+    otro código de error (401, 403, 5xx, etc.) sigue siendo definitivo e
+    inmediato.
     """
     if timeout_seconds <= 0:
         raise ValueError("timeout_seconds debe ser positivo.")
     if poll_interval_seconds <= 0:
         raise ValueError("poll_interval_seconds debe ser positivo.")
+    if visibility_timeout_seconds <= 0:
+        raise ValueError("visibility_timeout_seconds debe ser positivo.")
 
     deadline = now() + timeout_seconds
+    visibility_deadline: float | None = None
 
     while True:
-        result = fetch_deploy_status(service_id, deploy_id, api_key, http_get=http_get)
+        try:
+            result = fetch_deploy_status(service_id, deploy_id, api_key, http_get=http_get)
+        except _DeployNotYetVisibleError:
+            current_time = now()
+            if visibility_deadline is None:
+                visibility_deadline = current_time + visibility_timeout_seconds
+
+            if current_time >= visibility_deadline:
+                raise RenderDeployError(
+                    f"El despliegue {deploy_id} siguió devolviendo HTTP 404 durante más "
+                    f"de {visibility_timeout_seconds}s: nunca llegó a ser visible en la "
+                    "API de Render."
+                ) from None
+            if current_time >= deadline:
+                raise RenderDeployError(
+                    f"Tiempo de espera agotado ({timeout_seconds}s) esperando a que el "
+                    f"despliegue {deploy_id} llegara a 'live' (seguía sin ser visible "
+                    "en la API de Render, HTTP 404)."
+                ) from None
+
+            sleep(poll_interval_seconds)
+            continue
 
         if result.status == SUCCESS_STATUS:
             if result.commit_id != expected_sha:
@@ -236,6 +285,7 @@ def verify_deploy(
     sha: str,
     timeout_seconds: int,
     poll_interval_seconds: int,
+    visibility_timeout_seconds: int = DEPLOY_VISIBILITY_GRACE_SECONDS,
     http_post: HttpPost = _http_post,
     http_get: HttpGet = _http_get,
     sleep: Callable[[float], None] = time.sleep,
@@ -250,6 +300,7 @@ def verify_deploy(
         sha,
         timeout_seconds=timeout_seconds,
         poll_interval_seconds=poll_interval_seconds,
+        visibility_timeout_seconds=visibility_timeout_seconds,
         http_get=http_get,
         sleep=sleep,
         now=now,
