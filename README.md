@@ -779,9 +779,13 @@ haya un proveedor SMTP real aprobado.
 | `NEON_DATABASE_DIRECT_URL` | Conexión **directa** (sin *pooling*) de Neon — cuando está presente junto a `NEON_DATABASE_URL`, `migration_url` resuelve a esta para `alembic upgrade head` |
 | `RENDER_BACKEND_DEPLOY_HOOK` | URL del deploy hook del Web Service |
 | `RENDER_FRONTEND_DEPLOY_HOOK` | URL del deploy hook del Static Site |
+| `RENDER_API_KEY` | API key de Render (panel → *Account Settings* → *API Keys*), usada solo para **consultar** el estado de un despliegue vía `GET /v1/services/{serviceId}/deploys/{deployId}` — nunca para crear ni modificar recursos |
+| `RENDER_BACKEND_SERVICE_ID` | Service ID del Web Service `freyja-backend` (prefijo `srv-…`, visible en la URL del servicio en el panel de Render o vía `GET /v1/services`) |
+| `RENDER_FRONTEND_SERVICE_ID` | Service ID del Static Site `freyja-frontend` (mismo origen que el anterior) |
 
 Ninguno de estos valores aparece de forma literal en `render.yaml`, en
-`deploy-preview.yml`, en este README ni en ningún archivo versionado.
+`deploy-preview.yml`, en `scripts/render_deploy.py`, en este README ni en
+ningún archivo versionado.
 
 ### 19.4 Migraciones
 
@@ -948,8 +952,8 @@ migración ya no está acoplada al despliegue de Render:
   `NEON_DATABASE_URL` + `NEON_DATABASE_DIRECT_URL` ambas presentes
   (`migration_url` resuelve a la directa) → verificación `current ==
   heads` → comprobación de conectividad de `NEON_DATABASE_URL` (la
-  conexión *pooled* que el backend usará en producción) → disparo de los
-  dos deploy hooks de Render, leídos exclusivamente de GitHub Secrets.
+  conexión *pooled* que el backend usará en producción) → despliegue y
+  verificación de backend y frontend en Render, uno tras otro.
 - **Los deploy hooks despliegan el commit exacto**, no "lo último
   disponible": ambos se invocan con `&ref=$GITHUB_SHA` añadido a la URL
   del hook (parámetro `ref` documentado oficialmente por Render para
@@ -957,6 +961,24 @@ migración ya no está acoplada al despliegue de Render:
   GitHub Actions inyecta automáticamente — el mismo commit que los
   controles de calidad y la migración de este mismo *run* acaban de
   validar. Backend y frontend reciben idéntico SHA.
+- **Un deploy hook aceptado no es un despliegue completado** (DEPLOY-VERIFY-001):
+  el workflow ya no termina en verde solo porque Render devolvió HTTP 200
+  al hook. `scripts/render_deploy.py` dispara el hook exactamente una vez
+  por servicio, extrae el `id` del despliegue de la respuesta de Render y
+  a partir de ahí consulta únicamente la API oficial y documentada
+  (`GET /v1/services/{serviceId}/deploys/{deployId}`, autenticada con
+  `RENDER_API_KEY`) cada 15 segundos, hasta un máximo de 600 segundos por
+  servicio. El paso solo termina en éxito cuando esa consulta responde
+  `status: "live"` **y** `commit.id` coincide exactamente con el SHA
+  esperado. Falla explícitamente — sin reintentar el hook — ante
+  cualquiera de estos casos: Render no devuelve un ID de despliegue
+  verificable, el estado final es de fallo o cancelación
+  (`build_failed`, `update_failed`, `canceled`, `deactivated`,
+  `pre_deploy_failed`), el commit que queda `live` no es el esperado, o
+  se agota el tiempo de espera sin llegar a `live`. Ningún valor de
+  `RENDER_API_KEY` ni de las URLs de los deploy hooks se imprime en
+  ningún momento; los mensajes de error solo incluyen el ID del
+  despliegue, su estado y el SHA (ninguno de los dos es secreto).
 - **`autoDeployTrigger: off` en ambos servicios de `render.yaml`**: sin
   esto, Render usaría su comportamiento por defecto (`commit`) y
   desplegaría automáticamente cada push a la rama enlazada, saltándose por
@@ -968,9 +990,11 @@ migración ya no está acoplada al despliegue de Render:
 - [ ] Codex ha revisado esta implementación.
 - [ ] Proyecto de Neon creado, con región europea seleccionada
       explícitamente (§19.1).
-- [ ] Los cuatro GitHub Secrets (`NEON_DATABASE_URL`,
+- [ ] Los siete GitHub Secrets (`NEON_DATABASE_URL`,
       `NEON_DATABASE_DIRECT_URL`, `RENDER_BACKEND_DEPLOY_HOOK`,
-      `RENDER_FRONTEND_DEPLOY_HOOK`) configurados en el entorno `preview`.
+      `RENDER_FRONTEND_DEPLOY_HOOK`, `RENDER_API_KEY`,
+      `RENDER_BACKEND_SERVICE_ID`, `RENDER_FRONTEND_SERVICE_ID`)
+      configurados en el entorno `preview`.
 - [ ] Proveedor SMTP de producción elegido y aprobado (no antes).
 - [ ] `FREYJA_RATE_LIMIT_HMAC_KEY` generado de forma segura.
 
