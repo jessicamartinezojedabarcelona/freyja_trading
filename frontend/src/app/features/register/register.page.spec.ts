@@ -145,6 +145,30 @@ describe('RegisterPage', () => {
     expect(compiled.textContent).toContain('Tu cuenta ha sido creada. Ya puedes iniciar sesión.');
   });
 
+  it('replaces the heading with "Cuenta creada" after a successful submit, and hides the form', () => {
+    const fixture = TestBed.createComponent(RegisterPage);
+    const component = fixture.componentInstance;
+    const compiled = fixture.nativeElement as HTMLElement;
+    fixture.detectChanges();
+
+    expect(compiled.querySelector('.card-heading')?.textContent).toBe('Crea tu cuenta');
+
+    component.form.setValue({
+      email: 'newuser@example.test',
+      password: VALID_PASSWORD,
+      confirmPassword: VALID_PASSWORD,
+    });
+    component.submit();
+
+    const req = httpMock.expectOne(`${API_BASE_URL}/auth/register`);
+    req.flush({ status: 'ok', message: 'ack' });
+    fixture.detectChanges();
+
+    expect(compiled.querySelector('.card-heading')?.textContent).toBe('Cuenta creada');
+    expect(compiled.querySelector('form')).toBeNull();
+    expect(compiled.querySelector('a[routerLink="/login"]')).toBeTruthy();
+  });
+
   it('toggles password visibility with an accessible name that reflects state', () => {
     const fixture = TestBed.createComponent(RegisterPage);
     fixture.detectChanges();
