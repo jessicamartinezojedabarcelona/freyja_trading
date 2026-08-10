@@ -1,4 +1,7 @@
-<app-auth-shell heading="Crea tu cuenta" subtitle="Un correo y una contraseña. Nada más.">
+<app-auth-shell
+  [heading]="submitted() ? 'Cuenta creada' : 'Crea tu cuenta'"
+  subtitle="Un correo y una contraseña. Nada más."
+>
   @if (submitted()) {
     <p class="success" role="status">Tu cuenta ha sido creada. Ya puedes iniciar sesión.</p>
   } @else {
