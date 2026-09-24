@@ -22,6 +22,16 @@ export const routes: Routes = [
       import('./features/reset-password/reset-password.page').then((m) => m.ResetPasswordPage),
   },
   {
+    path: 'mercados',
+    loadComponent: () => import('./features/markets/markets.page').then((m) => m.MarketsPage),
+    canActivate: [authGuard],
+  },
+  {
+    path: 'mercados/:instrumentId',
+    loadComponent: () => import('./features/markets/markets.page').then((m) => m.MarketsPage),
+    canActivate: [authGuard],
+  },
+  {
     path: '',
     loadComponent: () => import('./features/home/home.page').then((m) => m.HomePage),
     canActivate: [authGuard],

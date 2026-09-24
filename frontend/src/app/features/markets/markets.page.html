@@ -1,0 +1,236 @@
+<div class="layout">
+  <header class="topbar">
+    <a routerLink="/" class="back">← Inicio</a>
+    <h1>Mercados</h1>
+  </header>
+
+  <aside class="sidebar" aria-label="Instrumentos">
+    <div class="filters">
+      <label class="field">
+        <span>Buscar</span>
+        <input
+          #searchBox
+          type="search"
+          placeholder="Símbolo, mercado o producto"
+          [value]="search()"
+          (input)="onSearch(searchBox.value)"
+        />
+      </label>
+      <label class="field">
+        <span>Mercado</span>
+        <select #marketBox [value]="marketFilter()" (change)="onMarketFilter(marketBox.value)">
+          <option value="">Todos</option>
+          @for (market of markets(); track market.code) {
+            <option [value]="market.code">{{ market.name }}</option>
+          }
+        </select>
+      </label>
+    </div>
+
+    @switch (listState()) {
+      @case ('loading') {
+        <p class="muted" role="status" aria-busy="true">Cargando instrumentos…</p>
+      }
+      @case ('error') {
+        <p class="alert alert--error" role="alert">✕ No se pudo cargar la lista de instrumentos.</p>
+      }
+      @default {
+        @if (visibleInstruments().length === 0) {
+          <p class="muted">Ningún instrumento coincide con el filtro.</p>
+        } @else {
+          <ul class="instrument-list">
+            @for (instrument of visibleInstruments(); track instrument.instrument_id) {
+              <li>
+                <button
+                  type="button"
+                  class="instrument"
+                  [class.instrument--active]="instrument.instrument_id === selectedId()"
+                  [attr.aria-current]="instrument.instrument_id === selectedId() ? 'page' : null"
+                  (click)="chooseInstrument(instrument.instrument_id)"
+                >
+                  <span class="symbol">{{ instrument.canonical_symbol }}</span>
+                  <span class="meta"
+                    >{{ instrument.market.display_name }} ·
+                    {{ instrument.product_type.display_name }}</span
+                  >
+                </button>
+              </li>
+            }
+          </ul>
+          @if (totalInstruments() > instruments().length) {
+            <p class="muted">
+              Mostrando {{ instruments().length }} de {{ totalInstruments() }} instrumentos.
+            </p>
+          }
+        }
+      }
+    }
+  </aside>
+
+  <main class="content">
+    @if (selectedId() === null) {
+      <section class="empty" aria-live="polite">
+        <h2>Elige un instrumento</h2>
+        <p>
+          Selecciona un instrumento de la lista para ver sus velas guardadas, de dónde vienen y cómo
+          de recientes son.
+        </p>
+      </section>
+    } @else {
+      @if (detail(); as d) {
+        <div class="heading">
+          <div>
+            <h2>{{ d.instrument.canonical_symbol }}</h2>
+            <p class="meta">
+              {{ d.instrument.market.display_name }} · {{ d.instrument.product_type.display_name }}
+            </p>
+          </div>
+          @if (lastClose(); as close) {
+            <p class="last-close">
+              <span class="label">Último cierre</span>
+              <span class="price price--{{ close.tone }}"
+                ><span aria-hidden="true">{{ close.arrow }}</span> {{ close.value }}</span
+              >
+              <span class="meta">{{ close.text }}</span>
+            </p>
+          }
+        </div>
+
+        @if (sources().length > 1) {
+          <label class="field field--inline">
+            <span>Fuente de datos</span>
+            <select
+              #sourceBox
+              [value]="selectedSource() ?? ''"
+              (change)="chooseSource(sourceBox.value)"
+            >
+              @for (source of sources(); track source.code) {
+                <option [value]="source.code">{{ source.name }}</option>
+              }
+            </select>
+          </label>
+        }
+
+        <app-timeframe-picker
+          [options]="periodOptions()"
+          [selected]="selectedTimeframe()"
+          (chosen)="chooseTimeframe($event)"
+        />
+      }
+
+      @switch (seriesState()) {
+        @case ('loading') {
+          <p class="muted" role="status" aria-busy="true">Cargando velas…</p>
+        }
+        @case ('error') {
+          <div class="alert alert--error" role="alert">
+            <p>✕ {{ errorMessage() }}</p>
+            <button type="button" class="action" (click)="reload()">Reintentar</button>
+          </div>
+        }
+        @case ('no-source') {
+          <section class="empty">
+            <h3>Este instrumento aún no tiene velas</h3>
+            <p>
+              Ninguna fuente de datos publica velas para este instrumento todavía, o no tiene
+              periodos habilitados. No se muestra nada en su lugar.
+            </p>
+          </section>
+        }
+        @case ('ready') {
+          @if (series(); as s) {
+            @if (candles().length === 0) {
+              <section class="empty">
+                <h3>Todavía no hay velas guardadas</h3>
+                <p>
+                  Freyja aún no ha guardado velas de esta serie. No se muestra un gráfico de
+                  ejemplo: cuando se sincronicen aparecerán aquí.
+                </p>
+              </section>
+            } @else {
+              <section aria-label="Gráfico de velas">
+                <app-candle-chart
+                  [data]="chartData()"
+                  [label]="chartLabel()"
+                  [seriesKey]="seriesKey()"
+                />
+                <p class="chart-note">
+                  Hora en UTC · Precios en la moneda de cotización del instrumento · Solo velas
+                  cerradas · Gráfico:
+                  <a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer"
+                    >TradingView Lightweight Charts™</a
+                  >
+                </p>
+                <div class="chart-actions">
+                  @if (olderState() !== 'exhausted') {
+                    <button
+                      type="button"
+                      class="action"
+                      [disabled]="olderState() === 'loading'"
+                      (click)="loadOlder()"
+                    >
+                      {{ olderState() === 'loading' ? 'Cargando…' : 'Cargar velas anteriores' }}
+                    </button>
+                  } @else {
+                    <span class="muted">No hay velas anteriores guardadas.</span>
+                  }
+                  @if (olderState() === 'error') {
+                    <span class="alert alert--error" role="alert"
+                      >✕ No se pudieron cargar las velas anteriores.</span
+                    >
+                  }
+                  <button type="button" class="action" (click)="reload()">Actualizar</button>
+                </div>
+              </section>
+            }
+
+            <app-series-status [series]="s" [sourceName]="sourceName()" />
+
+            @if (candles().length > 0) {
+              <details class="table-alt">
+                <summary>Ver las últimas {{ tableRows().length }} velas como tabla</summary>
+                <div class="table-wrap">
+                  <table>
+                    <caption>
+                      Velas cerradas de
+                      {{
+                        detail()?.instrument?.canonical_symbol
+                      }}, periodo
+                      {{
+                        timeframeLabel()
+                      }}, más recientes primero (hora UTC)
+                    </caption>
+                    <thead>
+                      <tr>
+                        <th scope="col">Abre (UTC)</th>
+                        <th scope="col">Apertura</th>
+                        <th scope="col">Máximo</th>
+                        <th scope="col">Mínimo</th>
+                        <th scope="col">Cierre</th>
+                        <th scope="col">Volumen</th>
+                        <th scope="col">Calidad</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      @for (row of tableRows(); track row.open_time) {
+                        <tr>
+                          <th scope="row">{{ formatUtc(row.open_time) }}</th>
+                          <td>{{ row.open }}</td>
+                          <td>{{ row.high }}</td>
+                          <td>{{ row.low }}</td>
+                          <td>{{ row.close }}</td>
+                          <td>{{ row.volume }}</td>
+                          <td>{{ row.quality }}</td>
+                        </tr>
+                      }
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+            }
+          }
+        }
+      }
+    }
+  </main>
+</div>

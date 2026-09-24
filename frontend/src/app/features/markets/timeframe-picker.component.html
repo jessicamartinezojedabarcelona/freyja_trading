@@ -1,0 +1,28 @@
+<div class="picker" role="group" aria-label="Periodo de las velas">
+  @for (group of groups(); track group.name) {
+    <div class="group" role="group" [attr.aria-label]="group.name">
+      <span class="group-name">{{ group.name }}</span>
+      <div class="buttons">
+        @for (option of group.options; track option.code) {
+          <button
+            type="button"
+            class="period"
+            [class.period--active]="option.code === selected()"
+            [disabled]="!option.available"
+            [attr.aria-pressed]="option.code === selected()"
+            [attr.title]="option.available ? null : 'Aún no disponible para este instrumento'"
+            (click)="chosen.emit(option.code)"
+          >
+            @if (!option.available) {
+              <span aria-hidden="true">🔒 </span>
+            }
+            {{ option.label }}
+            @if (!option.available) {
+              <span class="sr-only"> (aún no disponible)</span>
+            }
+          </button>
+        }
+      </div>
+    </div>
+  }
+</div>
