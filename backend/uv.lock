@@ -195,6 +195,7 @@ dependencies = [
     { name = "argon2-cffi" },
     { name = "email-validator" },
     { name = "fastapi" },
+    { name = "httpx2" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic-settings" },
     { name = "sqlalchemy" },
@@ -203,7 +204,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "httpx2" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -216,6 +216,7 @@ requires-dist = [
     { name = "argon2-cffi", specifier = ">=23.1,<26" },
     { name = "email-validator", specifier = ">=2.2,<3" },
     { name = "fastapi", specifier = "==0.139.2" },
+    { name = "httpx2", specifier = ">=2,<3" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2,<4" },
     { name = "pydantic-settings", specifier = ">=2,<3" },
     { name = "sqlalchemy", specifier = ">=2,<3" },
@@ -224,7 +225,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx2", specifier = ">=2,<3" },
     { name = "mypy", specifier = ">=1.14,<2" },
     { name = "pytest", specifier = ">=8,<9" },
     { name = "pytest-cov", specifier = ">=6,<7" },
