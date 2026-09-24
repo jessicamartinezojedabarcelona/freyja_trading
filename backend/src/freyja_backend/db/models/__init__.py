@@ -24,6 +24,7 @@ from freyja_backend.db.models.catalog import (
     Timeframe,
     UnderlyingMarket,
 )
+from freyja_backend.db.models.market_data import Candle, MarketDataSyncState
 from freyja_backend.db.models.provider import (
     DataSource,
     DataSourceInstrument,
@@ -41,6 +42,7 @@ __all__ = [
     "AuthRateLimitEvent",
     "AuthSession",
     "AuthUser",
+    "Candle",
     "CapabilityStatus",
     "CredentialsStatus",
     "DataSource",
@@ -51,6 +53,7 @@ __all__ = [
     "ExecutionEnvironment",
     "Instrument",
     "InstrumentTimeframe",
+    "MarketDataSyncState",
     "OwnerAuthorizationStatus",
     "ProductType",
     "RateLimitAction",

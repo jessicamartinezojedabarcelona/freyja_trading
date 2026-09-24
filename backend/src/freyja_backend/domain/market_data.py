@@ -108,6 +108,9 @@ class QualityIssueCode(enum.StrEnum):
     INCOMPLETE_RANGE = "INCOMPLETE_RANGE"
     STALE = "STALE"
     INSTRUMENT_NOT_TRADING = "INSTRUMENT_NOT_TRADING"
+    # The provider now reports different values for a candle Freyja already
+    # stored. The stored candle is kept as is; this makes the disagreement visible.
+    REVISED_CANDLE = "REVISED_CANDLE"
     # Failures: nothing trustworthy was obtained, so no candle is returned.
     RATE_LIMITED = "RATE_LIMITED"
     TIMEOUT = "TIMEOUT"
@@ -244,10 +247,33 @@ def _require_utc(moment: datetime, name: str) -> None:
         raise InvalidMarketDataError(f"{name} must be timezone-aware UTC")
 
 
+DEFAULT_PUBLICATION_GRACE = timedelta(seconds=10)
+
+
+@dataclass(frozen=True, slots=True)
+class CandleGap:
+    """`missing` consecutive candles are absent right after the candle that
+    opened at `after`."""
+
+    after: datetime
+    missing: int
+
+
 @dataclass(frozen=True, slots=True)
 class CandleAssessment:
     candles: tuple[Candle, ...]
     issues: tuple[QualityIssue, ...]
+    gaps: tuple[CandleGap, ...] = ()
+
+
+def newest_expected_open(
+    timeframe: Timeframe,
+    now: datetime,
+    publication_grace: timedelta = DEFAULT_PUBLICATION_GRACE,
+) -> datetime:
+    """Open time of the newest candle that must already be available at `now`:
+    the last bucket that closed more than `publication_grace` ago."""
+    return timeframe.floor(now - publication_grace) - timeframe.duration
 
 
 def assess_candles(
@@ -257,7 +283,7 @@ def assess_candles(
     now: datetime,
     start: datetime | None = None,
     end: datetime | None = None,
-    publication_grace: timedelta = timedelta(seconds=10),
+    publication_grace: timedelta = DEFAULT_PUBLICATION_GRACE,
 ) -> CandleAssessment:
     """Turn provider candles into a trustworthy closed series plus issues.
 
@@ -316,9 +342,11 @@ def assess_candles(
             )
             continue
         unique.append(candle)
+    gaps: list[CandleGap] = []
     for previous, current in pairwise(unique):
         missing = int((current.open_time - previous.open_time) / duration) - 1
         if missing > 0:
+            gaps.append(CandleGap(after=previous.open_time, missing=missing))
             issues.append(
                 QualityIssue(
                     QualityIssueCode.GAP,
@@ -327,7 +355,7 @@ def assess_candles(
             )
 
     if start is None and end is None:
-        newest_expected = timeframe.floor(now - publication_grace) - duration
+        newest_expected = newest_expected_open(timeframe, now, publication_grace)
         if not unique or unique[-1].open_time < newest_expected:
             newest = unique[-1].open_time.isoformat() if unique else "none"
             issues.append(
@@ -340,7 +368,7 @@ def assess_candles(
     if start is not None or end is not None:
         issues.extend(_range_issues(unique, timeframe, now, start, end, publication_grace))
 
-    return CandleAssessment(candles=tuple(unique), issues=tuple(issues))
+    return CandleAssessment(candles=tuple(unique), issues=tuple(issues), gaps=tuple(gaps))
 
 
 def _was_really_unordered(closed: Sequence[Candle]) -> bool:
@@ -363,7 +391,7 @@ def _range_issues(
     first_expected = timeframe.floor(start)
     if first_expected < start:
         first_expected += duration
-    last_closed_open = timeframe.floor(now - publication_grace) - duration
+    last_closed_open = newest_expected_open(timeframe, now, publication_grace)
     window_last_open = timeframe.floor(end - timedelta(microseconds=1)) if end is not None else None
     last_expected = (
         last_closed_open if window_last_open is None else min(window_last_open, last_closed_open)

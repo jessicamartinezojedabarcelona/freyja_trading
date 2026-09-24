@@ -232,7 +232,7 @@ Consultar los heads disponibles:
 uv run alembic heads
 ```
 
-Actualmente existe un único head: `0012_remove_regulatory_engine (head)`.
+Actualmente existe un único head: `0013_market_data_persistence (head)`.
 
 Consultar la revisión actual aplicada:
 
@@ -296,6 +296,29 @@ uv run uvicorn freyja_backend.main:app --host 127.0.0.1 --port 8000
   ```
 
 Detener: `Ctrl+C` en la terminal donde se ejecuta el proceso.
+
+### Datos de mercado: sincronizar velas
+
+Freyja guarda en PostgreSQL las velas **cerradas** de CRYPTO×SPOT (BTC, ETH, SOL
+y XRP contra USDT) leídas de los endpoints públicos de Binance; no hace falta
+ninguna clave. Una vela cerrada se guarda una sola vez y no se reescribe (ADR
+0002 y 0003). Desde `backend/`, con la base migrada (`uv run alembic upgrade head`):
+
+```bash
+# Últimas 500 velas de 1 minuto (la temporalidad estándar)
+uv run freyja-sync-candles --symbol BTC/USDT
+
+# Otra temporalidad (1m, 5m, 15m, 1h o 4h)
+uv run freyja-sync-candles --symbol ETH/USDT --timeframe 5m --limit 200
+
+# Rellenar un tramo (acotado a 10 000 velas; repetible si se interrumpe)
+uv run freyja-sync-candles --symbol BTC/USDT --start 2026-09-20T00:00:00+00:00 --end 2026-09-21T00:00:00+00:00
+```
+
+Es seguro repetirlo: no duplica ni modifica lo ya guardado. Código de salida:
+`0` datos guardados (correctos o degradados), `1` proveedor no disponible o
+backfill incompleto, `2` datos de entrada no válidos. Todavía no hay una
+ejecución periódica automática ni un endpoint de lectura.
 
 ## 10. Frontend
 
@@ -656,7 +679,7 @@ freyja_trading/
   `docker compose logs postgres`; normalmente indica que el proceso sigue
   inicializando o que las variables de entorno no son válidas. No borres
   el volumen como primera solución.
-- **`alembic current` aparece vacío o distinto de `0012_remove_regulatory_engine (head)`**:
+- **`alembic current` aparece vacío o distinto de `0013_market_data_persistence (head)`**:
   ejecuta `uv run alembic upgrade head` desde `backend/` con PostgreSQL
   `healthy`. Un valor vacío es normal en una base de datos recién creada
   antes de aplicar migraciones.

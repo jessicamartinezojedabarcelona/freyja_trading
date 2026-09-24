@@ -11,12 +11,14 @@ import pytest
 
 from freyja_backend.domain.market_data import (
     Candle,
+    CandleGap,
     DataQuality,
     InvalidMarketDataError,
     QualityIssue,
     QualityIssueCode,
     Timeframe,
     assess_candles,
+    newest_expected_open,
     quality_from_issues,
 )
 
@@ -268,3 +270,34 @@ def test_start_without_end_is_judged_up_to_now() -> None:
     assert assess_candles(complete, timeframe=M5, now=NOW, start=at(11, 55)).issues == ()
     stale = assess_candles([candle(at(11, 55))], timeframe=M5, now=NOW, start=at(11, 55))
     assert codes(stale.issues) == [QualityIssueCode.INCOMPLETE_RANGE]
+
+
+# -- Structured gaps, expected head, revisions ---------------------------------
+
+
+def test_gaps_are_also_returned_as_structured_data() -> None:
+    series = [candle(at(11, 30)), candle(at(11, 35)), candle(at(11, 50)), candle(at(12, 0))]
+    result = assess_candles(series, timeframe=M5, now=NOW)
+    assert result.gaps == (
+        CandleGap(after=at(11, 35), missing=2),
+        CandleGap(after=at(11, 50), missing=1),
+    )
+    assert codes(result.issues).count(QualityIssueCode.GAP) == 2
+
+
+def test_a_series_without_gaps_has_none() -> None:
+    result = assess_candles([candle(at(11, 55)), candle(at(12, 0))], timeframe=M5, now=NOW)
+    assert result.gaps == ()
+
+
+def test_newest_expected_open_is_the_last_bucket_closed_beyond_the_grace() -> None:
+    assert newest_expected_open(M5, NOW) == at(12, 0)  # 12:05 is still open at 12:07:30
+    assert newest_expected_open(M5, at(12, 5) + timedelta(seconds=3)) == at(11, 55)
+    assert newest_expected_open(M5, at(12, 5) + timedelta(seconds=11)) == at(12, 0)
+    assert newest_expected_open(Timeframe.H1, NOW) == at(11, 0)
+    assert newest_expected_open(M5, at(12, 5), timedelta(0)) == at(12, 0)
+
+
+def test_a_revised_candle_degrades_the_quality_without_failing_it() -> None:
+    revised = QualityIssue(QualityIssueCode.REVISED_CANDLE, "x")
+    assert quality_from_issues((revised,)) is DataQuality.DEGRADED

@@ -7,10 +7,11 @@ import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import URL, Connection, create_engine, inspect, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from alembic import command
 from freyja_backend.core.database import get_postgres_settings
+from freyja_backend.infrastructure.market_data.binance_spot_rest import PROVIDER_SYMBOLS
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 TEMP_DB_PATTERN = re.compile(r"freyja_test_[0-9a-f]{12}")
@@ -107,7 +108,7 @@ def test_upgrade_downgrade_upgrade_cycle(temp_database_name: str) -> None:
             current = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-        assert current == "0012_remove_regulatory_engine"
+        assert current == "0013_market_data_persistence"
 
         command.downgrade(cfg, "base")
         with engine.connect() as connection:
@@ -119,7 +120,7 @@ def test_upgrade_downgrade_upgrade_cycle(temp_database_name: str) -> None:
         command.upgrade(cfg, "head")
         with engine.connect() as connection:
             final = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert final == "0012_remove_regulatory_engine"
+        assert final == "0013_market_data_persistence"
     finally:
         engine.dispose()
 
@@ -231,7 +232,7 @@ def test_upgrade_from_empty_to_head_reaches_expected_head_with_exact_seed(
             current = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            assert current == "0012_remove_regulatory_engine"
+            assert current == "0013_market_data_persistence"
             counts = {
                 table: connection.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
                 for table in _CATALOG_TABLES
@@ -538,7 +539,7 @@ def test_0012_downgrade_upgrade_is_reversible(temp_database_name: str) -> None:
             current = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            assert current == "0012_remove_regulatory_engine"
+            assert current == "0013_market_data_persistence"
     finally:
         engine.dispose()
 
@@ -866,5 +867,226 @@ def test_manual_row_at_0005_blocks_upgrade_to_0006_and_is_preserved(
             ).first()
             assert row is not None
             assert row[0] == "MANUAL"
+    finally:
+        engine.dispose()
+
+
+# --- 0013_market_data_persistence (MARKET-DATA-PERSISTENCE-001) ------------------
+
+_MARKET_DATA_TABLES = ("freyja2_candles", "freyja2_market_data_sync_state")
+_BINANCE_MAPPINGS = {
+    "BTC/USDT": "BTCUSDT",
+    "ETH/USDT": "ETHUSDT",
+    "SOL/USDT": "SOLUSDT",
+    "XRP/USDT": "XRPUSDT",
+}
+
+
+def _candle_key(connection: Connection) -> dict[str, object]:
+    return {
+        "source": connection.execute(
+            text("SELECT id FROM freyja2_data_sources WHERE code = 'BINANCE'")
+        ).scalar_one(),
+        "instrument": connection.execute(
+            text(
+                "SELECT instrument_id FROM freyja2_instruments "
+                "WHERE canonical_symbol = 'BTC/USDT' "
+                "AND product_type_id = (SELECT id FROM freyja2_product_types WHERE code = 'SPOT')"
+            )
+        ).scalar_one(),
+        "timeframe": connection.execute(
+            text("SELECT id FROM freyja2_timeframes WHERE code = '1m'")
+        ).scalar_one(),
+    }
+
+
+_INSERT_CANDLE = text(
+    "INSERT INTO freyja2_candles (data_source_id, instrument_id, timeframe_id, open_time, "
+    "close_time, open, high, low, close, volume, quality, received_at) VALUES "
+    "(:source, :instrument, :timeframe, :open_time, :close_time, :o, :h, :l, :c, :v, "
+    "CAST(:quality AS freyja2_data_quality), now())"
+)
+
+
+def _candle_params(connection: Connection, **overrides: object) -> dict[str, object]:
+    params: dict[str, object] = {
+        **_candle_key(connection),
+        "open_time": "2026-09-24T12:00:00+00:00",
+        "close_time": "2026-09-24T12:01:00+00:00",
+        "o": "100.5",
+        "h": "101",
+        "l": "99",
+        "c": "100",
+        "v": "3",
+        "quality": "OK",
+    }
+    return {**params, **overrides}
+
+
+def _scalar(connection: Connection, sql: str) -> object:
+    return connection.execute(text(sql)).scalar_one()
+
+
+def test_0013_creates_market_data_schema_and_seeds_the_binance_source(
+    temp_database_name: str,
+) -> None:
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, "head")
+        with engine.connect() as connection:
+            assert _existing_tables(connection, _MARKET_DATA_TABLES) == set(_MARKET_DATA_TABLES)
+            source = connection.execute(
+                text("SELECT code, source_type, is_active FROM freyja2_data_sources")
+            ).all()
+            assert [tuple(row) for row in source] == [("BINANCE", "EXCHANGE", True)]
+            mappings = connection.execute(
+                text(
+                    "SELECT i.canonical_symbol, m.provider_symbol, m.purpose, m.is_active "
+                    "FROM freyja2_data_source_instruments m "
+                    "JOIN freyja2_instruments i ON i.instrument_id = m.instrument_id "
+                    "ORDER BY i.canonical_symbol"
+                )
+            ).all()
+            assert {row[0]: row[1] for row in mappings} == _BINANCE_MAPPINGS
+            # What the migration seeded is exactly what the adapter is allowed to request.
+            assert dict(PROVIDER_SYMBOLS) == _BINANCE_MAPPINGS
+            assert all(row[2] == "ANALYSIS" and row[3] is True for row in mappings)
+    finally:
+        engine.dispose()
+
+
+def test_0013_candles_are_unique_valid_and_immutable(temp_database_name: str) -> None:
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, "head")
+        with engine.begin() as connection:
+            connection.execute(_INSERT_CANDLE, _candle_params(connection))
+
+        # The same natural key can never be stored twice.
+        with pytest.raises(IntegrityError), engine.begin() as connection:
+            connection.execute(_INSERT_CANDLE, _candle_params(connection, c="100.2"))
+
+        # A confirmed candle can never be rewritten, not even to the same values.
+        for assignment in ("close = 999", "volume = volume", "quality = 'DEGRADED'"):
+            with pytest.raises(DBAPIError, match="immutable"), engine.begin() as connection:
+                connection.execute(text(f"UPDATE freyja2_candles SET {assignment}"))
+
+        # Each malformed candle is rejected by the database itself.
+        malformed = {
+            "close not after open": {"close_time": "2026-09-24T12:05:00+00:00"},
+            "high below low": {"h": "98"},
+            "high below open": {"h": "100", "o": "100.5"},
+            "zero price": {"l": "0"},
+            "negative volume": {"v": "-1"},
+            "quality without data": {"quality": "UNAVAILABLE"},
+        }
+        with engine.connect() as connection:
+            base = _candle_params(
+                connection,
+                open_time="2026-09-24T12:05:00+00:00",
+                close_time="2026-09-24T12:06:00+00:00",
+            )
+        for label, override in malformed.items():
+            params = base
+            with pytest.raises(IntegrityError), engine.begin() as connection:
+                connection.execute(_INSERT_CANDLE, {**params, **override})
+            assert label
+
+        with engine.connect() as connection:
+            row = connection.execute(
+                text("SELECT close, volume, quality FROM freyja2_candles")
+            ).one()
+            assert (str(row[0]), str(row[1]), row[2]) == (
+                "100.000000000000",
+                "3.000000000000",
+                "OK",
+            )
+
+        # DELETE stays possible (future retention); only UPDATE is forbidden.
+        with engine.begin() as connection:
+            connection.execute(text("DELETE FROM freyja2_candles"))
+            assert _scalar(connection, "SELECT COUNT(*) FROM freyja2_candles") == 0
+    finally:
+        engine.dispose()
+
+
+def test_0013_downgrade_upgrade_is_reversible_and_leaves_the_catalog_intact(
+    temp_database_name: str,
+) -> None:
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, "head")
+        command.downgrade(cfg, "0012_remove_regulatory_engine")
+        with engine.connect() as connection:
+            assert _existing_tables(connection, _MARKET_DATA_TABLES) == set()
+            assert _scalar(connection, "SELECT COUNT(*) FROM freyja2_data_sources") == 0
+            assert _scalar(connection, "SELECT COUNT(*) FROM freyja2_data_source_instruments") == 0
+            assert (
+                _scalar(
+                    connection,
+                    "SELECT COUNT(*) FROM pg_type WHERE typname = 'freyja2_data_quality'",
+                )
+                == 0
+            )
+            assert (
+                _scalar(
+                    connection,
+                    "SELECT COUNT(*) FROM pg_proc WHERE proname = 'freyja2_candles_reject_update'",
+                )
+                == 0
+            )
+            counts = {
+                table: connection.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
+                for table in _CATALOG_TABLES
+            }
+            assert counts == _CANONICAL_COUNTS
+
+        command.upgrade(cfg, "head")
+        with engine.connect() as connection:
+            assert _existing_tables(connection, _MARKET_DATA_TABLES) == set(_MARKET_DATA_TABLES)
+            assert _scalar(connection, "SELECT COUNT(*) FROM freyja2_data_sources") == 1
+    finally:
+        engine.dispose()
+
+
+def test_0013_aborts_without_guessing_when_a_catalog_instrument_is_missing(
+    temp_database_name: str,
+) -> None:
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, "0012_remove_regulatory_engine")
+        with engine.begin() as connection:
+            # Remove ETH/USDT (SPOT) and everything that references it.
+            eth = connection.execute(
+                text(
+                    "SELECT instrument_id FROM freyja2_instruments "
+                    "WHERE canonical_symbol = 'ETH/USDT' "
+                    "AND base_asset_id IS NOT NULL"
+                )
+            ).scalar_one()
+            connection.execute(
+                text("DELETE FROM freyja2_instrument_timeframes WHERE instrument_id = :id"),
+                {"id": eth},
+            )
+            connection.execute(
+                text("DELETE FROM freyja2_instruments WHERE instrument_id = :id"), {"id": eth}
+            )
+
+        with pytest.raises(RuntimeError, match="expected exactly one CRYPTO/SPOT instrument"):
+            command.upgrade(cfg, "head")
+
+        with engine.connect() as connection:
+            assert _existing_tables(connection, _MARKET_DATA_TABLES) == set()
+            assert _scalar(connection, "SELECT version_num FROM alembic_version") == (
+                "0012_remove_regulatory_engine"
+            )
     finally:
         engine.dispose()

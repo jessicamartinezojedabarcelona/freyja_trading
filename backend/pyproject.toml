@@ -25,6 +25,7 @@ dev = [
 
 [project.scripts]
 freyja-create-owner = "freyja_backend.scripts.create_owner:main"
+freyja-sync-candles = "freyja_backend.scripts.sync_candles:main"
 
 [build-system]
 requires = ["hatchling"]

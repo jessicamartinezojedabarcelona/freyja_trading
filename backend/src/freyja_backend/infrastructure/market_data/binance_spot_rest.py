@@ -35,6 +35,7 @@ from urllib.parse import urlparse
 import httpx2
 
 from freyja_backend.domain.market_data import (
+    DEFAULT_PUBLICATION_GRACE,
     Candle,
     CandleBatch,
     Clock,
@@ -103,7 +104,7 @@ class BinanceRestConfig:
     # Longest `Retry-After` we are willing to sit through inside one call.
     max_retry_after_seconds: float = 10.0
     # A candle that closed less than this ago may legitimately not be published yet.
-    publication_grace: timedelta = timedelta(seconds=10)
+    publication_grace: timedelta = DEFAULT_PUBLICATION_GRACE
 
     def __post_init__(self) -> None:
         parsed = urlparse(self.base_url)

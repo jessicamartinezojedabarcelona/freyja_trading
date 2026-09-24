@@ -2,6 +2,7 @@ import os
 import re
 import uuid
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -87,11 +88,9 @@ def second_client(auth_test_engine: Engine) -> Iterator[TestClient]:
         yield test_client
 
 
-@pytest.fixture(scope="session")
-def auth_test_engine() -> Iterator[Engine]:
-    """Session-scoped throwaway PostgreSQL database, migrated to head, used by
-    every test that exercises the auth API/service layer against real
-    PostgreSQL (never SQLite, never mocks)."""
+@contextmanager
+def _migrated_temp_database() -> Iterator[Engine]:
+    """A throwaway PostgreSQL database migrated to head, dropped on exit."""
     settings = get_postgres_settings()
     admin_url = settings.url.set(database="postgres")
     admin_engine = create_engine(admin_url, isolation_level="AUTOCOMMIT")
@@ -107,11 +106,9 @@ def auth_test_engine() -> Iterator[Engine]:
     command.upgrade(cfg, "head")
 
     engine = create_engine(temp_url)
-    db_deps.set_engine_override(engine)
     try:
         yield engine
     finally:
-        db_deps.set_engine_override(None)
         engine.dispose()
         validated = _validate_temp_database_name(db_name)
         with admin_engine.connect() as connection:
@@ -125,6 +122,49 @@ def auth_test_engine() -> Iterator[Engine]:
             )
             connection.execute(text(f'DROP DATABASE IF EXISTS "{validated}"'))
         admin_engine.dispose()
+
+
+@pytest.fixture(scope="session")
+def auth_test_engine() -> Iterator[Engine]:
+    """Session-scoped throwaway PostgreSQL database, migrated to head, used by
+    every test that exercises the auth API/service layer against real
+    PostgreSQL (never SQLite, never mocks)."""
+    with _migrated_temp_database() as engine:
+        db_deps.set_engine_override(engine)
+        try:
+            yield engine
+        finally:
+            db_deps.set_engine_override(None)
+
+
+@pytest.fixture(scope="module")
+def market_data_engine() -> Iterator[Engine]:
+    """A module-scoped database of its own, migrated to head. Market-data tests
+    read the catalog and the BINANCE source seeded by the real migrations, and
+    must not depend on what other suites do to the shared `auth_test_engine`
+    database (some of them TRUNCATE the catalog and provider tables there)."""
+    with _migrated_temp_database() as engine:
+        yield engine
+
+
+@pytest.fixture
+def clean_market_data(market_data_engine: Engine) -> None:
+    """Start the test with no candles and no sync state (the catalog and the
+    BINANCE source seeded by the migrations stay)."""
+    with market_data_engine.connect() as connection:
+        connection.execute(text("TRUNCATE freyja2_candles, freyja2_market_data_sync_state"))
+        connection.commit()
+
+
+@pytest.fixture
+def market_data_session(market_data_engine: Engine, clean_market_data: None) -> Iterator[Session]:
+    del clean_market_data
+    session = create_session_factory(market_data_engine)()
+    try:
+        yield session
+        session.commit()
+    finally:
+        session.close()
 
 
 @pytest.fixture(autouse=True)
