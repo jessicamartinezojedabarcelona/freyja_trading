@@ -10,11 +10,12 @@ comparten el mismo dominio, el mismo motor y la misma base de código.
 
 **Estado real actual: Fase 0 — Fundación técnica.** Existen scaffolds
 mínimos y operativos de backend, frontend, persistencia, controles de
-calidad (incluida integración continua verde en `main`) y autenticación
-(registro directo, inicio de sesión, sesión y recuperación de contraseña;
-§12), pero **todavía no existe dominio funcional de trading ni ejecución
-DEMO/REAL**. Este README describe cómo instalar, arrancar y verificar esa
-fundación técnica; no describe un producto terminado.
+calidad (incluida integración continua verde en `main`) y autenticación de
+acceso privado (inicio de sesión, sesión y recuperación de contraseña, sin
+registro público; §12), pero **todavía no existe dominio funcional de
+trading ni ejecución DEMO/REAL**. Este README describe cómo instalar,
+arrancar y verificar esa fundación técnica; no describe un producto
+terminado.
 
 Consulta el detalle completo y las justificaciones del stack en
 [`docs/adr/0001-stack-y-arquitectura-inicial.md`](docs/adr/0001-stack-y-arquitectura-inicial.md).
@@ -22,9 +23,9 @@ Consulta el detalle completo y las justificaciones del stack en
 ## 2. Componentes actuales
 
 - **Backend**: Python 3.12, FastAPI, gestionado con `uv`. Expone un
-  endpoint de salud (`/api/v1/health`) y autenticación completa (registro,
-  login, logout, sesión y recuperación de contraseña; `/api/v1/auth/*`,
-  ver §12).
+  endpoint de salud (`/api/v1/health`) y autenticación de acceso privado
+  (login, logout, sesión y recuperación de contraseña, sin registro
+  público; `/api/v1/auth/*`, ver §12).
 - **Frontend**: Angular 22.x, TypeScript, gestionado con `npm`. Aplicación
   base sin vistas funcionales de dominio.
 - **PostgreSQL**: única base de datos del sistema, versión `18.4`,
@@ -345,37 +346,60 @@ procesos permanecen en primer plano hasta que se detienen manualmente.
 
 ## 12. Autenticación
 
-Autenticación completa (registro directo, inicio de sesión, sesión, cierre
-de sesión y recuperación de contraseña), sobre un modelo relacional
+Autenticación de acceso privado (inicio de sesión, sesión, cierre de
+sesión y recuperación de contraseña), sobre un modelo relacional
 persistido mediante Alembic (`auth_users`, `auth_sessions`,
-`auth_password_reset_tokens`, `auth_rate_limit_events`). No hay OAuth ni
-roles múltiples.
+`auth_password_reset_tokens`, `auth_rate_limit_events`). No hay registro
+público, OAuth ni roles múltiples.
 
-### Registro
+### Acceso privado: sin auto-registro público
 
-- Cualquier persona puede registrarse: el registro es público, no está
-  restringido a una única cuenta propietaria.
-- El identificador de cuenta es el correo electrónico.
-- La contraseña debe tener entre 12 y 128 caracteres.
-- El frontend exige además un campo de confirmación de contraseña
-  (`confirmPassword`), validado únicamente en el navegador: nunca se envía
-  al backend, que solo recibe `email` y `password`.
-- La cuenta queda **activa inmediatamente** al registrarse: no existe
-  ningún paso de verificación ni activación por correo. No se envía ningún
-  correo de bienvenida ni de confirmación durante el registro.
-- El registro no inicia sesión automáticamente: tras un registro exitoso,
-  la persona debe iniciar sesión explícitamente con las credenciales que
-  acaba de crear.
-- Por razones de seguridad (evitar enumeración de cuentas existentes), la
-  respuesta pública es idéntica si el correo ya estaba registrado o no.
+Freyja 2.0 es una aplicación privada (`AUTH-PRIVATE-ACCESS-001`). No ofrece
+registro público, pero puede tener **varias cuentas autorizadas**: las
+aprovisiona Jessica localmente (por ejemplo, para un familiar). Nadie puede
+crearse una cuenta por sí mismo; el auto-registro no está disponible en
+ninguna capa, y ocultar el enlace no habría bastado:
 
-### Crear una cuenta administrativa de bootstrap (opcional)
+- **API:** no existe `POST /api/v1/auth/register` ni ninguna otra ruta
+  pública de alta. Cualquier método sobre esa ruta responde `404` y no crea
+  ninguna cuenta.
+- **Frontend:** no existe la ruta `/register` ni la pantalla de alta, y el
+  inicio de sesión no enlaza a ninguna. Abrir `/register` se trata como
+  cualquier ruta desconocida: sin sesión lleva a `/login`.
+- **Cuentas independientes:** cada cuenta tiene su propio identificador,
+  credenciales, sesiones y recuperación de contraseña. Cerrar sesión,
+  restablecer la contraseña o agotar los intentos de inicio de sesión de una
+  cuenta no afecta a las demás.
+- **Datos compartidos y personales:** el catálogo y los datos públicos de
+  mercado (`/api/v1/catalog/*`, `/api/v1/capabilities`) son los mismos para
+  todas las cuentas autorizadas. Los recursos personales u operativos (por
+  ejemplo, los `ExecutionContext` de `/api/v1/execution-contexts`) siguen
+  asociados a su propietario: ninguna cuenta ve los de otra.
+- **Sin roles:** todas las cuentas autorizadas tienen el mismo acceso; no
+  hay roles ni permisos distintos por cuenta ni se comparten datos
+  personales entre cuentas.
+- **Administración futura:** una invitación o administración *autenticada*
+  de cuentas no está prohibida, pero requiere su propia tarea y decisión.
+  Lo que no existirá es una ruta pública de alta.
+- **Cuentas existentes:** esta restricción no modifica, borra ni desactiva
+  las cuentas que ya existieran (inicio de sesión, sesión, cierre de sesión
+  y recuperación siguen funcionando igual para ellas).
+- El histórico de la base de datos conserva los valores `SELF_REGISTRATION`
+  (origen de cuenta) y `REGISTER` (acción de límite de tasa) solo por
+  compatibilidad con las restricciones y filas existentes; ningún código
+  los escribe ya.
 
-`freyja-create-owner` es un script de arranque administrativo opcional,
-útil por ejemplo para crear la primera cuenta en un entorno recién
-desplegado; **no es el único mecanismo para crear cuentas**, ya que el
-registro público (`POST /auth/register`) cumple esa función para el resto
-de personas usuarias.
+### Aprovisionar una cuenta (`freyja-create-owner`)
+
+`freyja-create-owner` es la **única vía de aprovisionamiento de cuentas**:
+un script administrativo local, **sin ningún endpoint HTTP**. Se ejecuta
+**una vez por cuenta**, con un identificador distinto cada vez (por ejemplo,
+para crear la primera cuenta en un entorno recién desplegado o para añadir la
+de un familiar); no hay límite en el número de cuentas. Rechaza los
+identificadores duplicados —comparados sin distinguir mayúsculas ni espacios
+laterales— y **nunca sobrescribe la contraseña de una cuenta existente**. El
+nombre `create-owner` es histórico: crea cualquier cuenta autorizada, no solo
+una. No existe ninguna vía pública de alta.
 
 Requiere que PostgreSQL local esté `healthy` y las migraciones aplicadas
 (`uv run alembic upgrade head`). Desde `backend/`:
@@ -400,10 +424,6 @@ aviso explícito en ese caso.
 - `GET /api/v1/auth/csrf` — emite/renueva la cookie CSRF. No crea ni
   requiere sesión; puede llamarse de forma anónima antes de cualquier
   otra operación de autenticación.
-- `POST /api/v1/auth/register` — cuerpo `{"email", "password"}`. Respuesta
-  `200` genérica tanto si la cuenta se crea como si el correo ya existía
-  (previene enumeración); `422` si los datos no son válidos; `429` si se
-  supera el límite de intentos.
 - `POST /api/v1/auth/login` — cuerpo `{"identifier", "password"}`. Respuesta
   `200` con `{"id", "identifier"}` y cookies de sesión; `401` genérico
   (mismo mensaje para identificador inexistente, contraseña incorrecta o
@@ -420,9 +440,11 @@ aviso explícito en ese caso.
   token es inválido o ha expirado; `422` si la nueva contraseña no es
   válida.
 
-No existe ningún endpoint de verificación de correo (`/verify-email`) ni
-de reenvío de verificación: fueron retirados deliberadamente (véase la
-migración `0004_remove_email_verification`, §8).
+No existe ningún endpoint de registro (`/register`): fue retirado por
+`AUTH-PRIVATE-ACCESS-001` y cualquier petición a esa ruta responde `404`
+sin crear cuentas. Tampoco existe ningún endpoint de verificación de correo
+(`/verify-email`) ni de reenvío de verificación: fueron retirados
+deliberadamente (véase la migración `0004_remove_email_verification`, §8).
 
 ### Sesión, cookies y CSRF
 
@@ -431,8 +453,8 @@ migración `0004_remove_email_verification`, §8).
   persiste su hash (SHA-256) en `auth_sessions`, nunca el valor en claro.
 - `freyja_csrf`: cookie legible por JavaScript, emitida por `GET /auth/csrf`
   y renovada en cada respuesta. Cualquier `POST` a `/auth/login`,
-  `/auth/logout`, `/auth/register`, `/auth/forgot-password` o
-  `/auth/reset-password` debe repetir su valor en la cabecera
+  `/auth/logout`, `/auth/forgot-password` o `/auth/reset-password` debe
+  repetir su valor en la cabecera
   `X-CSRF-Token` (patrón *double-submit*).
 - Duración de sesión configurable vía `FREYJA_SESSION_TTL_MINUTES`
   (720 minutos / 12 horas por defecto).
@@ -443,7 +465,7 @@ migración `0004_remove_email_verification`, §8).
 
 Los intentos se cuentan en PostgreSQL (nunca en memoria), con
 identificadores derivados mediante HMAC (nunca en claro), por acción
-(login, registro, solicitud de restablecimiento) y por identificador o por
+(login, solicitud de restablecimiento) y por identificador o por
 IP en una ventana deslizante; al superarse el límite se devuelve `429`
 genérico hasta que los intentos más antiguos salen de la ventana.
 
@@ -453,6 +475,9 @@ genérico hasta que los intentos más antiguos salen de la ventana.
   `POST /auth/reset-password` (aplica la nueva contraseña) mediante un
   token de un solo uso, entregado como fragmento de URL
   (`#token=...`), nunca como parte de la línea de petición del servidor.
+- La cuenta se localiza por su identificador de acceso: para poder recuperar
+  la contraseña por correo, el identificador de cada cuenta debe ser su
+  dirección de correo electrónico.
 - El envío del correo de restablecimiento usa **Mailpit** exclusivamente en
   desarrollo local (perfil `dev` de Docker Compose, solo accesible en
   `127.0.0.1:8025`); Mailpit nunca se usa en producción ni sustituye a un
@@ -649,9 +674,9 @@ seguridad, usar `trust`, ignorar errores o editar lockfiles manualmente.
 
 ## 17. Limitaciones actuales
 
-- Existe autenticación completa (§12): registro directo, inicio de sesión,
-  sesión, cierre de sesión y recuperación de contraseña por correo; no hay
-  OAuth ni roles múltiples.
+- Existe autenticación de acceso privado (§12): inicio de sesión, sesión,
+  cierre de sesión y recuperación de contraseña por correo, sin registro
+  público; no hay OAuth ni roles múltiples.
 - No existe dominio funcional de trading.
 - No existe integración con brokers.
 - No existe ejecución DEMO ni REAL.
@@ -689,7 +714,7 @@ reales, y el workflow de despliegue (§19.10) no se ha ejecutado ni una
 sola vez.
 
 **Léase con honestidad, no como un anuncio de producto:** esto es, como
-mucho, una vista previa gratuita del *shell* autenticado (registro, login,
+mucho, una vista previa gratuita del *shell* autenticado (login,
 sesión, recuperación de contraseña) — no es infraestructura de trading
 disponible 24/7. El **Web Service** gratuito de Render puede suspenderse
 por inactividad, y el cómputo de **Neon Free** también puede suspenderse
@@ -856,7 +881,7 @@ SMTP configurado en absoluto**. En consecuencia:
   `FREYJA_SMTP_USERNAME` debe existir `FREYJA_SMTP_PASSWORD`. Nunca se
   inventan valores para satisfacer esta validación — o se configuran los
   seis juntos con un proveedor real, o no se configura ninguno.
-- **Qué funciona sin SMTP**: registro, inicio de sesión y sesión — el
+- **Qué funciona sin SMTP**: inicio de sesión y sesión — el
   backend completo funciona con normalidad.
 - **Qué no funciona sin SMTP**: la recuperación de contraseña en línea no
   debe considerarse operativa hasta que Jessica apruebe y configure un
@@ -1012,7 +1037,7 @@ migración ya no está acoplada al despliegue de Render:
 ### 19.13 Limitaciones conocidas (léase antes de compartir cualquier URL)
 
 - **Esto es una vista previa gratuita del shell autenticado, no
-  infraestructura de trading disponible 24/7.** Registro, login, sesión y
+  infraestructura de trading disponible 24/7.** Login, sesión y
   recuperación de contraseña — nada más.
 - El **Web Service** gratuito de Render y el cómputo de **Neon Free**
   pueden **suspenderse por inactividad**: espera *cold starts* perceptibles

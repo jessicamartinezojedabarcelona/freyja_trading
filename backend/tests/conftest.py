@@ -36,6 +36,21 @@ def _validate_temp_database_name(name: str) -> str:
     return name
 
 
+def _assert_api_uses_isolated_database(test_engine: Engine) -> None:
+    """The API layer must resolve to the throwaway test database — never the
+    database configured for development or production. Resolved through the
+    same `get_db()` dependency every route uses, so it holds for any app
+    instance created by `create_app()`."""
+    generator = db_deps.get_db()
+    session = next(generator)
+    try:
+        database_name = session.execute(text("SELECT current_database()")).scalar_one()
+    finally:
+        next(generator, None)  # runs get_db()'s own commit/close
+    _validate_temp_database_name(database_name)
+    assert database_name == test_engine.url.database
+
+
 def _alembic_config() -> Config:
     cfg = Config(str(BACKEND_DIR / "alembic.ini"))
     cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
@@ -51,11 +66,23 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 @pytest.fixture
-def client() -> Iterator[TestClient]:
+def client(auth_test_engine: Engine) -> Iterator[TestClient]:
+    _assert_api_uses_isolated_database(auth_test_engine)
     app = create_app()
     # base_url="http://localhost": TestClient defaults to Host "testserver",
     # which TrustedHostMiddleware (allowed_hosts defaults to
     # "localhost,127.0.0.1") would otherwise reject with 400 on every request.
+    with TestClient(app, base_url="http://localhost") as test_client:
+        yield test_client
+
+
+@pytest.fixture
+def second_client(auth_test_engine: Engine) -> Iterator[TestClient]:
+    """A second, independent browser: same isolated test database as
+    `client`, but its own application instance and cookie jar, so the two
+    never share a session."""
+    _assert_api_uses_isolated_database(auth_test_engine)
+    app = create_app()
     with TestClient(app, base_url="http://localhost") as test_client:
         yield test_client
 

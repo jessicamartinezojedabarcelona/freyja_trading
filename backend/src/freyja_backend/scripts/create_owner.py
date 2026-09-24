@@ -11,7 +11,7 @@ def _read_identifier() -> str:
     identifier = os.environ.get("FREYJA_OWNER_IDENTIFIER")
     if identifier:
         return identifier
-    return input("Identificador de acceso de la propietaria: ")
+    return input("Identificador de acceso de la cuenta: ")
 
 
 def _read_password() -> str:
@@ -23,7 +23,7 @@ def _read_password() -> str:
             file=sys.stderr,
         )
         return env_password
-    return getpass.getpass("Contraseña de la propietaria (no se mostrará en pantalla): ")
+    return getpass.getpass("Contraseña de la cuenta (no se mostrará en pantalla): ")
 
 
 def main() -> int:
@@ -38,7 +38,10 @@ def main() -> int:
                 user = auth_service.create_owner(db, identifier=identifier, password=password)
             except auth_service.OwnerAlreadyExistsError:
                 db.rollback()
-                print("La propietaria ya existe. No se realizaron cambios.", file=sys.stderr)
+                print(
+                    "Ya existe una cuenta con ese identificador. No se realizaron cambios.",
+                    file=sys.stderr,
+                )
                 return 1
             except auth_service.InvalidOwnerDataError as exc:
                 db.rollback()
@@ -46,7 +49,7 @@ def main() -> int:
                 return 1
 
             db.commit()
-            print(f"Cuenta de propietaria creada correctamente: {user.identifier}")
+            print(f"Cuenta creada correctamente: {user.identifier}")
             return 0
     finally:
         engine.dispose()

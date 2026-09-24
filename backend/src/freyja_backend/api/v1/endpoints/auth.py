@@ -27,17 +27,11 @@ _GENERIC_LOGIN_ERROR = "Credenciales incorrectas."
 _RATE_LIMIT_ERROR = "Demasiados intentos. Vuelve a intentarlo más tarde."
 _TOKEN_INVALID_ERROR = "TOKEN_INVALID"
 _TOKEN_EXPIRED_ERROR = "TOKEN_EXPIRED"
-_REGISTER_ACK_MESSAGE = "Tu cuenta ha sido creada. Ya puedes iniciar sesión."
 _FORGOT_PASSWORD_ACK_MESSAGE = "Si el correo existe, se enviará un enlace de restablecimiento."
 
 
 class LoginRequest(BaseModel):
     identifier: str = Field(min_length=1, max_length=auth_service.MAX_IDENTIFIER_LENGTH)
-    password: str = Field(min_length=1, max_length=auth_service.MAX_PASSWORD_LENGTH)
-
-
-class RegisterRequest(BaseModel):
-    email: EmailStr
     password: str = Field(min_length=1, max_length=auth_service.MAX_PASSWORD_LENGTH)
 
 
@@ -69,8 +63,7 @@ class CsrfTokenOut(BaseModel):
 def get_csrf(request: Request, response: Response) -> CsrfTokenOut:
     """Single-responsibility endpoint: issues/renews the CSRF cookie. Creates
     no session, requires no session, and returns no user information — safe
-    to call from a fully anonymous browser before login/register/forgot/
-    reset.
+    to call from a fully anonymous browser before login/forgot/reset.
 
     The token is also returned in the response body (not only the cookie):
     the frontend runs on a different origin than the backend in production
@@ -143,35 +136,11 @@ def me(current_user: CurrentUser) -> UserOut:
     return UserOut(id=current_user.id, identifier=current_user.identifier)
 
 
-@router.post(
-    "/register",
-    response_model=StatusOut,
-    dependencies=[Depends(require_csrf)],
-    status_code=status.HTTP_200_OK,
-)
-def register(
-    payload: RegisterRequest,
-    db: DbSession,
-    client_ip: ClientIp,
-    hmac_key: RateLimitHmacKey,
-) -> StatusOut:
-    try:
-        auth_service.register_user(
-            db,
-            email=payload.email,
-            password=payload.password,
-            ip_address=client_ip,
-            hmac_key=hmac_key,
-        )
-    except auth_service.RateLimitedError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=_RATE_LIMIT_ERROR
-        ) from exc
-    except auth_service.InvalidRegistrationDataError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
-        ) from exc
-    return StatusOut(status="ok", message=_REGISTER_ACK_MESSAGE)
+# AUTH-PRIVATE-ACCESS-001: there is deliberately no public account-creation
+# route (no /register, no sign-up alias). Freyja 2.0 is private: accounts are
+# provisioned by Jessica through the local `freyja_backend.scripts.create_owner`
+# script, which has no HTTP surface. A future *authenticated* administration
+# or invitation route is not forbidden, but needs its own task and decision.
 
 
 @router.post(

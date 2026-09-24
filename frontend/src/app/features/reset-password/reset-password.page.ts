@@ -47,9 +47,10 @@ export class ResetPasswordPage {
     // is submitted once, in the POST body below, never re-read from the URL.
     this.location.replaceState(this.location.path(false));
 
-    // See the equivalent comment in register.page.ts: the confirm-password
-    // validator reads a sibling control, so it must be re-run explicitly
-    // whenever that sibling changes.
+    // The confirm-password validator reads a sibling control's value, which
+    // Angular does not automatically re-check — without this, editing the
+    // new password after already confirming it would leave a stale "match"
+    // result instead of re-flagging the mismatch.
     this.form.controls.newPassword.valueChanges.pipe(takeUntilDestroyed()).subscribe(() => {
       this.form.controls.confirmPassword.updateValueAndValidity();
     });

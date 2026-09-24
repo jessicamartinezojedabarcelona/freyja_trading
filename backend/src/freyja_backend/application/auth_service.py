@@ -4,9 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from email_validator import EmailNotValidError, validate_email
 from sqlalchemy import delete, func, select, update
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from freyja_backend.core import security
@@ -30,12 +28,12 @@ RATE_LIMIT_EVENT_RETENTION = timedelta(hours=24)
 # Centralized, documented thresholds: (max failures/attempts per identifier,
 # max per origin) within RATE_LIMIT_WINDOW. LOGIN only counts failures (a
 # successful login must never count against the account's own future
-# attempts); REGISTER and PASSWORD_RESET_REQUEST have no user-visible
-# "failure" — the public response is always identical — so every attempt
-# counts.
+# attempts); PASSWORD_RESET_REQUEST has no user-visible "failure" — the
+# public response is always identical — so every attempt counts.
+# The REGISTER action is intentionally absent: public registration was
+# removed (AUTH-PRIVATE-ACCESS-001), so no code path throttles or records it.
 RATE_LIMITS: dict[RateLimitAction, tuple[int, int]] = {
     RateLimitAction.LOGIN: (5, 20),
-    RateLimitAction.REGISTER: (5, 20),
     RateLimitAction.PASSWORD_RESET_REQUEST: (5, 20),
 }
 _COUNT_ONLY_FAILURES = frozenset({RateLimitAction.LOGIN})
@@ -88,18 +86,6 @@ class AuthenticatedSession:
 
 def normalize_identifier(raw: str) -> str:
     return raw.strip().lower()
-
-
-def _validate_and_normalize_email(raw: str) -> str:
-    """Format validation via the maintained `email-validator` library (no
-    network/deliverability check — see design notes). PostgreSQL's unique
-    constraint on `auth_users.identifier` remains the final guarantee of
-    uniqueness; this only rejects malformed input early."""
-    try:
-        validate_email(raw.strip(), check_deliverability=False)
-    except EmailNotValidError as exc:
-        raise InvalidRegistrationDataError("Correo con formato no válido.") from exc
-    return normalize_identifier(raw)
 
 
 # --- rate limiting (HMAC-keyed, shared by every throttled action) ----------
@@ -320,7 +306,12 @@ def revoke_all_sessions_for_user(
     )
 
 
-# --- owner bootstrap (admin-only, not a substitute for public registration) -
+# --- account provisioning (admin-only, never a public registration) ---------
+#
+# The local administrative path (`freyja_backend.scripts.create_owner`) can be
+# run once per authorized account: every account has its own identifier,
+# credentials and sessions. Nothing here limits the number of accounts, and
+# nothing here is reachable over HTTP.
 
 
 def create_owner(db: Session, *, identifier: str, password: str) -> AuthUser:
@@ -340,7 +331,7 @@ def create_owner(db: Session, *, identifier: str, password: str) -> AuthUser:
         select(AuthUser).where(AuthUser.identifier == normalized)
     ).scalar_one_or_none()
     if existing is not None:
-        raise OwnerAlreadyExistsError("La propietaria ya existe.")
+        raise OwnerAlreadyExistsError("Ya existe una cuenta con ese identificador.")
 
     # Trusted local bootstrap: created active immediately, with its
     # administrative origin recorded for audit purposes.
@@ -378,86 +369,6 @@ def _invalidate_pending_reset_tokens(db: Session, *, user_id: uuid.UUID, now: da
         )
         .values(consumed_at=now)
     )
-
-
-# --- registration --------------------------------------------------------------
-
-
-def register_user(
-    db: Session,
-    *,
-    email: str,
-    password: str,
-    ip_address: str,
-    hmac_key: bytes,
-    now_fn: NowFn = default_now,
-) -> None:
-    """Always completes without signalling whether the email was already
-    registered — the public response (status + body) must stay identical in
-    every case to avoid account enumeration.
-
-    There is no email verification step: an account created here is active
-    immediately and can log in immediately. Exactly one external, uniform
-    rate-limit bucket (RateLimitAction.REGISTER) gates every call, checked
-    before the account is looked up, with an identical threshold regardless
-    of what the lookup will find."""
-    if not (MIN_PASSWORD_LENGTH <= len(password) <= MAX_PASSWORD_LENGTH):
-        raise InvalidRegistrationDataError(
-            f"La contraseña debe tener entre {MIN_PASSWORD_LENGTH} y "
-            f"{MAX_PASSWORD_LENGTH} caracteres."
-        )
-    normalized = _validate_and_normalize_email(email)
-    now = now_fn()
-
-    if is_rate_limited(
-        db,
-        action=RateLimitAction.REGISTER,
-        identifier=normalized,
-        ip_address=ip_address,
-        hmac_key=hmac_key,
-        now_fn=now_fn,
-    ):
-        raise RateLimitedError
-
-    # Hash the real submitted password unconditionally, before resolving the
-    # identity race. This equalizes the cost of the "brand new account" and
-    # "already registered" branches without a separate dummy hash, bounded by
-    # the REGISTER rate limit just above (see design notes: no indiscriminate
-    # extra Argon2 work, and this one is never skippable/free either way).
-    password_hash = security.hash_password(password)
-
-    existing = db.execute(
-        select(AuthUser).where(AuthUser.identifier == normalized)
-    ).scalar_one_or_none()
-    record_rate_limit_event(
-        db,
-        action=RateLimitAction.REGISTER,
-        identifier=normalized,
-        ip_address=ip_address,
-        success=True,
-        hmac_key=hmac_key,
-        now=now,
-    )
-
-    if existing is not None:
-        # Already registered: safe no-op, identical public response — never
-        # reveals that the account exists.
-        return
-
-    user = AuthUser(
-        identifier=normalized,
-        password_hash=password_hash,
-        is_active=True,
-        created_via=UserOrigin.SELF_REGISTRATION,
-    )
-    db.add(user)
-    try:
-        db.flush()
-    except IntegrityError:
-        # Lost a concurrent registration race for the same identifier —
-        # PostgreSQL's unique constraint is the real guarantee here, not
-        # the SELECT above. Treat exactly like "already registered".
-        db.rollback()
 
 
 # --- password reset ------------------------------------------------------------

@@ -210,12 +210,22 @@ describe('LoginPage', () => {
     expect(toggle.getAttribute('aria-label')).toBe('Ocultar contraseña');
   });
 
-  it('renders links to register and forgot-password', () => {
+  it('renders the forgot-password link', () => {
     const fixture = TestBed.createComponent(LoginPage);
     fixture.detectChanges();
     const compiled = fixture.nativeElement as HTMLElement;
-    expect(compiled.querySelector('a[routerLink="/register"]')).toBeTruthy();
     expect(compiled.querySelector('a[routerLink="/forgot-password"]')).toBeTruthy();
+  });
+
+  it('offers no way to create an account (private access, AUTH-PRIVATE-ACCESS-001)', () => {
+    const fixture = TestBed.createComponent(LoginPage);
+    fixture.detectChanges();
+    const compiled = fixture.nativeElement as HTMLElement;
+    const hrefs = Array.from(compiled.querySelectorAll('a')).map(
+      (anchor) => anchor.getAttribute('routerLink') ?? anchor.getAttribute('href') ?? '',
+    );
+    expect(hrefs.some((href) => /regist|sign-?up/i.test(href))).toBe(false);
+    expect(compiled.textContent).not.toMatch(/crear cuenta|registr/i);
   });
 });
 
