@@ -20,7 +20,7 @@ on:
   schedule:
     # Offset minutes (3, 8, 13, ...) on purpose: GitHub delays or drops scheduled runs
     # at the busiest minutes (:00, :05, :10 ...), which "*/5" lands on every time.
-    - cron: "3-58/5 * * * *"
+    - cron: "3,8,13,18,23,28,33,38,43,48,53,58 * * * *"
   workflow_dispatch: {}
 
 permissions:
