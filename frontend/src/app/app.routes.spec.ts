@@ -1,19 +1,17 @@
 import { provideHttpClient } from '@angular/common/http';
-import {
-  HttpTestingController,
-  TestRequest,
-  provideHttpClientTesting,
-} from '@angular/common/http/testing';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
 
 import { routes } from './app.routes';
 import { API_BASE_URL } from './core/config/api.config';
 
-// AUTH-PRIVATE-ACCESS-001: Freyja 2.0 is private — accounts are provisioned
-// by Jessica, never self-registered. Hiding the link is not enough: there
-// must be no registration route at all.
-describe('app routes — private access', () => {
+// Freyja lets anyone create their own account, so registration — like login
+// and password recovery — is a public route, while the application itself
+// stays behind the session guard.
+describe('app routes — public registration', () => {
+  const publicPaths = ['register', 'login', 'forgot-password', 'reset-password'];
+
   let httpMock: HttpTestingController;
   let router: Router;
 
@@ -29,47 +27,27 @@ describe('app routes — private access', () => {
     httpMock.verify();
   });
 
-  // The wildcard redirect sends the navigation to the protected root, whose
-  // authGuard then asks the backend for the session — asynchronously.
-  async function nextSessionRequest(): Promise<TestRequest> {
-    for (let attempt = 0; attempt < 100; attempt++) {
-      const [request] = httpMock.match(`${API_BASE_URL}/auth/me`);
-      if (request) {
-        return request;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 0));
+  it('declares the /register route', () => {
+    expect(routes.map((route) => route.path)).toContain('register');
+  });
+
+  it('keeps registration, login and password recovery public (no session guard)', () => {
+    for (const path of publicPaths) {
+      const route = routes.find((candidate) => candidate.path === path);
+      expect(route, path).toBeDefined();
+      expect(route?.canActivate, path).toBeUndefined();
     }
-    throw new Error('authGuard never asked the backend for the session');
-  }
-
-  it('declares no registration route', () => {
-    const paths = routes.map((route) => route.path);
-    expect(paths.some((path) => /regist|sign-?up/i.test(path ?? ''))).toBe(false);
   });
 
-  it('keeps login and password recovery reachable', () => {
-    const paths = routes.map((route) => route.path);
-    expect(paths).toEqual(expect.arrayContaining(['login', 'forgot-password', 'reset-password']));
+  it('keeps the application itself behind the session guard', () => {
+    const root = routes.find((route) => route.path === '');
+    expect(root?.canActivate?.length).toBeGreaterThan(0);
   });
 
-  it('sends an anonymous visitor who opens /register to /login', async () => {
-    const navigation = router.navigateByUrl('/register');
+  it('lets an anonymous visitor open /register without asking for a session', async () => {
+    await router.navigateByUrl('/register');
 
-    (await nextSessionRequest()).flush(
-      { detail: 'No autenticado.' },
-      { status: 401, statusText: 'Unauthorized' },
-    );
-
-    await navigation;
-    expect(router.url).toBe('/login');
-  });
-
-  it('never shows a registration screen to a signed-in account either', async () => {
-    const navigation = router.navigateByUrl('/register');
-
-    (await nextSessionRequest()).flush({ id: 'user-id', identifier: 'account@example.test' });
-
-    await navigation;
-    expect(router.url).toBe('/');
+    expect(router.url).toBe('/register');
+    httpMock.expectNone(`${API_BASE_URL}/auth/me`);
   });
 });

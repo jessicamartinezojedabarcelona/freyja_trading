@@ -89,17 +89,17 @@ describe('authInterceptor', () => {
     // each fire their own priming request, and neither may go out without
     // the header.
     http.post(`${API_BASE_URL}/auth/login`, {}).subscribe();
-    http.post(`${API_BASE_URL}/auth/forgot-password`, {}).subscribe();
+    http.post(`${API_BASE_URL}/auth/register`, {}).subscribe();
 
     const csrfReq = httpMock.expectOne(`${API_BASE_URL}/auth/csrf`);
     csrfReq.flush({ status: 'ok', csrf_token: 'shared-token' });
 
     const loginReq = httpMock.expectOne(`${API_BASE_URL}/auth/login`);
-    const forgotReq = httpMock.expectOne(`${API_BASE_URL}/auth/forgot-password`);
+    const registerReq = httpMock.expectOne(`${API_BASE_URL}/auth/register`);
     expect(loginReq.request.headers.get('X-CSRF-Token')).toBe('shared-token');
-    expect(forgotReq.request.headers.get('X-CSRF-Token')).toBe('shared-token');
+    expect(registerReq.request.headers.get('X-CSRF-Token')).toBe('shared-token');
     loginReq.flush({});
-    forgotReq.flush({});
+    registerReq.flush({});
   });
 
   it('retries exactly once with a fresh token when a mutation is rejected as CSRF invalid', () => {
@@ -172,20 +172,20 @@ describe('authInterceptor', () => {
     // in-flight renewal, or they could retry with mismatched cookie/header
     // pairs.
     http.post(`${API_BASE_URL}/auth/login`, {}).subscribe();
-    http.post(`${API_BASE_URL}/auth/forgot-password`, {}).subscribe();
+    http.post(`${API_BASE_URL}/auth/register`, {}).subscribe();
 
     httpMock
       .expectOne(`${API_BASE_URL}/auth/csrf`)
       .flush({ status: 'ok', csrf_token: 'stale-token' });
 
     const firstLoginAttempt = httpMock.expectOne(`${API_BASE_URL}/auth/login`);
-    const firstForgotAttempt = httpMock.expectOne(`${API_BASE_URL}/auth/forgot-password`);
+    const firstRegisterAttempt = httpMock.expectOne(`${API_BASE_URL}/auth/register`);
     expect(firstLoginAttempt.request.headers.get('X-CSRF-Token')).toBe('stale-token');
-    expect(firstForgotAttempt.request.headers.get('X-CSRF-Token')).toBe('stale-token');
+    expect(firstRegisterAttempt.request.headers.get('X-CSRF-Token')).toBe('stale-token');
 
     // Both rejected as CSRF-invalid, one right after the other.
     firstLoginAttempt.flush(CSRF_INVALID, CSRF_INVALID_OPTS);
-    firstForgotAttempt.flush(CSRF_INVALID, CSRF_INVALID_OPTS);
+    firstRegisterAttempt.flush(CSRF_INVALID, CSRF_INVALID_OPTS);
 
     // Exactly one renewal GET is pending — expectOne throws if a second one
     // was also fired, which is the whole point of this test.
@@ -193,11 +193,11 @@ describe('authInterceptor', () => {
     renewal.flush({ status: 'ok', csrf_token: 'renewed-token' });
 
     const retriedLogin = httpMock.expectOne(`${API_BASE_URL}/auth/login`);
-    const retriedForgot = httpMock.expectOne(`${API_BASE_URL}/auth/forgot-password`);
+    const retriedRegister = httpMock.expectOne(`${API_BASE_URL}/auth/register`);
     expect(retriedLogin.request.headers.get('X-CSRF-Token')).toBe('renewed-token');
-    expect(retriedForgot.request.headers.get('X-CSRF-Token')).toBe('renewed-token');
+    expect(retriedRegister.request.headers.get('X-CSRF-Token')).toBe('renewed-token');
     retriedLogin.flush({});
-    retriedForgot.flush({});
+    retriedRegister.flush({});
 
     httpMock.expectNone(`${API_BASE_URL}/auth/csrf`);
   });

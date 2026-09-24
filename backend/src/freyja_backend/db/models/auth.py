@@ -11,20 +11,13 @@ from freyja_backend.db.base import Base
 
 class UserOrigin(enum.StrEnum):
     """Audit-only provenance of an auth_users row. Never confers permissions
-    or roles by itself.
-
-    SELF_REGISTRATION is retained only because accounts created while public
-    registration existed may carry it (native PostgreSQL enum, migration
-    0002). Since AUTH-PRIVATE-ACCESS-001 no code path writes it."""
+    or roles by itself."""
 
     SELF_REGISTRATION = "SELF_REGISTRATION"
     ADMIN_BOOTSTRAP = "ADMIN_BOOTSTRAP"
 
 
 class RateLimitAction(enum.StrEnum):
-    # REGISTER is retained only for the existing database constraint and any
-    # historical rows (migrations 0002/0004). Since AUTH-PRIVATE-ACCESS-001
-    # no code path records or throttles it.
     LOGIN = "LOGIN"
     REGISTER = "REGISTER"
     PASSWORD_RESET_REQUEST = "PASSWORD_RESET_REQUEST"

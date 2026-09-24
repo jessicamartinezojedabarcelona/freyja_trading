@@ -52,6 +52,10 @@ export class AuthService {
       .pipe(tap((user) => this.currentUserSignal.set(user)));
   }
 
+  register(email: string, password: string): Observable<StatusResponse> {
+    return this.http.post<StatusResponse>(`${API_BASE_URL}/auth/register`, { email, password });
+  }
+
   forgotPassword(email: string): Observable<StatusResponse> {
     return this.http.post<StatusResponse>(`${API_BASE_URL}/auth/forgot-password`, { email });
   }

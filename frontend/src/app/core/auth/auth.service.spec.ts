@@ -93,6 +93,18 @@ describe('AuthService', () => {
     expect(resolvedAfterLogout).toBe('post-logout-token');
   });
 
+  it('register() posts email and password', () => {
+    service.register('newuser@example.test', 'a-strong-password-123').subscribe();
+
+    const req = httpMock.expectOne(`${API_BASE_URL}/auth/register`);
+    expect(req.request.method).toBe('POST');
+    expect(req.request.body).toEqual({
+      email: 'newuser@example.test',
+      password: 'a-strong-password-123',
+    });
+    req.flush({ status: 'ok' });
+  });
+
   it('forgotPassword() posts the email', () => {
     service.forgotPassword('someone@example.test').subscribe();
 

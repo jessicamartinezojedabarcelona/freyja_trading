@@ -74,7 +74,7 @@ def test_production_succeeds_with_no_smtp_variables_at_all(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Product decision: no SMTP provider is approved yet. Production must
-    start (login, sessions) with zero SMTP configuration —
+    start (registration, login, sessions) with zero SMTP configuration —
     password recovery simply stays non-operational until a real provider
     is configured later, never by inventing placeholder SMTP values."""
     _set_env(monkeypatch)
