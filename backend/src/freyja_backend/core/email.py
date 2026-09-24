@@ -24,16 +24,16 @@ class EmailDeliveryError(Exception):
     the recipient, subject, body, or any credential — only what the caller
     needs to know: delivery did not happen.
 
-    Callers in auth_service (register_user, request_password_reset) catch
-    this and degrade gracefully, on purpose: they log a sanitized operational
-    signal and still return the same generic success acknowledgement, rather
-    than failing the whole request. This is deliberately NOT "fail-closed" —
+    The caller in auth_service (request_password_reset) catches this and
+    degrades gracefully, on purpose: it logs a sanitized operational signal
+    and still returns the same generic success acknowledgement, rather than
+    failing the whole request. This is deliberately NOT "fail-closed" —
     the account/token creation that already committed to PostgreSQL is what
     is fail-closed (an unexpected exception there rolls back and surfaces as
-    a 500). A transient SMTP outage instead degrades to "the account/token
-    exists but no email went out"; the user can get a working link by
-    retrying register/forgot-password, since each call reissues and
-    invalidates the previous pending token."""
+    a 500). A transient SMTP outage instead degrades to "the token exists
+    but no email went out"; the user can get a working link by retrying
+    forgot-password, since each call reissues and invalidates the previous
+    pending token."""
 
 
 class InMemoryEmailSender:

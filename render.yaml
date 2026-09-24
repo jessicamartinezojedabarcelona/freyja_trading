@@ -95,8 +95,8 @@ services:
         # longer requires any of them to start in production (see
         # core/config.py) — omitting them entirely means applying this
         # Blueprint never prompts Jessica to fill in SMTP values she does
-        # not have yet. Registration, login, and sessions work without
-        # SMTP; only password recovery stays non-operational until a real
+        # not have yet. Login and sessions work without SMTP; only
+        # password recovery stays non-operational until a real
         # provider's six FREYJA_SMTP_* variables are added later, directly
         # in the Render dashboard (not required at Blueprint creation).
       - key: DATABASE_URL
