@@ -318,7 +318,12 @@ uv run freyja-sync-candles --symbol BTC/USDT --start 2026-09-20T00:00:00+00:00 -
 Es seguro repetirlo: no duplica ni modifica lo ya guardado. Código de salida:
 `0` datos guardados (correctos o degradados), `1` proveedor no disponible o
 backfill incompleto, `2` datos de entrada no válidos. Todavía no hay una
-ejecución periódica automática ni un endpoint de lectura.
+ejecución periódica automática.
+
+Las velas guardadas se leen con `GET /api/v1/market-data/candles` (requiere sesión):
+`instrument_id` y `data_source_code` obligatorios, `timeframe_code` (por defecto
+`1m`), `start`, `end` y `limit` opcionales. La respuesta incluye la calidad, los
+huecos, la frescura y el estado del proveedor; ver ADR 0003.
 
 ## 10. Frontend
 

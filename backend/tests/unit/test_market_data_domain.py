@@ -301,3 +301,11 @@ def test_newest_expected_open_is_the_last_bucket_closed_beyond_the_grace() -> No
 def test_a_revised_candle_degrades_the_quality_without_failing_it() -> None:
     revised = QualityIssue(QualityIssueCode.REVISED_CANDLE, "x")
     assert quality_from_issues((revised,)) is DataQuality.DEGRADED
+
+
+def test_no_data_is_unavailable_and_a_failing_provider_only_degrades() -> None:
+    no_data = QualityIssue(QualityIssueCode.NO_DATA, "x")
+    failing = QualityIssue(QualityIssueCode.PROVIDER_FAILING, "x")
+    assert quality_from_issues((no_data,)) is DataQuality.UNAVAILABLE
+    assert quality_from_issues((failing,)) is DataQuality.DEGRADED
+    assert quality_from_issues((failing, no_data)) is DataQuality.UNAVAILABLE
