@@ -90,6 +90,16 @@ services:
         # directly in the Render dashboard. Never versioned, never logged.
       - key: FREYJA_SESSION_TTL_MINUTES
         value: "720"
+      - key: FREYJA_CANDLE_SCANNER_ENABLED
+        value: "true"
+        # MARKET-DATA-SCANNER-001: the backend keeps the stored candles up to date
+        # itself (no GitHub cron). It only runs while this service is awake: Render
+        # Free puts it to sleep after ~15 minutes without traffic, and the first pass
+        # after waking catches up from what is stored. Public data only, no secrets.
+      - key: FREYJA_CANDLE_SCANNER_INTERVAL_SECONDS
+        value: "60"
+      - key: FREYJA_CANDLE_SCANNER_SOURCES
+        value: BINANCE
         # No FREYJA_SMTP_* variables here at all: no SMTP provider is
         # approved yet (see README, "SMTP pendiente"), and Settings no
         # longer requires any of them to start in production (see

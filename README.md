@@ -317,8 +317,30 @@ uv run freyja-sync-candles --symbol BTC/USDT --start 2026-09-20T00:00:00+00:00 -
 
 Es seguro repetirlo: no duplica ni modifica lo ya guardado. Código de salida:
 `0` datos guardados (correctos o degradados), `1` proveedor no disponible o
-backfill incompleto, `2` datos de entrada no válidos. Todavía no hay una
-ejecución periódica automática.
+backfill incompleto, `2` datos de entrada no válidos.
+
+**Escáner automático (ADR 0006).** El propio backend mantiene las velas al día mientras
+está en marcha, sin depender de ningún cron externo. Se activa con variables de entorno
+(por defecto está **desactivado**, así que tests, CI y desarrollo local no lo arrancan solos):
+
+| Variable | Valor | Significado |
+| -------- | ----- | ----------- |
+| `FREYJA_CANDLE_SCANNER_ENABLED` | `true` / `false` (defecto `false`) | Arranca el escáner con la aplicación. |
+| `FREYJA_CANDLE_SCANNER_INTERVAL_SECONDS` | 30 a 3600 (defecto 60) | Pausa entre pasadas. |
+| `FREYJA_CANDLE_SCANNER_SOURCES` | `BINANCE` (defecto) | Fuentes a leer, separadas por comas. |
+
+En cada pasada, cada serie (fuente × instrumento × temporalidad) se comprueba por separado:
+si ya está al día **no se hace ninguna petición**; si le faltan pocas velas se piden las
+últimas 500; si el servicio estuvo dormido mucho tiempo, se rellena hacia delante desde la
+última vela guardada, por páginas y con un tope por pasada (5 000 velas), sin dejar huecos.
+Es seguro con varias instancias: cada serie se protege con un bloqueo consultivo de PostgreSQL
+de nivel de transacción, que también funciona con el *pooler* de Neon.
+
+Límite conocido: **solo avanza mientras el proceso está despierto**. Render Free lo duerme
+tras unos 15 minutos sin tráfico; al despertar, la primera pasada rellena lo que faltó. Si se
+enciende con Neon Free, ten presente su límite de cómputo (100 CU-horas al mes): una base que
+se consulta sin parar no se apaga. El workflow «Sync candles (manual)» de GitHub queda solo
+como respaldo manual.
 
 Las velas guardadas se leen con `GET /api/v1/market-data/candles` (requiere sesión):
 `instrument_id` y `data_source_code` obligatorios, `timeframe_code` (por defecto

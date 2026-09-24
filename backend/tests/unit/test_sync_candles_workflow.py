@@ -1,6 +1,6 @@
-"""Static guards for the scheduled candle-sync workflow.
+"""Static guards for the manual candle-sync workflow (a backup to the backend scanner).
 
-The workflow writes to production PostgreSQL on a timer, so what it may touch
+The workflow writes to production PostgreSQL when someone runs it, so what it may touch
 is pinned here: which secret it reads, that it runs only from `main`, that runs
 never overlap, and that every action is pinned to a commit SHA.
 """
@@ -19,27 +19,19 @@ def _code_only() -> str:
     )
 
 
-def _cron_minutes() -> list[int]:
-    match = re.search(r'cron:\s*"([\d,]+) \* \* \* \*"', _code_only())
-    assert match is not None, "expected an explicit list of minutes"
-    return [int(minute) for minute in match.group(1).split(",")]
-
-
-def test_runs_on_a_schedule_and_can_be_dispatched_by_hand() -> None:
+def test_is_only_run_by_hand_never_on_a_timer_a_push_or_a_pull_request() -> None:
     code = _code_only()
-    assert re.search(r"^\s*schedule:\s*$", code, re.MULTILINE)
-    assert _cron_minutes()
     assert "workflow_dispatch:" in code
+    # The scanner inside the backend is the scheduler now (ADR 0006); a second timer here
+    # would be exactly the duplicate mechanism CLAUDE.md section 11 forbids.
+    assert "schedule:" not in code
+    assert "cron:" not in code
     assert "pull_request" not in code
     assert re.search(r"^\s*push:\s*$", code, re.MULTILINE) is None
 
 
-def test_the_schedule_is_every_five_minutes_and_avoids_the_busiest_minutes() -> None:
-    minutes = _cron_minutes()
-    # Every 5 minutes (GitHub's minimum), at 3, 8, 13 ... 58.
-    assert minutes == list(range(3, 60, 5))
-    # "*/5" would fire at :00, :05, :10 ..., where GitHub delays or drops runs.
-    assert all(minute % 5 != 0 for minute in minutes)
+def test_no_leftover_schedule_probe_workflow() -> None:
+    assert not (_REPO_ROOT / ".github" / "workflows" / "schedule-probe.yml").exists()
 
 
 def test_runs_only_from_main() -> None:
