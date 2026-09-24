@@ -125,11 +125,21 @@ _BROKER_DOMAIN_RE = re.compile(
 )
 
 
+# Adapters explicitly authorized so far. Adding a file here is a deliberate,
+# reviewed act: each new provider adapter needs its own task and ADR.
+_AUTHORIZED_INFRASTRUCTURE_FILES = frozenset(
+    {
+        "market_data/__init__.py",
+        "market_data/binance_spot_rest.py",  # MARKET-DATA-BINANCE-REST-001
+    }
+)
+
+
 def test_no_real_broker_or_exchange_client_code_exists() -> None:
     """REAL execution remains suspended (CLAUDE.md POINT1 rules) — no source
     file may reference a real broker/exchange domain or hostname, and the
-    infrastructure package (reserved for future provider adapters) must
-    remain empty."""
+    infrastructure package (reserved for provider adapters) may only hold the
+    adapters that a task has explicitly authorized."""
     offenders = [
         str(path)
         for path in _source_files(SRC_DIR)
@@ -140,10 +150,54 @@ def test_no_real_broker_or_exchange_client_code_exists() -> None:
     )
 
     infrastructure_dir = SRC_DIR / "infrastructure"
-    non_init_files = [
-        path for path in infrastructure_dir.rglob("*.py") if path.name != "__init__.py"
-    ]
-    assert non_init_files == [], (
-        "infrastructure/ must stay empty until a real broker/exchange adapter is "
-        f"explicitly authorized — found: {non_init_files}"
+    found = {
+        path.relative_to(infrastructure_dir).as_posix()
+        for path in infrastructure_dir.rglob("*.py")
+        if path.name != "__init__.py" or path.parent != infrastructure_dir
+    }
+    assert found == _AUTHORIZED_INFRASTRUCTURE_FILES, (
+        "infrastructure/ may only contain explicitly authorized adapters — "
+        f"unexpected: {sorted(found - _AUTHORIZED_INFRASTRUCTURE_FILES)}, "
+        f"missing: {sorted(_AUTHORIZED_INFRASTRUCTURE_FILES - found)}"
     )
+
+
+_BINANCE_ADAPTER = SRC_DIR / "infrastructure" / "market_data" / "binance_spot_rest.py"
+_FORBIDDEN_ADAPTER_TOKENS = (
+    "x-mbx-apikey",
+    "api_key",
+    "apikey",
+    "api-key",
+    "secret",
+    "signature",
+    "hmac",
+    "listenkey",
+    "/api/v3/order",
+    "/api/v3/account",
+    "/sapi/",
+    "/fapi/",
+    "/dapi/",
+    "wss://",
+    "testnet",
+)
+
+
+def test_binance_adapter_is_public_read_only_and_credential_free() -> None:
+    """The Binance adapter must stay a public market-data reader: no key
+    material, signing, account/order/margin/futures endpoints, WebSocket or
+    Testnet — those need their own authorized tasks (and REAL stays suspended)."""
+    text = _BINANCE_ADAPTER.read_text(encoding="utf-8").lower()
+    found = [token for token in _FORBIDDEN_ADAPTER_TOKENS if token in text]
+    assert found == [], f"Binance adapter must not touch credentials or trading: {found}"
+
+
+def test_domain_and_application_contracts_never_mention_the_provider() -> None:
+    """Internal contracts must not carry provider types or names: Binance is
+    confined to its adapter."""
+    offenders = [
+        str(path)
+        for area in ("domain", "application", "dto", "repositories", "db")
+        for path in _source_files(SRC_DIR / area)
+        if "binance" in path.read_text(encoding="utf-8").lower()
+    ]
+    assert offenders == [], f"provider names leaked into internal layers: {offenders}"
