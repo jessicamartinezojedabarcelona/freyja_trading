@@ -1,0 +1,111 @@
+@let s = series();
+
+@if (s.quality !== 'OK') {
+  <div
+    class="banner banner--{{ quality().tone }}"
+    [attr.role]="s.quality === 'UNAVAILABLE' ? 'alert' : 'status'"
+  >
+    <strong>{{ quality().icon }} {{ quality().text }}</strong>
+    <p>
+      Los datos mostrados pueden estar incompletos o desactualizados. No los uses como si fueran
+      actuales.
+    </p>
+  </div>
+}
+
+<dl class="facts">
+  <div class="fact">
+    <dt>Fuente</dt>
+    <dd>{{ sourceName() }}</dd>
+  </div>
+  <div class="fact">
+    <dt>Frescura</dt>
+    <dd>
+      <span class="badge badge--{{ freshness().tone }}"
+        ><span aria-hidden="true">{{ freshness().icon }}</span> {{ freshness().text }}</span
+      >
+    </dd>
+  </div>
+  <div class="fact">
+    <dt>Calidad</dt>
+    <dd>
+      <span class="badge badge--{{ quality().tone }}"
+        ><span aria-hidden="true">{{ quality().icon }}</span> {{ quality().text }}</span
+      >
+    </dd>
+  </div>
+  <div class="fact">
+    <dt>Última vela guardada</dt>
+    <dd>
+      @if (s.freshness.latest_open_time !== null) {
+        abre {{ formatUtc(s.freshness.latest_open_time) }}<br />
+        cierra {{ formatUtc(s.freshness.latest_close_time) }}
+      } @else {
+        —
+      }
+    </dd>
+  </div>
+  @if (age(); as ago) {
+    <div class="fact">
+      <dt>La última vela cerró hace</dt>
+      <dd>{{ ago }}</dd>
+    </div>
+  }
+  <div class="fact">
+    <dt>Recibida por Freyja</dt>
+    <dd>{{ formatUtc(s.freshness.latest_received_at) }}</dd>
+  </div>
+  <div class="fact">
+    <dt>Comprobado</dt>
+    <dd>{{ formatUtc(s.freshness.checked_at) }}</dd>
+  </div>
+  <div class="fact">
+    <dt>Huecos</dt>
+    <dd>
+      @if (s.gaps.length === 0) {
+        Ninguno en el periodo mostrado
+      } @else {
+        <ul class="plain">
+          @for (gap of s.gaps; track gap.after_open_time) {
+            <li>
+              {{ gap.missing }} {{ gap.missing === 1 ? 'vela' : 'velas' }} tras la de
+              {{ formatUtc(gap.after_open_time) }}
+            </li>
+          }
+        </ul>
+      }
+    </dd>
+  </div>
+  <div class="fact">
+    <dt>Actualización desde la fuente</dt>
+    <dd>
+      @if (s.provider === null || providerStatus() === null) {
+        Aún no se ha intentado sincronizar esta serie.
+      } @else {
+        <span class="badge badge--{{ providerStatus()!.tone }}"
+          ><span aria-hidden="true">{{ providerStatus()!.icon }}</span> Último intento:
+          {{ providerStatus()!.text }}</span
+        ><br />
+        {{ formatUtc(s.provider.last_attempt_at) }}<br />
+        Último éxito:
+        {{ s.provider.last_success_at === null ? 'nunca' : formatUtc(s.provider.last_success_at) }}
+        @if (s.provider.consecutive_failures > 0) {
+          <br />
+          {{ s.provider.consecutive_failures }}
+          {{ s.provider.consecutive_failures === 1 ? 'fallo seguido' : 'fallos seguidos' }}
+        }
+      }
+    </dd>
+  </div>
+</dl>
+
+@if (s.issues.length > 0) {
+  <section aria-labelledby="issues-title" class="issues">
+    <h3 id="issues-title">Avisos sobre los datos</h3>
+    <ul class="plain">
+      @for (issue of s.issues; track issue.code) {
+        <li>{{ issueLabel(issue.code) }}</li>
+      }
+    </ul>
+  </section>
+}

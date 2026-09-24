@@ -17,6 +17,18 @@
   --freyja-success: #8fd2ab;
   --freyja-font-serif:
     'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, 'Times New Roman', serif;
+
+  /* Tokens defined by UX-DESIGN-SYSTEM-001 (§6) for the market explorer. */
+  --freyja-surface-raised: #1c2030;
+  --freyja-border-subtle: rgba(241, 234, 217, 0.08);
+  --freyja-text-disabled: #6f6a58;
+  --freyja-status-success: #8fd2ab;
+  --freyja-status-info: #7fb3e6;
+  --freyja-status-warning: #f29d52;
+  --freyja-status-error: #e26a8a;
+  --freyja-status-blocked: #9aa0b4;
+  --freyja-market-up: #8fd2ab;
+  --freyja-market-down: #e26a8a;
 }
 
 * {

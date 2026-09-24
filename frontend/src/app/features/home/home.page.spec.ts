@@ -36,6 +36,16 @@ describe('HomePage', () => {
     expect(compiled.textContent).toContain('owner@example.test');
   });
 
+  it('links to the market explorer', () => {
+    const fixture = TestBed.createComponent(HomePage);
+    fixture.detectChanges();
+
+    const link = (fixture.nativeElement as HTMLElement).querySelector<HTMLAnchorElement>(
+      'a[href="/mercados"]',
+    );
+    expect(link?.textContent?.trim()).toBe('Mercados');
+  });
+
   it('navigates to /login after logout', () => {
     const fixture = TestBed.createComponent(HomePage);
     const router = TestBed.inject(Router);

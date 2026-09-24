@@ -44,6 +44,14 @@ describe('app routes — public registration', () => {
     expect(root?.canActivate?.length).toBeGreaterThan(0);
   });
 
+  it('keeps the market explorer behind the session guard', () => {
+    for (const path of ['mercados', 'mercados/:instrumentId']) {
+      const route = routes.find((candidate) => candidate.path === path);
+      expect(route, path).toBeDefined();
+      expect(route?.canActivate?.length, path).toBeGreaterThan(0);
+    }
+  });
+
   it('lets an anonymous visitor open /register without asking for a session', async () => {
     await router.navigateByUrl('/register');
 
