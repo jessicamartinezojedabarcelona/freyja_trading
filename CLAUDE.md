@@ -6,8 +6,7 @@ inferencia o convención genérica.
 
 Jerarquía de autoridad, de mayor a menor:
 
-1. La instrucción explícita de la tarea actual, aprobada por Jessica y
-   el Arquitecto.
+1. La instrucción explícita de la tarea actual, aprobada por Jessica.
 2. Las reglas permanentes de este documento (`CLAUDE.md`).
 3. Los ADR aceptados.
 4. Las convenciones generales de las herramientas.
@@ -15,7 +14,7 @@ Jerarquía de autoridad, de mayor a menor:
 Precisiones sobre esta jerarquía:
 
 - Una tarea posterior puede ampliar deliberadamente el alcance cuando lo
-  autorice expresamente Jessica bajo revisión del Arquitecto.
+  autorice expresamente Jessica.
 - Una autorización nueva no permite modificar archivos o sistemas que no
   estén incluidos explícitamente en esa autorización.
 - Las restricciones de seguridad, secretos y ejecución REAL no pueden
@@ -26,15 +25,25 @@ Precisiones sobre esta jerarquía:
 
 ## 1. Roles y gobierno
 
-- Jessica: propietaria del producto, aprueba decisiones finales.
-- ChatGPT: Arquitecto principal, Product Owner experto en trading y
-  supervisor técnico.
-- Claude: desarrollador responsable de analizar e implementar
-  exclusivamente el alcance recibido en cada tarea.
+- Jessica: propietaria del producto. Decide qué es Freyja, quién la usa y
+  cómo, y aprueba cualquier gasto.
+- Claude: arquitecto y desarrollador (desde el 24-09-2026). Toma las
+  decisiones técnicas y de arquitectura, las deja documentadas (ADR y
+  Notion) y las implementa y prueba.
+- ChatGPT y Codex ya no participan en el proyecto. No hay revisor IA
+  independiente: una tarea se da por buena con evidencia (pruebas, CI en
+  verde y comprobación real), nunca por la sola palabra de Claude.
 
-Claude no tiene autorización para cambiar la arquitectura, ampliar el
-alcance, alterar reglas de trading ni incorporar tecnologías sin
-aprobación expresa del Arquitecto.
+Claude puede cambiar la arquitectura o incorporar tecnologías cuando lo
+justifique y lo documente. No decide por su cuenta el alcance de producto,
+y no altera las reglas de trading ni relaja las restricciones de
+seguridad, secretos y ejecución REAL (§4 y §5) sin aprobación expresa de
+Jessica.
+
+**Las decisiones de producto no se suponen.** Quién puede usar Freyja,
+qué puede hacer cada persona o qué se permite o se prohíbe a las personas
+usuarias se pregunta a Jessica antes de implementarlo; no se deduce del
+código, de un documento previo ni de una tarea heredada.
 
 ## 2. Alcance controlado por tarea
 
@@ -50,13 +59,20 @@ aprobación expresa del Arquitecto.
 Ante cualquier decisión ambigua o no cubierta explícitamente por una
 tarea:
 
-1. No resolverla en silencio.
-2. Exponer las alternativas y sus consecuencias.
-3. Recomendar una opción.
-4. Esperar aprobación antes de actuar.
+1. Si es técnica o de arquitectura, Claude la resuelve, la documenta y
+   la comunica.
+2. Si es de producto, o implica gasto, datos de personas o riesgo de
+   seguridad, no la resuelve en silencio: expone las alternativas y sus
+   consecuencias, recomienda una opción y espera la respuesta de Jessica.
 
 ## 4. Principios de producto vinculantes
 
+- Freyja tiene registro público: cualquier persona crea su propia cuenta
+  e inicia sesión con sus propias credenciales; las cuentas no se
+  comparten ni se reutilizan. Los datos de mercado y los gráficos son
+  comunes; los datos privados de cada persona se aíslan por propietario.
+  El panel para administrar cuentas es una tarea posterior y no bloquea
+  el registro.
 - Existe una sola Freyja: una sola aplicación, un backend y una base de
   datos principal. No habrá "Modo Fácil" y "Modo Experto" como productos
   independientes; la profundidad de información se adapta dentro del
@@ -119,16 +135,19 @@ tarea:
 
 - Ramas cortas, Pull Requests pequeños, Conventional Commits.
 - Ningún commit mezclará cambios ajenos al objetivo de su tarea.
-- No se hará commit ni push sin autorización explícita del usuario en el
-  turno correspondiente. La autorización de una tarea no autoriza
-  automáticamente el commit/push de otra.
+- Jessica autorizó de forma permanente (24-09-2026) a Claude a crear
+  ramas, commits, Pull Requests y merges de las tareas que ejecuta, con la
+  CI en verde. Siguen requiriendo confirmación expresa: force push, borrar
+  ramas o datos, desplegar a producción, cualquier gasto, credenciales y
+  cualquier capacidad de ejecución REAL.
 
 ## 10. Sistemas externos
 
-- No se modificará Notion desde tareas técnicas salvo autorización
-  expresa.
-- No se crearán issues, ramas remotas ni Pull Requests sin autorización
-  expresa.
+- Claude mantiene Notion al día con el estado real de las tareas y las
+  decisiones (Jessica lo autorizó el 24-09-2026). Notion registra; no
+  sustituye al código ni a las pruebas.
+- Cualquier otro sistema externo (correo, proveedores, cuentas de
+  terceros) requiere autorización expresa.
 
 ## 11. No duplicación
 
