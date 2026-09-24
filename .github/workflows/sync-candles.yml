@@ -1,6 +1,6 @@
 # Scheduled candle sync into Neon — a STOPGAP for history, not the trading feed.
 #
-# Every 5 minutes (GitHub's minimum) it pulls the latest closed candles of each
+# Every 5 minutes (GitHub's minimum), at minutes 3, 8, 13 ... it pulls the latest closed candles of each
 # supported series from Binance's public market-data API and stores them in
 # production PostgreSQL. It is idempotent: candles already stored are left
 # untouched, and each run re-reads the last 500 candles, so a delayed or skipped
@@ -18,7 +18,9 @@ name: Sync candles (scheduled)
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    # Offset minutes (3, 8, 13, ...) on purpose: GitHub delays or drops scheduled runs
+    # at the busiest minutes (:00, :05, :10 ...), which "*/5" lands on every time.
+    - cron: "3-58/5 * * * *"
   workflow_dispatch: {}
 
 permissions:
