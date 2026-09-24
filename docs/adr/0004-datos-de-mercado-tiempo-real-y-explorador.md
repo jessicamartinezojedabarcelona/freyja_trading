@@ -1,7 +1,7 @@
 # ADR 0004 — Datos de mercado en tiempo real, temporalidades y explorador multi-fuente
 
-- **Estado:** Proposed — pendiente de las decisiones de Jessica marcadas en
-  «Decisiones que necesito» (alojamiento y coste, universo inicial, brokers).
+- **Estado:** Proposed — el alojamiento está decidido (ver «Decisiones de Jessica»);
+  siguen pendientes el universo inicial y los brokers.
 - **Fecha:** 2026-09-24
 - **Relacionado:** ADR 0002 (contrato y adaptador REST), ADR 0003 (persistencia),
   PLATFORM-DATA-DESIGN-001 (este ADR es su diseño de tiempo real).
@@ -130,13 +130,18 @@ plazos son decisión de producto/coste.
 Motor de señales, ejecución de órdenes y credenciales de broker (tareas propias con
 su diseño de seguridad); cualquier capacidad REAL, que sigue suspendida.
 
+## Decisiones de Jessica
+
+- **Alojamiento (2026-09-24): se mantiene Render Free** mientras Freyja «está en
+  pañales» y no hay ingresos; el paso a un **VPS** se hará al acercarse al final.
+  Consecuencia directa: el worker de tiempo real y las velas de segundos (fase B) se
+  **aplazan hasta el VPS**. Entre tanto, el histórico se mantiene con el workflow
+  programado de GitHub Actions y el explorador de fase A muestra honestamente el
+  desfase de los datos («la última vela cerró hace…», `Desactualizado`).
+
 ## Decisiones que necesito de Jessica
 
-1. **Alojamiento del worker (coste).** Un proceso siempre activo no cabe en Render
-   Free ni en GitHub Actions. Opciones: *Render Background Worker* (de pago, unos
-   7 USD/mes, misma plataforma y mismo despliegue), *VPS pequeño* (unos 4–5 €/mes,
-   más control y más operación) o nivel gratuito de nube (sin garantías: no
-   recomendado para operar). Los importes son orientativos; se confirman al contratar.
+1. ~~Alojamiento del worker~~ — decidido arriba (Render Free ahora, VPS después).
 2. **Universo inicial** de instrumentos en directo (recomiendo ≤ 10 al empezar) y
    los plazos de retención propuestos arriba.
 3. **Brokers**: cuáles 3–5, y cuál va primero para forex y oro. Para cada uno

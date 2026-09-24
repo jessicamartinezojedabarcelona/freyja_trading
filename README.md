@@ -327,6 +327,15 @@ huecos, la frescura y el estado del proveedor; ver ADR 0003.
 
 ## 10. Frontend
 
+**Explorador de mercado** (`/mercados` y `/mercados/:instrumentId`, requiere sesión):
+elige un instrumento, un periodo (1 minuto por defecto; los que el catálogo aún no
+habilita se ven bloqueados) y muestra las velas cerradas guardadas con un gráfico
+(`lightweight-charts` de TradingView, cargado bajo demanda). Junto al gráfico siempre
+se ve la fuente, la hora UTC de la última vela y cuánto hace que cerró, la frescura, la
+calidad, los huecos y el estado de la última sincronización, con una tabla equivalente
+para accesibilidad. La URL guarda instrumento, periodo (`?tf=`) y fuente (`?source=`).
+Solo lee lo almacenado: no consulta a ningún proveedor.
+
 Arrancar en modo desarrollo, desde `frontend/`:
 
 ```bash
