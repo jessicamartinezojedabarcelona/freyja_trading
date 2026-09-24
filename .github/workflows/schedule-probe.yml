@@ -1,0 +1,25 @@
+# TEMPORARY diagnostic (remove once the schedule question is settled).
+#
+# The candle sync's cron has never fired (0 `schedule` runs in the repository).
+# This does nothing but say it ran, with the most plain cron possible and no
+# environment, secrets or branch condition, so it tells us whether GitHub fires
+# ANY scheduled workflow in this repository. No secrets, read-only.
+name: Schedule probe (temporary)
+
+on:
+  schedule:
+    - cron: "11,26,41,56 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Say it ran
+        run: |
+          echo "event=${{ github.event_name }} schedule='${{ github.event.schedule }}' ref=${{ github.ref }}"
+          date -u
