@@ -111,12 +111,17 @@ class QualityIssueCode(enum.StrEnum):
     # The provider now reports different values for a candle Freyja already
     # stored. The stored candle is kept as is; this makes the disagreement visible.
     REVISED_CANDLE = "REVISED_CANDLE"
+    # Set when reading stored data: the source's latest sync attempt failed, so
+    # newer candles than the ones shown may exist upstream.
+    PROVIDER_FAILING = "PROVIDER_FAILING"
     # Failures: nothing trustworthy was obtained, so no candle is returned.
     RATE_LIMITED = "RATE_LIMITED"
     TIMEOUT = "TIMEOUT"
     PROVIDER_ERROR = "PROVIDER_ERROR"
     INVALID_RESPONSE = "INVALID_RESPONSE"
     SYMBOL_MISMATCH = "SYMBOL_MISMATCH"
+    # Set when reading stored data: nothing has been stored for the series yet.
+    NO_DATA = "NO_DATA"
 
 
 INFORMATIONAL_ISSUES: frozenset[QualityIssueCode] = frozenset(
@@ -129,6 +134,7 @@ FAILURE_ISSUES: frozenset[QualityIssueCode] = frozenset(
         QualityIssueCode.PROVIDER_ERROR,
         QualityIssueCode.INVALID_RESPONSE,
         QualityIssueCode.SYMBOL_MISMATCH,
+        QualityIssueCode.NO_DATA,
     }
 )
 

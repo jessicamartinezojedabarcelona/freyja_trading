@@ -12,6 +12,7 @@ from freyja_backend.core.cookies import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, SESS
 from freyja_backend.core.email import EmailSender, SmtpConfig, get_email_sender
 from freyja_backend.db.deps import get_db, is_database_ready
 from freyja_backend.db.models import AuthUser
+from freyja_backend.domain.market_data import Clock, utc_now
 
 DbSession = Annotated[Session, Depends(get_db)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
@@ -75,6 +76,14 @@ def get_current_user(request: Request, db: DbSession) -> AuthUser:
 
 
 CurrentUser = Annotated[AuthUser, Depends(get_current_user)]
+
+
+def get_clock() -> Clock:
+    """The clock the API uses to judge freshness. A dependency so tests can fix it."""
+    return utc_now
+
+
+ClockDep = Annotated[Clock, Depends(get_clock)]
 ClientIp = Annotated[str, Depends(get_client_ip)]
 
 

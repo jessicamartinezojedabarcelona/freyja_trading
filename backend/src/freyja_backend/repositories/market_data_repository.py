@@ -3,7 +3,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -212,4 +212,49 @@ def record_sync_attempt(
         insert.on_conflict_do_update(
             index_elements=["data_source_id", "instrument_id", "timeframe_id"], set_=changes
         )
+    )
+
+
+def _series_filter(key: SeriesKey) -> tuple[ColumnElement[bool], ...]:
+    return (
+        Candle.data_source_id == key.data_source_id,
+        Candle.instrument_id == key.instrument_id,
+        Candle.timeframe_id == key.timeframe_id,
+    )
+
+
+def get_instrument_by_id(session: Session, instrument_id: uuid.UUID) -> Instrument | None:
+    return session.get(Instrument, instrument_id)
+
+
+def list_latest_candles(
+    session: Session, key: SeriesKey, *, before: datetime | None, limit: int
+) -> list[Candle]:
+    """The newest `limit` candles (opened before `before`, if given), oldest first."""
+    query = select(Candle).where(*_series_filter(key))
+    if before is not None:
+        query = query.where(Candle.open_time < before)
+    rows = session.execute(query.order_by(Candle.open_time.desc()).limit(limit)).scalars()
+    return list(reversed(list(rows)))
+
+
+def list_candles_from(
+    session: Session, key: SeriesKey, *, start: datetime, end: datetime | None, limit: int
+) -> list[Candle]:
+    """Up to `limit` candles opened at or after `start` (and before `end`), oldest first."""
+    query = select(Candle).where(*_series_filter(key), Candle.open_time >= start)
+    if end is not None:
+        query = query.where(Candle.open_time < end)
+    return list(session.execute(query.order_by(Candle.open_time).limit(limit)).scalars())
+
+
+def get_latest_candle(session: Session, key: SeriesKey) -> Candle | None:
+    return session.execute(
+        select(Candle).where(*_series_filter(key)).order_by(Candle.open_time.desc()).limit(1)
+    ).scalar_one_or_none()
+
+
+def get_sync_state(session: Session, key: SeriesKey) -> MarketDataSyncState | None:
+    return session.get(
+        MarketDataSyncState, (key.data_source_id, key.instrument_id, key.timeframe_id)
     )
