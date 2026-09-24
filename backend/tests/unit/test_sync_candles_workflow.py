@@ -19,20 +19,27 @@ def _code_only() -> str:
     )
 
 
+def _cron_minutes() -> list[int]:
+    match = re.search(r'cron:\s*"([\d,]+) \* \* \* \*"', _code_only())
+    assert match is not None, "expected an explicit list of minutes"
+    return [int(minute) for minute in match.group(1).split(",")]
+
+
 def test_runs_on_a_schedule_and_can_be_dispatched_by_hand() -> None:
     code = _code_only()
     assert re.search(r"^\s*schedule:\s*$", code, re.MULTILINE)
-    assert re.search(r'cron:\s*"3-58/5 \* \* \* \*"', code)
+    assert _cron_minutes()
     assert "workflow_dispatch:" in code
     assert "pull_request" not in code
     assert re.search(r"^\s*push:\s*$", code, re.MULTILINE) is None
 
 
-def test_the_schedule_avoids_the_busiest_minutes() -> None:
+def test_the_schedule_is_every_five_minutes_and_avoids_the_busiest_minutes() -> None:
+    minutes = _cron_minutes()
+    # Every 5 minutes (GitHub's minimum), at 3, 8, 13 ... 58.
+    assert minutes == list(range(3, 60, 5))
     # "*/5" would fire at :00, :05, :10 ..., where GitHub delays or drops runs.
-    match = re.search(r'cron:\s*"(\d+)-\d+/5 ', _code_only())
-    assert match is not None
-    assert int(match.group(1)) % 5 != 0
+    assert all(minute % 5 != 0 for minute in minutes)
 
 
 def test_runs_only_from_main() -> None:
