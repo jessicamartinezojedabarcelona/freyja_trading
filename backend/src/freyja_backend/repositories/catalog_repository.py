@@ -13,6 +13,11 @@ from freyja_backend.db.models.catalog import (
     Timeframe,
     UnderlyingMarket,
 )
+from freyja_backend.db.models.provider import (
+    DataSource,
+    DataSourceInstrument,
+    DataSourceInstrumentPurpose,
+)
 
 # Read-only queries for the canonical catalog (POINT1-DB-001). Every function
 # issues a fixed, small number of round trips regardless of how many rows are
@@ -85,6 +90,7 @@ def list_instruments(
     symbol: str | None = None,
     timeframe_code: str | None = None,
     is_active: bool | None = None,
+    has_market_data: bool | None = None,
     limit: int,
     offset: int,
 ) -> tuple[list[InstrumentRow], int]:
@@ -109,6 +115,23 @@ def list_instruments(
                     Timeframe.code == timeframe_code,
                 )
             )
+        )
+    if has_market_data is not None:
+        # "Has market data" means an active data source publishes it for ANALYSIS.
+        # A SETTLEMENT-only or deactivated mapping does not make candles available.
+        covered = (
+            select(DataSourceInstrument.instrument_id)
+            .join(DataSource, DataSource.id == DataSourceInstrument.data_source_id)
+            .where(
+                DataSourceInstrument.purpose == DataSourceInstrumentPurpose.ANALYSIS,
+                DataSourceInstrument.is_active.is_(True),
+                DataSource.is_active.is_(True),
+            )
+        )
+        conditions.append(
+            Instrument.instrument_id.in_(covered)
+            if has_market_data
+            else Instrument.instrument_id.not_in(covered)
         )
     if conditions:
         stmt = stmt.where(and_(*conditions))

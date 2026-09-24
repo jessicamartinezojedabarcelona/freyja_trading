@@ -38,7 +38,9 @@
         <p class="alert" role="alert">✕ No se pudo cargar la lista de instrumentos.</p>
       }
       @default {
-        @if (visibleInstruments().length === 0) {
+        @if (instruments().length === 0) {
+          <p class="muted">Todavía no hay instrumentos con datos de mercado.</p>
+        } @else if (visibleInstruments().length === 0) {
           <p class="muted">Ningún instrumento coincide con el filtro.</p>
         } @else {
           <div class="instrument-groups">
@@ -156,6 +158,21 @@
               </section>
             } @else {
               <section aria-label="Gráfico de velas">
+                @if (refreshFailure(); as failure) {
+                  <div class="alert" role="alert">
+                    <p>
+                      <strong
+                        >✕
+                        {{
+                          failure.offline ? 'Sin conexión con Freyja.' : 'No se pudo actualizar.'
+                        }}</strong
+                      >
+                      Los datos mostrados pueden estar desactualizados; no los uses como si fueran
+                      actuales. Última actualización válida:
+                      {{ formatUtc(s.freshness.checked_at) }}.
+                    </p>
+                  </div>
+                }
                 <app-candle-chart
                   [data]="chartData()"
                   [label]="chartLabel()"
@@ -168,6 +185,12 @@
                     >TradingView Lightweight Charts™</a
                   >
                 </p>
+                @if (shortHistory()) {
+                  <p class="chart-note" role="status">
+                    <span aria-hidden="true">ⓘ</span> Solo hay {{ storedCount() }} velas guardadas
+                    para esta serie: puede que no basten para analizarla.
+                  </p>
+                }
                 <div class="chart-actions">
                   @if (olderState() !== 'exhausted') {
                     <button
@@ -186,7 +209,14 @@
                       >✕ No se pudieron cargar las velas anteriores.</span
                     >
                   }
-                  <button type="button" class="btn btn--sm" (click)="reload()">Actualizar</button>
+                  <button
+                    type="button"
+                    class="btn btn--sm"
+                    [disabled]="refreshing()"
+                    (click)="reload()"
+                  >
+                    {{ refreshing() ? 'Actualizando…' : 'Actualizar' }}
+                  </button>
                 </div>
               </section>
             }

@@ -24,6 +24,10 @@ def list_instruments(
     symbol: Annotated[str | None, Query()] = None,
     timeframe_code: Annotated[str | None, Query()] = None,
     is_active: Annotated[bool | None, Query()] = None,
+    has_market_data: Annotated[
+        bool | None,
+        Query(description="Solo instrumentos con una fuente activa que publique sus velas."),
+    ] = None,
 ) -> Page[InstrumentOut]:
     return catalog_service.list_instruments(
         db,
@@ -32,6 +36,7 @@ def list_instruments(
         symbol=symbol,
         timeframe_code=timeframe_code,
         is_active=is_active,
+        has_market_data=has_market_data,
         limit=page.limit,
         offset=page.offset,
     )

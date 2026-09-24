@@ -51,6 +51,34 @@ interface Selection {
   source: string | null;
 }
 
+/** Where a series is read from: only ACTIVE analysis mappings of ACTIVE sources. */
+function sourcesOf(detail: Detail | null): SourceOption[] {
+  const mappings = detail?.mappings.data_source_instruments ?? [];
+  return mappings
+    .filter((m) => m.purpose === 'ANALYSIS' && m.is_active && m.data_source.is_active)
+    .map((m) => ({ code: m.data_source.code, name: m.data_source.display_name }));
+}
+
+const keyOf = (instrumentId: string | null, source: string | null, timeframe: string | null) =>
+  `${instrumentId}|${source}|${timeframe}`;
+
+/** A response that is not the series that was asked for is never drawn: mixing two
+ * series is worse than showing an error. */
+class SeriesMismatchError extends Error {}
+
+function assertIsSeries(
+  series: CandleSeriesOut,
+  wanted: { instrumentId: string; source: string; timeframe: string },
+): void {
+  if (
+    series.instrument_id !== wanted.instrumentId ||
+    series.data_source_code !== wanted.source ||
+    series.timeframe_code !== wanted.timeframe
+  ) {
+    throw new SeriesMismatchError('The response is for a different series than requested.');
+  }
+}
+
 type SeriesState = 'idle' | 'loading' | 'ready' | 'error' | 'no-source';
 type OlderState = 'idle' | 'loading' | 'exhausted' | 'error';
 
@@ -118,12 +146,7 @@ export class MarketsPage {
   protected readonly selectedSource = signal<string | null>(null);
   protected readonly selectedTimeframe = signal<string | null>(null);
 
-  protected readonly sources = computed<SourceOption[]>(() => {
-    const mappings = this.detail()?.mappings.data_source_instruments ?? [];
-    return mappings
-      .filter((m) => m.purpose === 'ANALYSIS' && m.is_active && m.data_source.is_active)
-      .map((m) => ({ code: m.data_source.code, name: m.data_source.display_name }));
-  });
+  protected readonly sources = computed<SourceOption[]>(() => sourcesOf(this.detail()));
   protected readonly sourceName = computed(
     () => this.sources().find((s) => s.code === this.selectedSource())?.name ?? '',
   );
@@ -138,10 +161,19 @@ export class MarketsPage {
   protected readonly candles = signal<CandleOut[]>([]);
   protected readonly olderState = signal<OlderState>('idle');
   protected readonly errorMessage = signal('');
+  /** True while the same series is being refreshed with its data still on screen. */
+  protected readonly refreshing = signal(false);
+  /** Set when a refresh failed: the data stays visible, marked as possibly outdated. */
+  protected readonly refreshFailure = signal<{ message: string; offline: boolean } | null>(null);
+  /** How many candles the first page returned; fewer than a full page is ALL there is. */
+  protected readonly storedCount = signal(0);
+  protected readonly shortHistory = computed(
+    () => this.storedCount() > 0 && this.storedCount() < PAGE_SIZE,
+  );
 
   protected readonly chartData = computed(() => toChartData(this.candles()));
-  protected readonly seriesKey = computed(
-    () => `${this.selectedId()}|${this.selectedSource()}|${this.selectedTimeframe()}`,
+  protected readonly seriesKey = computed(() =>
+    keyOf(this.selectedId(), this.selectedSource(), this.selectedTimeframe()),
   );
   protected readonly tableRows = computed(() => [...this.candles()].slice(-TABLE_ROWS).reverse());
 
@@ -270,7 +302,13 @@ export class MarketsPage {
       })
       .subscribe({
         next: (older) => {
-          if (this.seriesKey() !== `${instrumentId}|${source}|${timeframe}`) return;
+          if (this.seriesKey() !== keyOf(instrumentId, source, timeframe)) return;
+          try {
+            assertIsSeries(older, { instrumentId, source, timeframe });
+          } catch {
+            this.olderState.set('error');
+            return;
+          }
           this.candles.update((current) => [...older.candles, ...current]);
           this.olderState.set(older.candles.length < PAGE_SIZE ? 'exhausted' : 'idle');
         },
@@ -297,14 +335,17 @@ export class MarketsPage {
   }
 
   private loadInstruments(): void {
-    this.catalog.getInstruments({ isActive: true, limit: INSTRUMENT_PAGE }).subscribe({
-      next: (page) => {
-        this.instruments.set(page.items);
-        this.totalInstruments.set(page.total);
-        this.listState.set('ready');
-      },
-      error: () => this.listState.set('error'),
-    });
+    // Only what can actually be shown: instruments an active source publishes candles for.
+    this.catalog
+      .getInstruments({ isActive: true, hasMarketData: true, limit: INSTRUMENT_PAGE })
+      .subscribe({
+        next: (page) => {
+          this.instruments.set(page.items);
+          this.totalInstruments.set(page.total);
+          this.listState.set('ready');
+        },
+        error: () => this.listState.set('error'),
+      });
   }
 
   private resetSeries(state: SeriesState): void {
@@ -312,6 +353,19 @@ export class MarketsPage {
     this.series.set(null);
     this.candles.set([]);
     this.olderState.set('idle');
+    this.refreshing.set(false);
+    this.refreshFailure.set(null);
+    this.storedCount.set(0);
+  }
+
+  private resolve(detail: Detail, selection: Selection) {
+    const sources = sourcesOf(detail);
+    const source =
+      selection.source !== null && sources.some((s) => s.code === selection.source)
+        ? selection.source
+        : (sources[0]?.code ?? null);
+    const timeframe = pickTimeframe(selection.timeframe, detail.instrument.timeframes);
+    return { source, timeframe };
   }
 
   private load(selection: Selection): Observable<void> {
@@ -325,27 +379,39 @@ export class MarketsPage {
       return of(undefined);
     }
 
-    this.selectedId.set(instrumentId);
-    this.seriesState.set('loading');
-    this.olderState.set('idle');
-
+    // Read before anything changes: is this a refresh of the series already on screen?
+    const shownKey = this.seriesKey();
+    const hadData = this.series() !== null;
     const cached = this.detail();
-    const detail$: Observable<Detail> =
-      cached !== null && cached.instrument.instrument_id === instrumentId
-        ? of(cached)
-        : forkJoin({
-            instrument: this.catalog.getInstrument(instrumentId),
-            mappings: this.catalog.getInstrumentMappings(instrumentId),
-          }).pipe(tap((loaded) => this.detail.set(loaded)));
+    const known = cached !== null && cached.instrument.instrument_id === instrumentId;
+    const resolved = known ? this.resolve(cached, selection) : null;
+    const isRefresh =
+      hadData &&
+      resolved !== null &&
+      keyOf(instrumentId, resolved.source, resolved.timeframe) === shownKey;
+
+    this.selectedId.set(instrumentId);
+    this.olderState.set('idle');
+    this.refreshFailure.set(null);
+    if (isRefresh) {
+      // Same series: keep the chart and its data; show progress next to it.
+      this.refreshing.set(true);
+    } else {
+      // Another series: never leave the previous one visible.
+      this.refreshing.set(false);
+      this.seriesState.set('loading');
+    }
+
+    const detail$: Observable<Detail> = known
+      ? of(cached)
+      : forkJoin({
+          instrument: this.catalog.getInstrument(instrumentId),
+          mappings: this.catalog.getInstrumentMappings(instrumentId),
+        }).pipe(tap((loaded) => this.detail.set(loaded)));
 
     return detail$.pipe(
       switchMap((detail) => {
-        const sources = this.sources();
-        const source =
-          selection.source !== null && sources.some((s) => s.code === selection.source)
-            ? selection.source
-            : (sources[0]?.code ?? null);
-        const timeframe = pickTimeframe(selection.timeframe, detail.instrument.timeframes);
+        const { source, timeframe } = this.resolve(detail, selection);
         this.selectedSource.set(source);
         this.selectedTimeframe.set(timeframe);
 
@@ -362,19 +428,35 @@ export class MarketsPage {
           })
           .pipe(
             tap((series) => {
+              assertIsSeries(series, { instrumentId, source, timeframe });
               this.series.set(series);
               this.candles.set(series.candles);
+              this.storedCount.set(series.candles.length);
+              // Fewer than a full page means the whole stored history came back.
+              this.olderState.set(series.candles.length < PAGE_SIZE ? 'exhausted' : 'idle');
+              this.refreshing.set(false);
               this.seriesState.set('ready');
             }),
             map(() => undefined),
           );
       }),
       catchError((error: unknown) => {
+        this.refreshing.set(false);
+        if (isRefresh && this.series() !== null) {
+          // The refresh failed, not the data on screen: keep it, marked as possibly
+          // outdated, instead of wiping the chart (design system §14.13).
+          this.refreshFailure.set({
+            message: this.describe(error),
+            offline: error instanceof HttpErrorResponse && error.status === 0,
+          });
+          return of(undefined);
+        }
         this.detail.update((current) =>
           current?.instrument.instrument_id === instrumentId ? current : null,
         );
         this.series.set(null);
         this.candles.set([]);
+        this.storedCount.set(0);
         this.errorMessage.set(this.describe(error));
         this.seriesState.set('error');
         return of(undefined);
@@ -383,6 +465,9 @@ export class MarketsPage {
   }
 
   private describe(error: unknown): string {
+    if (error instanceof SeriesMismatchError) {
+      return 'La respuesta del servidor no corresponde a la serie pedida y se descartó.';
+    }
     if (error instanceof HttpErrorResponse) {
       if (error.status === 404) return 'No se encontró ese instrumento o esa fuente de datos.';
       if (error.status === 422) return 'La consulta no es válida para esta serie.';
