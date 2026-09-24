@@ -24,18 +24,17 @@ divergente entre tareas.
   "Modo Experto"; la navegación es única para todas las personas usuarias.
   La profundidad de información podrá adaptarse dentro de cada pantalla en
   tareas futuras, pero comparte dominio, motor y rutas.
-- **Acceso privado, sin auto-registro.** Freyja 2.0 es privada: no ofrece
-  registro público, pero admite varias cuentas autorizadas que aprovisiona
-  Jessica localmente (por ejemplo, para un familiar). Cada cuenta tiene
-  credenciales y sesión independientes; el catálogo y los datos de mercado
-  son compartidos, y los recursos personales u operativos siguen asociados
-  a su propietario. La autenticación base está integrada mediante
-  `AUTH-LOGIN-001`; el flujo de registro que esa tarea incluyó fue retirado
-  por la tarea independiente `AUTH-PRIVATE-ACCESS-001`: ya no existen ni la
-  ruta `/register` ni el endpoint de registro. Este documento no diseña
-  registro público, invitaciones ni un modelo de roles — reutiliza el
-  `authGuard` existente (`frontend/src/app/core/auth/auth.guard.ts`) como
-  única puerta de acceso a todo lo definido aquí.
+- **Registro público, una cuenta por persona.** Cualquier persona puede
+  crear su propia cuenta desde la pantalla de registro y accede con sus
+  propias credenciales; las cuentas no se comparten ni se reutilizan. La
+  autenticación (registro, inicio de sesión, sesión y recuperación) está
+  integrada mediante `AUTH-LOGIN-001`. Los datos de mercado y los gráficos
+  son comunes; los datos privados de cada persona siguen aislados por su
+  propietario. Un panel para administrar cuentas será una tarea posterior y
+  no bloquea el registro. Este documento no diseña ese panel ni un modelo de
+  roles — reutiliza el `authGuard` existente
+  (`frontend/src/app/core/auth/auth.guard.ts`) como única puerta de acceso a
+  todo lo definido aquí.
 - **DEMO y REAL están conceptualmente separados en todo momento**, nunca
   fusionados en una sola vista ambigua. REAL permanece bloqueado y
   fail-closed a nivel de backend (`ExecutionContext.activation_status`,
@@ -67,16 +66,12 @@ divergente entre tareas.
 | `/sistema` | Sistema | P5 |
 | `/configuracion` | Configuración | P5 |
 
-Rutas públicas (fuera del sitemap autenticado). Freyja 2.0 es de acceso
-privado y **no ofrece auto-registro público**; las cuentas las aprovisiona
-Jessica:
+Rutas públicas (fuera del sitemap autenticado), accesibles sin sesión:
 
-- `/login` — única ruta pública operativa autorizada.
-- `/register` — retirada por `AUTH-PRIVATE-ACCESS-001`: la ruta ya no
-  existe (se trata como cualquier ruta desconocida y, sin sesión, lleva a
-  `/login`). `UX-IA-001` no autoriza ningún registro público.
-- `/forgot-password` y `/reset-password` — solo existen como parte del
-  flujo de recuperación de contraseña ya aprobado en `AUTH-LOGIN-001`.
+- `/register` — creación de una cuenta propia, abierta a cualquier persona.
+- `/login` — inicio de sesión con las credenciales de cada persona.
+- `/forgot-password` y `/reset-password` — flujo de recuperación de
+  contraseña ya aprobado en `AUTH-LOGIN-001`.
 
 Este documento no cambia ninguna decisión de autenticación ya integrada.
 
@@ -103,7 +98,7 @@ implementarlo antes de completar sus dependencias.
   activas, calidad de datos, oportunidades vigentes, riesgo/exposición
   cuando existan contratos reales, alertas recientes.
 - **Prioridad:** P0 (primera pantalla tras autenticarse).
-- **Consumidor:** cuentas autorizadas (aprovisionadas por Jessica).
+- **Consumidor:** personas usuarias autenticadas.
 - **Fuente de datos / contrato:** ninguno propio; agrega datos de las
   demás pantallas. Su disponibilidad real depende de la disponibilidad de
   cada área que resume.
@@ -127,7 +122,7 @@ implementarlo antes de completar sus dependencias.
   activos, instrumentos, timeframes) y su capacidad técnica por
   proveedor.
 - **Prioridad:** P1 — única área con contrato de backend completo hoy.
-- **Consumidor:** cuentas autorizadas.
+- **Consumidor:** personas usuarias autenticadas.
 - **Fuente de datos / contrato:** `POINT1-API-001`:
   `GET /api/v1/catalog/instruments` (filtrable por mercado, tipo de
   producto, símbolo y timeframe; cada `InstrumentOut` incluye embebidos
@@ -153,7 +148,7 @@ implementarlo antes de completar sus dependencias.
 - **Propósito:** oportunidades activas y caducadas detectadas sobre el
   catálogo (patrones, indicadores, condiciones/filtros, predicción).
 - **Prioridad:** P2.
-- **Consumidor:** cuentas autorizadas.
+- **Consumidor:** personas usuarias autenticadas.
 - **Fuente de datos / contrato:** ninguno implementado. Corresponde a
   varios Puntos del `ROADMAP ÚNICO` aún en backlog (detección de
   patrones, indicadores, condiciones/confirmaciones, predicción). El
@@ -173,7 +168,7 @@ implementarlo antes de completar sus dependencias.
 - **Propósito:** definir/consultar combinaciones de condiciones,
   indicadores y patrones que producen oportunidades.
 - **Prioridad:** P3.
-- **Consumidor:** cuentas autorizadas.
+- **Consumidor:** personas usuarias autenticadas.
 - **Fuente de datos / contrato:** ninguno implementado; no hay Punto del
   roadmap identificado todavía como propietario exclusivo de
   "Estrategia" como entidad. Ver §11.
@@ -191,7 +186,7 @@ implementarlo antes de completar sus dependencias.
 - **Propósito:** ciclo de vida de una posición: apertura, gestión,
   resolución, cuando exista `ExecutionContext` habilitado.
 - **Prioridad:** P3.
-- **Consumidor:** cuentas autorizadas.
+- **Consumidor:** personas usuarias autenticadas.
 - **Fuente de datos / contrato:** `GET /api/v1/execution-contexts`
   (entorno DEMO/REAL, `activation_status`, `credentials_status` — ya
   existe) para saber *si* se puede operar; el contrato de la operación en
@@ -217,7 +212,7 @@ implementarlo antes de completar sus dependencias.
 - **Propósito:** exposición, límites de pérdida y principios de
   protección aplicados, cuando existan contratos reales de ejecución.
 - **Prioridad:** P3.
-- **Consumidor:** cuentas autorizadas.
+- **Consumidor:** personas usuarias autenticadas.
 - **Fuente de datos / contrato:** ninguno implementado; corresponde a
   Puntos de gestión de posiciones y principios de protección, aún en
   backlog (ver §11).
@@ -235,7 +230,7 @@ implementarlo antes de completar sus dependencias.
 - **Propósito:** ejecutar y consultar backtests reproducibles de
   estrategias/oportunidades sobre datos históricos.
 - **Prioridad:** P4.
-- **Consumidor:** cuentas autorizadas.
+- **Consumidor:** personas usuarias autenticadas.
 - **Fuente de datos / contrato:** ninguno implementado todavía; el
   roadmap ya tiene un Punto dedicado explícitamente a esto
   (`POINT15-DOMAIN-001 — Contrato de backtesting y evidencia`), en
@@ -254,7 +249,7 @@ implementarlo antes de completar sus dependencias.
 - **Propósito:** métricas agregadas de rendimiento y calidad sobre
   oportunidades, estrategias y backtests históricos.
 - **Prioridad:** P4.
-- **Consumidor:** cuentas autorizadas.
+- **Consumidor:** personas usuarias autenticadas.
 - **Fuente de datos / contrato:** ninguno implementado; sin Punto de
   roadmap identificado con certeza como propietario (ver §11).
 - **Estado actual:** conceptual, sin contrato de backend.
@@ -271,7 +266,7 @@ implementarlo antes de completar sus dependencias.
 - **Propósito:** estado técnico de Freyja: salud del backend, conexión a
   base de datos, fuentes de datos activas/caídas.
 - **Prioridad:** P5.
-- **Consumidor:** cuentas autorizadas.
+- **Consumidor:** personas usuarias autenticadas.
 - **Fuente de datos / contrato:** `GET /api/v1/health` y
   `GET /api/v1/health/ready` (liveness/readiness, ya existen). Cobertura
   más amplia de observabilidad corresponde a `PLATFORM-OPS-DESIGN-001`
@@ -289,7 +284,7 @@ implementarlo antes de completar sus dependencias.
 - **Propósito:** preferencias de cuenta y, en el futuro, gestión de
   `ExecutionContext`/credenciales de proveedor.
 - **Prioridad:** P5.
-- **Consumidor:** cuentas autorizadas.
+- **Consumidor:** personas usuarias autenticadas.
 - **Fuente de datos / contrato:** `GET /api/v1/auth/me` existe para datos
   de la cuenta autenticada; gestión de credenciales de broker/venue no
   tiene contrato todavía (`SECURITY-BROKER-DESIGN-001`, backlog).
@@ -320,9 +315,9 @@ implementarlo antes de completar sus dependencias.
 
 - Todas las rutas de §3 requieren sesión autenticada vía el `authGuard`
   ya existente (`frontend/src/app/core/auth/auth.guard.ts`). Todas las
-  cuentas autorizadas tienen el mismo acceso a las pantallas del sitemap: no
-  se define ningún modelo de roles ni permisos distintos por cuenta. Los
-  datos de catálogo y de mercado son compartidos; los recursos personales u
+  cuentas autenticadas tienen el mismo acceso a las pantallas del sitemap:
+  no se define ningún modelo de roles ni permisos distintos por cuenta. Los
+  datos de catálogo y de mercado son comunes; los recursos personales u
   operativos (p. ej. `ExecutionContext`) se muestran solo a su propietario.
 - No existe todavía un concepto de "ruta no disponible" a nivel de
   *routing* de Angular: todas las rutas de §3 son alcanzables una vez
@@ -419,6 +414,8 @@ No se resuelven aquí; se exponen para que el Arquitecto decida:
 - Implementación de cualquier pantalla funcional o shell
   (`FRONTEND-SHELL-001`).
 - Conexión con APIs, brokers o fuentes de mercado.
+- Panel de administración de cuentas (tarea posterior; no bloquea el
+  registro público).
 - Cualquier dato ficticio de señales, operaciones, rendimientos o
   cartera.
 - Cualquier contrato de backend no citado explícitamente como existente

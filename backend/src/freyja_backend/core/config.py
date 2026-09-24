@@ -115,7 +115,7 @@ class Settings(BaseSettings):
 
         # SMTP is deliberately NOT required here: no provider is approved yet
         # (see README, "SMTP pendiente"). Production must be able to start
-        # (login, sessions) with password recovery simply
+        # (registration, login, sessions) with password recovery simply
         # left non-operational until a real provider is configured later —
         # never by inventing placeholder SMTP values to satisfy this check.
         missing = []
