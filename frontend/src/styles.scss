@@ -1,3 +1,7 @@
+@use './styles/tokens';
+@use './styles/base';
+@use './styles/ui';
+
 /* Freyja 2.0 — global design tokens for the authentication experience.
    System serif stacks are used deliberately instead of a webfont, to avoid
    adding an external network dependency without a demonstrated need. */

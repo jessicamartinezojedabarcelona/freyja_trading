@@ -1,7 +1,7 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { Component, computed, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { ActivatedRoute, NavigationEnd, Router, RouterLink } from '@angular/router';
+import { ActivatedRoute, NavigationEnd, Router } from '@angular/router';
 import {
   BehaviorSubject,
   Observable,
@@ -18,6 +18,7 @@ import {
 import { catchError } from 'rxjs/operators';
 
 import { InstrumentMappingsOut, InstrumentOut } from '../../core/catalog/catalog.models';
+import { marketLabel, productLabel } from '../../core/catalog/catalog-labels';
 import { CatalogService } from '../../core/catalog/catalog.service';
 import { compareDecimals } from '../../core/market-data/decimal';
 import { CandleOut, CandleSeriesOut } from '../../core/market-data/market-data.models';
@@ -58,7 +59,7 @@ type OlderState = 'idle' | 'loading' | 'exhausted' | 'error';
  * the back button works. Nothing here fetches from a market-data provider. */
 @Component({
   selector: 'app-markets-page',
-  imports: [RouterLink, CandleChartComponent, SeriesStatusComponent, TimeframePickerComponent],
+  imports: [CandleChartComponent, SeriesStatusComponent, TimeframePickerComponent],
   templateUrl: './markets.page.html',
   styleUrl: './markets.page.scss',
 })
@@ -79,7 +80,7 @@ export class MarketsPage {
   protected readonly markets = computed(() => {
     const seen = new Map<string, string>();
     for (const instrument of this.instruments()) {
-      seen.set(instrument.market.code, instrument.market.display_name);
+      seen.set(instrument.market.code, marketLabel(instrument.market));
     }
     return [...seen].map(([code, name]) => ({ code, name }));
   });
@@ -93,8 +94,22 @@ export class MarketsPage {
         (term === '' ||
           instrument.canonical_symbol.toLowerCase().includes(term) ||
           instrument.market.display_name.toLowerCase().includes(term) ||
-          instrument.product_type.display_name.toLowerCase().includes(term)),
+          marketLabel(instrument.market).toLowerCase().includes(term) ||
+          instrument.product_type.display_name.toLowerCase().includes(term) ||
+          productLabel(instrument.product_type).toLowerCase().includes(term)),
     );
+  });
+
+  /** The visible instruments grouped under their market, in catalog order. */
+  protected readonly instrumentGroups = computed(() => {
+    const groups = new Map<string, { code: string; name: string; items: InstrumentOut[] }>();
+    for (const instrument of this.visibleInstruments()) {
+      const code = instrument.market.code;
+      const group = groups.get(code) ?? { code, name: marketLabel(instrument.market), items: [] };
+      group.items.push(instrument);
+      groups.set(code, group);
+    }
+    return [...groups.values()];
   });
 
   // -- selection ---------------------------------------------------------------
@@ -191,6 +206,14 @@ export class MarketsPage {
         takeUntilDestroyed(),
       )
       .subscribe();
+  }
+
+  protected marketName(instrument: InstrumentOut): string {
+    return marketLabel(instrument.market);
+  }
+
+  protected productName(instrument: InstrumentOut): string {
+    return productLabel(instrument.product_type);
   }
 
   // -- user actions ------------------------------------------------------------

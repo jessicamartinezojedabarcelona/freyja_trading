@@ -39,17 +39,35 @@ describe('app routes — public registration', () => {
     }
   });
 
-  it('keeps the application itself behind the session guard', () => {
-    const root = routes.find((route) => route.path === '');
-    expect(root?.canActivate?.length).toBeGreaterThan(0);
+  it('serves the landing page at the root without a session', () => {
+    const landing = routes.find((route) => route.path === '' && route.pathMatch === 'full');
+    expect(landing).toBeDefined();
+    expect(landing?.canActivate).toBeUndefined();
   });
 
-  it('keeps the market explorer behind the session guard', () => {
-    for (const path of ['mercados', 'mercados/:instrumentId']) {
-      const route = routes.find((candidate) => candidate.path === path);
-      expect(route, path).toBeDefined();
-      expect(route?.canActivate?.length, path).toBeGreaterThan(0);
+  it('keeps the application itself behind the session guard', () => {
+    const shell = routes.find((route) => route.path === '' && route.children !== undefined);
+    expect(shell?.canActivate?.length).toBeGreaterThan(0);
+  });
+
+  it('puts the dashboard and the market explorer inside the guarded shell', () => {
+    const shell = routes.find((route) => route.path === '' && route.children !== undefined);
+    const children = (shell?.children ?? []).map((route) => route.path);
+    expect(children).toEqual(['dashboard', 'mercados', 'mercados/:instrumentId']);
+    // Nothing behind the session sits outside the shell, so nothing skips the guard.
+    for (const path of ['dashboard', 'mercados', 'mercados/:instrumentId']) {
+      expect(
+        routes.some((route) => route.path === path),
+        path,
+      ).toBe(false);
     }
+  });
+
+  it('lets an anonymous visitor read the landing page without asking for a session', async () => {
+    await router.navigateByUrl('/');
+
+    expect(router.url).toBe('/');
+    httpMock.expectNone(`${API_BASE_URL}/auth/me`);
   });
 
   it('lets an anonymous visitor open /register without asking for a session', async () => {

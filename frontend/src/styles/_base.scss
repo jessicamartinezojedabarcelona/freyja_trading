@@ -1,0 +1,83 @@
+/* Global base: applies to every page. Component styles stay inside their component. */
+
+html {
+  scroll-behavior: smooth;
+  /* Anchors must not hide under the sticky landing header. */
+  scroll-padding-top: calc(var(--freyja-header-height) + var(--freyja-space-4));
+}
+
+body {
+  margin: 0;
+  color: var(--freyja-text-cream);
+  font-family: var(--freyja-font-sans);
+  font-size: var(--freyja-text-size-md);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+a {
+  color: var(--freyja-gold-bright);
+  text-underline-offset: 0.2em;
+}
+
+:focus-visible {
+  outline: 2px solid var(--freyja-gold-bright);
+  outline-offset: 2px;
+}
+
+::selection {
+  color: var(--freyja-bg);
+  background: var(--freyja-gold-bright);
+}
+
+/* Numbers line up in every table and figure (design system §8). */
+table,
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* First focusable element of the application: jumps over the navigation. */
+.skip-link {
+  position: absolute;
+  top: var(--freyja-space-2);
+  left: var(--freyja-space-2);
+  z-index: 100;
+  padding: var(--freyja-space-2) var(--freyja-space-4);
+  color: var(--freyja-bg);
+  background: var(--freyja-gold-bright);
+  border-radius: var(--freyja-radius-sm);
+  transform: translateY(-200%);
+  transition: transform var(--freyja-motion-fast);
+
+  &:focus {
+    transform: translateY(0);
+  }
+}
+
+/* No animation or smooth scrolling for people who ask not to have it, anywhere. */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.001ms !important;
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
