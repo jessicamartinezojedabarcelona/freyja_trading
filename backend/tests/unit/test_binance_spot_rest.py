@@ -30,58 +30,7 @@ from freyja_backend.infrastructure.market_data.binance_spot_rest import (
     BinanceRestConfig,
     BinanceSpotRestClient,
 )
-
-# 12:07:30 UTC: the 12:05 five-minute candle is still open, 12:00 is closed.
-NOW = datetime(2026, 9, 24, 12, 7, 30, tzinfo=UTC)
-BTC = InstrumentRef("CRYPTO", "SPOT", "BTC/USDT")
-M5 = Timeframe.M5
-STEP_MS = 300_000
-
-
-def ms(moment: datetime) -> int:
-    return int(moment.timestamp() * 1000)
-
-
-def at(hour: int, minute: int) -> datetime:
-    return datetime(2026, 9, 24, hour, minute, tzinfo=UTC)
-
-
-def row(
-    open_time: datetime,
-    *,
-    step_ms: int = STEP_MS,
-    open_: str = "100.10",
-    high: str = "101.00",
-    low: str = "99.50",
-    close: str = "100.50",
-    volume: str = "12.345",
-) -> list[object]:
-    """One kline row in the provider's 12-field wire format."""
-    open_ms = ms(open_time)
-    return [open_ms, open_, high, low, close, volume, open_ms + step_ms - 1, "0", 1, "0", "0", "0"]
-
-
-def clean_rows() -> list[list[object]]:
-    return [row(at(11, 55)), row(at(12, 0))]
-
-
-class Provider:
-    """Scripted stand-in for the provider: replays responses, records requests."""
-
-    def __init__(self, *responses: httpx2.Response | Exception) -> None:
-        self._responses = list(responses)
-        self.requests: list[httpx2.Request] = []
-
-    def __call__(self, request: httpx2.Request) -> httpx2.Response:
-        self.requests.append(request)
-        outcome = self._responses.pop(0) if len(self._responses) > 1 else self._responses[0]
-        if isinstance(outcome, Exception):
-            raise outcome
-        return outcome
-
-
-def ok(payload: object) -> httpx2.Response:
-    return httpx2.Response(200, json=payload)
+from tests.market_data_support import BTC, M5, NOW, Provider, at, clean_rows, ms, ok, row
 
 
 @pytest.fixture

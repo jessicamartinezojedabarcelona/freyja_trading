@@ -12,7 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 BACKEND_DIR = REPO_ROOT / "backend"
 FRONTEND_DIR = REPO_ROOT / "frontend"
 
-EXPECTED_HEAD = "0012_remove_regulatory_engine (head)"
+EXPECTED_HEAD = "0013_market_data_persistence (head)"
 _ALEMBIC_INFO_PREFIX = "INFO  [alembic."
 
 
