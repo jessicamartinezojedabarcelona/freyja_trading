@@ -34,6 +34,11 @@ jobs:
     name: Sync closed candles into Neon
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # The Neon connection string is an *environment* secret of `preview` (the same
+    # one the deploy workflow uses), so the job must run in that environment to
+    # receive it. The environment has no approval rules, so scheduled runs are
+    # not blocked. Only NEON_DATABASE_URL is referenced below.
+    environment: preview
     if: github.ref == 'refs/heads/main'
     steps:
       - name: Checkout repository
