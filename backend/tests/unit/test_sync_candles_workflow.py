@@ -37,6 +37,10 @@ def test_uses_exactly_one_secret_the_neon_pooled_connection_string() -> None:
     assert secrets == {"NEON_DATABASE_URL"}
 
 
+def test_runs_in_the_preview_environment_where_the_neon_secret_lives() -> None:
+    assert re.search(r"^\s+environment: preview\s*$", _code_only(), re.MULTILINE)
+
+
 def test_never_receives_broker_or_render_credentials() -> None:
     code = _code_only()
     for forbidden in ("RENDER_", "API_KEY", "DEPLOY_HOOK", "DIRECT_URL"):
