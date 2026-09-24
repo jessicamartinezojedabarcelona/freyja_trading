@@ -99,6 +99,10 @@ class SyntheticExchange:
         self._mutate = mutate
         self.requests: list[httpx2.Request] = []
 
+    def set_now(self, now: datetime) -> None:
+        """Let time pass: candles up to `now` exist from now on."""
+        self._now_ms = ms(now)
+
     @staticmethod
     def price(open_ms: int, step_ms: int) -> int:
         return 100 + (open_ms // step_ms) % 50

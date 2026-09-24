@@ -1,12 +1,15 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 Environment = Literal["development", "test", "production"]
 
 _ROOT_ENV_FILE = Path(__file__).resolve().parents[4] / ".env"
+
+# Market-data sources the background candle scanner knows how to read.
+SCANNER_SOURCES = frozenset({"BINANCE"})
 
 # Development-only defaults. Also used to detect a production deployment that
 # forgot to override them (see _require_production_configuration below).
@@ -46,6 +49,14 @@ class Settings(BaseSettings):
     smtp_from_address: str | None = None
     smtp_timeout_seconds: float = 10.0
 
+    # Background candle scanner (MARKET-DATA-SCANNER-001): keeps the stored candle series
+    # up to date from inside the backend process. Off unless explicitly enabled, so tests,
+    # CI and local runs never start it by accident.
+    candle_scanner_enabled: bool = False
+    candle_scanner_interval_seconds: int = Field(default=60, ge=30, le=3600)
+    # Comma-separated source codes (see SCANNER_SOURCES).
+    candle_scanner_sources: str = "BINANCE"
+
     # Independent secret for HMAC-keyed rate-limiting identifiers. Never
     # reused as a password pepper, session secret, or CSRF material.
     rate_limit_hmac_key: str | None = None
@@ -67,6 +78,12 @@ class Settings(BaseSettings):
         return "none" if self.environment == "production" else "strict"
 
     @property
+    def candle_scanner_sources_list(self) -> list[str]:
+        return [
+            code.strip().upper() for code in self.candle_scanner_sources.split(",") if code.strip()
+        ]
+
+    @property
     def allowed_hosts_list(self) -> list[str]:
         return [host.strip() for host in self.allowed_hosts.split(",") if host.strip()]
 
@@ -81,6 +98,17 @@ class Settings(BaseSettings):
             raise ValueError(
                 "FREYJA_FRONTEND_ORIGIN no puede ser '*': CORS con credenciales exige "
                 "un origen exacto."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _require_known_scanner_sources(self) -> "Settings":
+        sources = self.candle_scanner_sources_list
+        unknown = sorted(set(sources) - SCANNER_SOURCES)
+        if self.candle_scanner_enabled and (not sources or unknown):
+            raise ValueError(
+                "FREYJA_CANDLE_SCANNER_SOURCES debe listar al menos una fuente conocida "
+                f"({', '.join(sorted(SCANNER_SOURCES))}); no reconocidas: {unknown or 'ninguna'}"
             )
         return self
 

@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.orm import Session
 
@@ -105,6 +105,21 @@ def _resolve_series(
         timeframe_id=catalog_timeframe.id,
     )
     return key, mapping.provider_symbol
+
+
+def latest_open_time(
+    session: Session, *, source_code: str, instrument: InstrumentRef, timeframe: Timeframe
+) -> datetime | None:
+    """Open time of the newest stored candle of a series, or None if it has none.
+
+    Raises `MarketDataConfigurationError` when the series is not set up in the catalog,
+    exactly as `sync_candles` would, so a caller can tell "empty" from "not configured".
+    """
+    key, _ = _resolve_series(
+        session, source_code=source_code, instrument=instrument, timeframe=timeframe
+    )
+    latest = market_data_repository.get_latest_candle(session, key)
+    return None if latest is None else latest.open_time.astimezone(UTC)
 
 
 def sync_candles(

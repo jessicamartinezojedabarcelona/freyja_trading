@@ -1,26 +1,24 @@
-# Scheduled candle sync into Neon — a STOPGAP for history, not the trading feed.
+# Manual candle sync into Neon: a BACKUP, not the normal path.
 #
-# Every 5 minutes (GitHub's minimum), at minutes 3, 8, 13 ... it pulls the latest closed candles of each
-# supported series from Binance's public market-data API and stores them in
-# production PostgreSQL. It is idempotent: candles already stored are left
-# untouched, and each run re-reads the last 500 candles, so a delayed or skipped
-# run loses nothing (500 x 1m = ~8 h of tolerance).
+# The backend keeps the stored candles up to date by itself (candle scanner, started with
+# the application: ADR 0006). This workflow stays only as a hand-triggered way to fill
+# Neon from GitHub when the backend has been asleep or off for a long time:
+# Actions -> "Sync candles (manual)" -> Run workflow.
 #
-# What it is NOT: GitHub schedules are best-effort (runs are often delayed by
-# several minutes and can be skipped under load), so this can never feed
-# decisions that must react within seconds. Sub-minute candles and auto-trading
-# need an always-on worker fed by WebSocket streams (see ADR 0004, pending).
+# It used to run on a 5-minute schedule, but GitHub never created a single `schedule`
+# run for this repository (even a minimal probe workflow never fired, while push, pull
+# request and manual runs worked), so the schedule was retired instead of duplicated.
 #
-# Safe by construction: read-only public provider, no credentials for it, and
-# the only secret used is the Neon pooled connection string that already
-# exists for the deploy workflow. It runs only from `main`.
-name: Sync candles (scheduled)
+# It pulls the latest closed candles of each supported series from Binance's public
+# market-data API and stores them in production PostgreSQL. Idempotent: candles already
+# stored are left untouched, and each run re-reads the last 500 candles.
+#
+# Safe by construction: read-only public provider, no credentials for it, and the only
+# secret used is the Neon pooled connection string that already exists for the deploy
+# workflow. It runs only from `main`.
+name: Sync candles (manual)
 
 on:
-  schedule:
-    # Offset minutes (3, 8, 13, ...) on purpose: GitHub delays or drops scheduled runs
-    # at the busiest minutes (:00, :05, :10 ...), which "*/5" lands on every time.
-    - cron: "3,8,13,18,23,28,33,38,43,48,53,58 * * * *"
   workflow_dispatch: {}
 
 permissions:
@@ -38,7 +36,7 @@ jobs:
     timeout-minutes: 10
     # The Neon connection string is an *environment* secret of `preview` (the same
     # one the deploy workflow uses), so the job must run in that environment to
-    # receive it. The environment has no approval rules, so scheduled runs are
+    # receive it. The environment has no approval rules, so manual runs are
     # not blocked. Only NEON_DATABASE_URL is referenced below.
     environment: preview
     if: github.ref == 'refs/heads/main'
