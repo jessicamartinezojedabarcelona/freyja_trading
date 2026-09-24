@@ -137,9 +137,12 @@ tarea:
 - Ningún commit mezclará cambios ajenos al objetivo de su tarea.
 - Jessica autorizó de forma permanente (24-09-2026) a Claude a crear
   ramas, commits, Pull Requests y merges de las tareas que ejecuta, con la
-  CI en verde. Siguen requiriendo confirmación expresa: force push, borrar
-  ramas o datos, desplegar a producción, cualquier gasto, credenciales y
-  cualquier capacidad de ejecución REAL.
+  CI en verde. Render despliega solo cada merge a `main`: un merge es un
+  despliegue a producción, así que solo se fusiona con la CI en verde y
+  después se verifica producción (PR #30 dejó el registro roto online
+  durante una hora). Siguen requiriendo confirmación expresa: force push,
+  borrar ramas o datos, migraciones destructivas, cualquier gasto,
+  credenciales y cualquier capacidad de ejecución REAL.
 
 ## 10. Sistemas externos
 
