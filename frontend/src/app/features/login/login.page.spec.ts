@@ -105,6 +105,8 @@ describe('LoginPage', () => {
   it('shows the loading state while the request is in flight', () => {
     const fixture = TestBed.createComponent(LoginPage);
     const component = fixture.componentInstance;
+    // This test is about the button, not about where a successful login leads.
+    vi.spyOn(TestBed.inject(Router), 'navigateByUrl').mockResolvedValue(true);
 
     component.form.setValue({ identifier: 'owner@example.test', password: 'a-password' });
     component.submit();
@@ -124,7 +126,7 @@ describe('LoginPage', () => {
     expect(component.submitting()).toBe(false);
   });
 
-  it('navigates to "/" after a successful login', () => {
+  it('goes to the dashboard after a successful login', () => {
     const fixture = TestBed.createComponent(LoginPage);
     const component = fixture.componentInstance;
     const router = TestBed.inject(Router);
@@ -137,7 +139,7 @@ describe('LoginPage', () => {
       .expectOne(`${API_BASE_URL}/auth/login`)
       .flush({ id: 'user-id', identifier: 'owner@example.test' });
 
-    expect(navigateSpy).toHaveBeenCalledWith('/');
+    expect(navigateSpy).toHaveBeenCalledWith('/dashboard');
   });
 
   it('shows a generic error message on invalid credentials', () => {

@@ -1,108 +1,86 @@
+// The page lives inside the application shell, which provides the brand, the
+// navigation and the page background. Cards, buttons, fields, alerts and empty
+// states come from the shared classes in src/styles/_ui.scss.
+
 :host {
   display: block;
-  min-height: 100vh;
+  max-width: 90rem;
   color: var(--freyja-text-cream);
-  background: var(--freyja-bg);
+}
+
+.page-header {
+  max-width: 44rem;
+  margin-bottom: var(--freyja-space-6);
+
+  .lead {
+    margin: var(--freyja-space-3) 0 0;
+  }
 }
 
 .layout {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 1rem 1.5rem;
-  max-width: 90rem;
-  margin: 0 auto;
-  padding: 1rem;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--freyja-space-5);
+  align-items: start;
 
   @media (min-width: 64rem) {
-    grid-template-columns: 18rem 1fr;
-    padding: 1.5rem;
+    grid-template-columns: 17rem minmax(0, 1fr);
   }
 }
 
-.topbar {
-  display: flex;
-  align-items: baseline;
-  gap: 1rem;
-  grid-column: 1 / -1;
-
-  h1 {
-    margin: 0;
-    font-family: var(--freyja-font-serif);
-    font-size: 1.5rem;
-    font-weight: 500;
+.sidebar {
+  @media (min-width: 64rem) {
+    position: sticky;
+    top: var(--freyja-space-5);
+    max-height: calc(100vh - var(--freyja-space-6));
+    overflow-y: auto;
   }
-}
-
-.back {
-  color: var(--freyja-gold-bright);
-}
-
-.sidebar,
-.content {
-  min-width: 0;
-  padding: 1rem;
-  background: var(--freyja-card-bg);
-  border: 1px solid var(--freyja-border-subtle);
-  border-radius: 0.25rem;
 }
 
 .content {
   display: flex;
   flex-direction: column;
-  gap: 1.25rem;
+  gap: var(--freyja-space-5);
+  min-width: 0;
 }
 
 .filters {
   display: grid;
-  gap: 0.75rem;
-  margin-bottom: 1rem;
-}
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-
-  span {
-    color: var(--freyja-gold);
-    font-size: 0.75rem;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-  }
-
-  input,
-  select {
-    padding: 0.55rem 0.7rem;
-    font: inherit;
-    color: var(--freyja-text-cream);
-    background: var(--freyja-input-bg);
-    border: 1px solid var(--freyja-border);
-    border-radius: 0.2rem;
-  }
-
-  input:focus-visible,
-  select:focus-visible {
-    outline: 2px solid var(--freyja-gold-bright);
-    outline-offset: 2px;
-  }
+  gap: var(--freyja-space-3);
+  margin-bottom: var(--freyja-space-5);
 }
 
 .field--inline {
   max-width: 20rem;
 }
 
-.instrument-list {
+// --- Instrument list, grouped by market -----------------------------------------
+
+.instrument-groups {
   display: grid;
-  /* Stacked on a phone the list must not push the chart out of sight. */
-  max-height: 16rem;
+  gap: var(--freyja-space-4);
+  // Stacked on a phone the list must not push the chart out of sight.
+  max-height: 18rem;
   overflow-y: auto;
 
   @media (min-width: 64rem) {
     max-height: none;
     overflow-y: visible;
   }
+}
 
-  gap: 0.25rem;
+.group-title {
+  margin: 0 0 var(--freyja-space-2);
+  color: var(--freyja-text-muted);
+  font-size: var(--freyja-text-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.instrument-list {
+  display: grid;
+  gap: var(--freyja-space-1);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -110,63 +88,75 @@
 
 .instrument {
   display: flex;
-  flex-direction: column;
-  gap: 0.1rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--freyja-space-3);
   width: 100%;
-  padding: 0.55rem 0.7rem;
+  min-height: 2.75rem;
+  padding: var(--freyja-space-2) var(--freyja-space-3);
   font: inherit;
   text-align: left;
   color: var(--freyja-text-cream);
   background: transparent;
-  border: 1px solid var(--freyja-border-subtle);
-  border-radius: 0.2rem;
+  border: 1px solid transparent;
+  border-left: 3px solid transparent;
+  border-radius: var(--freyja-radius-sm);
   cursor: pointer;
+  transition:
+    background-color var(--freyja-motion-fast),
+    border-color var(--freyja-motion-fast);
 
   &:hover {
-    border-color: var(--freyja-border-strong);
-  }
-
-  &:focus-visible {
-    outline: 2px solid var(--freyja-gold-bright);
-    outline-offset: 2px;
+    background: var(--freyja-border-subtle);
   }
 }
 
 .instrument--active {
-  border-color: var(--freyja-gold-bright);
-  background: color-mix(in srgb, var(--freyja-gold) 14%, transparent);
+  background: color-mix(in srgb, var(--freyja-gold) 12%, transparent);
+  border-color: var(--freyja-border);
+  border-left-color: var(--freyja-gold-bright);
 }
 
 .symbol {
+  font-family: var(--freyja-font-mono);
+  font-size: var(--freyja-text-size-sm);
   font-weight: 600;
+}
+
+.product {
+  color: var(--freyja-text-muted);
+  font-size: var(--freyja-text-size-xs);
+  white-space: nowrap;
 }
 
 .meta,
 .muted {
   color: var(--freyja-text-muted);
-  font-size: 0.85rem;
+  font-size: var(--freyja-text-size-sm);
 }
 
 .muted {
   margin: 0;
 }
 
+// --- Selected series ---------------------------------------------------------------
+
 .heading {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 1rem;
+  gap: var(--freyja-space-4);
 
   h2 {
     margin: 0;
-    font-family: var(--freyja-font-serif);
-    font-size: 1.6rem;
-    font-weight: 500;
+    font-family: var(--freyja-font-mono);
+    font-size: var(--freyja-text-size-2xl);
+    font-weight: 600;
   }
 
   .meta {
-    margin: 0.15rem 0 0;
+    margin: var(--freyja-space-1) 0 0;
   }
 }
 
@@ -178,14 +168,15 @@
 
   .label {
     color: var(--freyja-text-muted);
-    font-size: 0.75rem;
+    font-size: var(--freyja-text-size-xs);
     letter-spacing: 0.08em;
     text-transform: uppercase;
   }
 }
 
 .price {
-  font-size: 1.4rem;
+  font-family: var(--freyja-font-mono);
+  font-size: var(--freyja-text-size-xl);
   font-variant-numeric: tabular-nums;
 }
 
@@ -197,109 +188,50 @@
   color: var(--freyja-market-down);
 }
 
-.empty {
-  padding: 1.5rem;
-  color: var(--freyja-text-muted);
-  border: 1px dashed var(--freyja-border);
-  border-radius: 0.25rem;
-
-  h2,
-  h3 {
-    margin: 0 0 0.5rem;
-    color: var(--freyja-text-cream);
-    font-family: var(--freyja-font-serif);
-    font-weight: 500;
-  }
-
-  p {
-    margin: 0;
-  }
-}
-
-.alert {
-  padding: 0.75rem 1rem;
-  color: var(--freyja-text-cream);
-  border: 1px solid var(--freyja-status-error);
-  border-radius: 0.25rem;
-  background: color-mix(in srgb, var(--freyja-status-error) 8%, transparent);
-
-  p {
-    margin: 0 0 0.5rem;
-  }
-}
-
 .chart-note {
-  margin: 0.5rem 0 0;
+  margin: var(--freyja-space-2) 0 0;
   color: var(--freyja-text-muted);
-  font-size: 0.8rem;
-
-  a {
-    color: var(--freyja-gold-bright);
-  }
+  font-size: var(--freyja-text-size-xs);
 }
 
 .chart-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.75rem;
-  margin-top: 0.75rem;
-}
-
-.action {
-  padding: 0.5rem 0.9rem;
-  font: inherit;
-  color: var(--freyja-text-cream);
-  background: var(--freyja-input-bg);
-  border: 1px solid var(--freyja-border);
-  border-radius: 0.2rem;
-  cursor: pointer;
-
-  &:hover:not(:disabled) {
-    border-color: var(--freyja-border-strong);
-  }
-
-  &:focus-visible {
-    outline: 2px solid var(--freyja-gold-bright);
-    outline-offset: 2px;
-  }
-
-  &:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
+  gap: var(--freyja-space-3);
+  margin-top: var(--freyja-space-3);
 }
 
 .table-alt {
   summary {
-    cursor: pointer;
     color: var(--freyja-gold-bright);
+    cursor: pointer;
   }
 }
 
 .table-wrap {
-  margin-top: 0.75rem;
+  margin-top: var(--freyja-space-3);
   overflow-x: auto;
 }
 
 table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.85rem;
+  font-size: var(--freyja-text-size-sm);
   font-variant-numeric: tabular-nums;
 
   caption {
-    margin-bottom: 0.5rem;
+    margin-bottom: var(--freyja-space-2);
     color: var(--freyja-text-muted);
     text-align: left;
   }
 
   th,
   td {
-    padding: 0.35rem 0.6rem;
+    padding: var(--freyja-space-1) var(--freyja-space-3);
     text-align: right;
-    border-bottom: 1px solid var(--freyja-border-subtle);
     white-space: nowrap;
+    border-bottom: 1px solid var(--freyja-border-subtle);
   }
 
   th[scope='row'],

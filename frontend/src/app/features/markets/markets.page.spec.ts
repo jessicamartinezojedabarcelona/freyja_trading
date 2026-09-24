@@ -175,7 +175,7 @@ describe('MarketsPage', () => {
       const select = root().querySelector<HTMLSelectElement>('select')!;
       expect([...select.options].map((o) => o.textContent?.trim())).toEqual([
         'Todos',
-        'Crypto',
+        'Cripto',
         'Forex',
       ]);
       select.value = 'FOREX';
@@ -222,7 +222,7 @@ describe('MarketsPage', () => {
       expect(request.request.params.get('limit')).toBe(String(PAGE_SIZE));
 
       expect(squash(root().querySelector('.heading h2'))).toBe('BTC/USDT');
-      expect(text()).toContain('Crypto · Spot');
+      expect(text()).toContain('Cripto · Spot');
       const pressed = root().querySelector('app-timeframe-picker [aria-pressed="true"]');
       expect(squash(pressed)).toBe('1m');
     });
@@ -381,7 +381,7 @@ describe('MarketsPage', () => {
       expect(squash(alert)).not.toContain('500');
       expect(root().querySelector('app-candle-chart')).toBeNull();
 
-      root().querySelector<HTMLButtonElement>('.alert .action')!.click();
+      root().querySelector<HTMLButtonElement>('.alert .btn')!.click();
       candlesRequest().flush(makeSeries());
       await settle();
 
@@ -598,7 +598,7 @@ describe('MarketsPage', () => {
       await openLoaded();
       const oldestOpen = makeCandle(0).open_time;
 
-      root().querySelector<HTMLButtonElement>('.chart-actions .action')!.click();
+      root().querySelector<HTMLButtonElement>('.chart-actions .btn')!.click();
       const request = candlesRequest();
       expect(request.request.params.get('end')).toBe(oldestOpen);
       expect(request.request.params.get('limit')).toBe(String(PAGE_SIZE));
@@ -616,7 +616,7 @@ describe('MarketsPage', () => {
     it('says there is nothing older once a page comes back short', async () => {
       await openLoaded();
 
-      root().querySelector<HTMLButtonElement>('.chart-actions .action')!.click();
+      root().querySelector<HTMLButtonElement>('.chart-actions .btn')!.click();
       candlesRequest().flush(makeSeries({ candles: [makeCandle(-1)] }));
       await settle();
 
@@ -628,7 +628,7 @@ describe('MarketsPage', () => {
       await openLoaded();
       const full = Array.from({ length: PAGE_SIZE }, (_, i) => makeCandle(-PAGE_SIZE + i));
 
-      root().querySelector<HTMLButtonElement>('.chart-actions .action')!.click();
+      root().querySelector<HTMLButtonElement>('.chart-actions .btn')!.click();
       candlesRequest().flush(makeSeries({ candles: full }));
       await settle();
 
@@ -639,7 +639,7 @@ describe('MarketsPage', () => {
     it('reports a failure without losing what is already drawn', async () => {
       await openLoaded();
 
-      root().querySelector<HTMLButtonElement>('.chart-actions .action')!.click();
+      root().querySelector<HTMLButtonElement>('.chart-actions .btn')!.click();
       candlesRequest().flush({}, { status: 500, statusText: 'Server Error' });
       await settle();
 
@@ -649,7 +649,7 @@ describe('MarketsPage', () => {
 
     it('does not start a second request while one is running', async () => {
       await openLoaded();
-      const button = root().querySelector<HTMLButtonElement>('.chart-actions .action')!;
+      const button = root().querySelector<HTMLButtonElement>('.chart-actions .btn')!;
 
       button.click();
       harness.detectChanges();
@@ -666,7 +666,7 @@ describe('MarketsPage', () => {
     it('reloads the latest candles on demand', async () => {
       await openLoaded();
 
-      [...root().querySelectorAll<HTMLButtonElement>('.chart-actions .action')]
+      [...root().querySelectorAll<HTMLButtonElement>('.chart-actions .btn')]
         .find((b) => squash(b) === 'Actualizar')!
         .click();
       candlesRequest().flush(

@@ -1,0 +1,253 @@
+/* Reusable building blocks. Use these classes in any template instead of restyling
+   the same thing twice; change them here and the whole app follows. */
+
+/* Page width -------------------------------------------------------------- */
+.container {
+  width: 100%;
+  max-width: var(--freyja-container);
+  margin-inline: auto;
+  padding-inline: var(--freyja-gutter);
+}
+
+/* Buttons and links styled as buttons (design system §14.1) ------------------ */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--freyja-space-2);
+  min-height: 2.75rem; /* 44px touch target */
+  padding: var(--freyja-space-2) var(--freyja-space-5);
+  font: inherit;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
+  text-decoration: none;
+  color: var(--freyja-text-cream);
+  background: transparent;
+  border: 1px solid var(--freyja-border);
+  border-radius: var(--freyja-radius-sm);
+  cursor: pointer;
+  transition:
+    color var(--freyja-motion-fast),
+    background-color var(--freyja-motion-fast),
+    border-color var(--freyja-motion-fast),
+    transform var(--freyja-motion-fast);
+
+  &:hover {
+    border-color: var(--freyja-border-strong);
+  }
+
+  &:active {
+    transform: translateY(1px);
+  }
+
+  &:disabled,
+  &[aria-disabled='true'] {
+    color: var(--freyja-text-disabled);
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+}
+
+/* One primary action per view. */
+.btn--primary {
+  color: var(--freyja-bg);
+  background: linear-gradient(180deg, var(--freyja-gold-bright), var(--freyja-gold));
+  border-color: var(--freyja-gold-bright);
+
+  &:hover {
+    background: var(--freyja-gold-bright);
+    box-shadow: 0 0 1.5rem rgba(224, 191, 124, 0.3);
+  }
+}
+
+.btn--ghost {
+  color: var(--freyja-text-muted);
+  border-color: transparent;
+
+  &:hover {
+    color: var(--freyja-text-cream);
+    border-color: var(--freyja-border-subtle);
+  }
+}
+
+.btn--lg {
+  min-height: 3.25rem;
+  padding-inline: var(--freyja-space-6);
+  font-size: var(--freyja-text-size-lg);
+}
+
+.btn--sm {
+  min-height: 2.25rem;
+  padding-inline: var(--freyja-space-4);
+  font-size: var(--freyja-text-size-sm);
+}
+
+/* Cards (design system §14.4) --------------------------------------------- */
+.card {
+  padding: var(--freyja-space-5);
+  background: var(--freyja-card-bg);
+  border: 1px solid var(--freyja-border-subtle);
+  border-radius: var(--freyja-radius-md);
+}
+
+.card--interactive {
+  transition:
+    border-color var(--freyja-motion-base),
+    transform var(--freyja-motion-base),
+    background-color var(--freyja-motion-base);
+
+  &:hover {
+    border-color: var(--freyja-border);
+    transform: translateY(-2px);
+  }
+}
+
+/* Small uppercase label above a title. */
+.eyebrow {
+  margin: 0 0 var(--freyja-space-3);
+  color: var(--freyja-gold);
+  font-size: var(--freyja-text-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+/* Headings in the brand serif. */
+.heading-display,
+.heading-section,
+.heading-card {
+  margin: 0;
+  color: var(--freyja-text-cream);
+  font-family: var(--freyja-font-serif);
+  font-weight: 500;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+}
+
+.heading-display {
+  font-size: var(--freyja-text-size-hero);
+}
+
+.heading-section {
+  font-size: var(--freyja-text-size-section);
+}
+
+.heading-card {
+  font-size: var(--freyja-text-size-lg);
+  line-height: 1.25;
+}
+
+.lead {
+  color: var(--freyja-text-muted);
+  font-size: clamp(1.05rem, 1vw + 0.85rem, 1.25rem);
+  line-height: 1.6;
+}
+
+/* Status chips: symbol + text, never colour alone (design system §12). */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--freyja-space-1);
+  padding: 0.15rem var(--freyja-space-3);
+  color: var(--freyja-text-muted);
+  font-size: var(--freyja-text-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  border: 1px solid var(--freyja-border-subtle);
+  border-radius: var(--freyja-radius-full);
+  white-space: nowrap;
+}
+
+.chip--success {
+  color: var(--freyja-status-success);
+  border-color: currentcolor;
+}
+
+.chip--info {
+  color: var(--freyja-status-info);
+  border-color: currentcolor;
+}
+
+.chip--gold {
+  color: var(--freyja-gold-bright);
+  border-color: var(--freyja-border);
+}
+
+.chip--blocked {
+  color: var(--freyja-status-blocked);
+  border-color: currentcolor;
+}
+
+/* Landing section rhythm: every section shares the same vertical padding. */
+.section {
+  padding-block: var(--freyja-section-y);
+}
+
+.section__header {
+  max-width: 44rem;
+  margin-bottom: var(--freyja-space-8);
+
+  .lead {
+    margin: var(--freyja-space-4) 0 0;
+  }
+}
+
+/* Form field: visible label above the control (design system §14.2). */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--freyja-space-1);
+
+  > span {
+    color: var(--freyja-gold);
+    font-size: var(--freyja-text-size-xs);
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  input,
+  select {
+    min-height: 2.5rem;
+    padding: var(--freyja-space-2) var(--freyja-space-3);
+    font: inherit;
+    color: var(--freyja-text-cream);
+    background: var(--freyja-input-bg);
+    border: 1px solid var(--freyja-border);
+    border-radius: var(--freyja-radius-sm);
+  }
+}
+
+/* Error alert inside the affected area (design system §14.6 and §14.12). */
+.alert {
+  padding: var(--freyja-space-3) var(--freyja-space-4);
+  color: var(--freyja-text-cream);
+  border: 1px solid var(--freyja-status-error);
+  border-radius: var(--freyja-radius-md);
+  background: color-mix(in srgb, var(--freyja-status-error) 8%, transparent);
+
+  p {
+    margin: 0 0 var(--freyja-space-2);
+  }
+}
+
+/* Empty state: says why there is nothing, never fills the gap with examples. */
+.empty-state {
+  padding: var(--freyja-space-6);
+  color: var(--freyja-text-muted);
+  border: 1px dashed var(--freyja-border);
+  border-radius: var(--freyja-radius-md);
+
+  h2,
+  h3 {
+    margin: 0 0 var(--freyja-space-2);
+    color: var(--freyja-text-cream);
+    font-family: var(--freyja-font-serif);
+    font-weight: 500;
+  }
+
+  p {
+    margin: 0;
+  }
+}

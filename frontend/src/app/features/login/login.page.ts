@@ -70,7 +70,7 @@ export class LoginPage {
     this.authService.login(identifier, password).subscribe({
       next: () => {
         this.submitting.set(false);
-        void this.router.navigateByUrl('/');
+        void this.router.navigateByUrl('/dashboard');
       },
       error: (error: HttpErrorResponse) => {
         this.submitting.set(false);

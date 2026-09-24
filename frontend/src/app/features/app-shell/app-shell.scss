@@ -1,0 +1,204 @@
+:host {
+  display: block;
+  min-height: 100vh;
+  background:
+    radial-gradient(ellipse at 20% -10%, var(--freyja-bg-glow) 0%, transparent 55%),
+    var(--freyja-bg);
+  color: var(--freyja-text-cream);
+}
+
+.shell {
+  display: grid;
+  grid-template-columns: 1fr;
+  min-height: 100vh;
+
+  @media (min-width: 64rem) {
+    grid-template-columns: var(--freyja-sidebar-width) minmax(0, 1fr);
+  }
+}
+
+// --- Sidebar: off-canvas on a phone, fixed column on a desktop --------------
+
+.sidebar {
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: var(--freyja-space-6);
+  width: min(18rem, 85vw);
+  padding: var(--freyja-space-5) var(--freyja-space-4);
+  overflow-y: auto;
+  background: var(--freyja-card-bg);
+  border-right: 1px solid var(--freyja-border-subtle);
+  box-shadow: var(--freyja-shadow-raised);
+  /* Closed on a phone: out of sight AND out of the tab order. */
+  visibility: hidden;
+  transform: translateX(-100%);
+  transition:
+    transform var(--freyja-motion-base),
+    visibility var(--freyja-motion-base);
+
+  @media (min-width: 64rem) {
+    position: sticky;
+    top: 0;
+    width: auto;
+    height: 100vh;
+    box-shadow: none;
+    visibility: visible;
+    transform: none;
+  }
+}
+
+.sidebar--open {
+  visibility: visible;
+  transform: none;
+}
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(0, 0, 0, 0.6);
+  border: 0;
+
+  @media (min-width: 64rem) {
+    display: none;
+  }
+}
+
+.brand-link {
+  align-self: flex-start;
+  color: inherit;
+  text-decoration: none;
+}
+
+.nav-list {
+  display: grid;
+  gap: var(--freyja-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--freyja-space-3);
+  min-height: 2.75rem;
+  padding: var(--freyja-space-2) var(--freyja-space-3);
+  color: var(--freyja-text-cream);
+  text-decoration: none;
+  border-left: 3px solid transparent;
+  border-radius: 0 var(--freyja-radius-sm) var(--freyja-radius-sm) 0;
+  transition:
+    color var(--freyja-motion-fast),
+    background-color var(--freyja-motion-fast),
+    border-color var(--freyja-motion-fast);
+
+  &:hover {
+    background: var(--freyja-border-subtle);
+  }
+}
+
+// Active: gold text and a gold bar on the side (design system §14.9).
+.nav-item--active {
+  color: var(--freyja-gold-bright);
+  background: color-mix(in srgb, var(--freyja-gold) 10%, transparent);
+  border-left-color: var(--freyja-gold-bright);
+}
+
+.nav-item--locked {
+  color: var(--freyja-text-disabled);
+  cursor: default;
+
+  &:hover {
+    background: transparent;
+  }
+}
+
+.icon {
+  flex: none;
+  width: 1.25rem;
+  height: 1.25rem;
+  fill: none;
+  stroke: currentcolor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.icon--text {
+  font-size: 0.8rem;
+  text-align: center;
+  filter: grayscale(1);
+  opacity: 0.6;
+}
+
+.group-title {
+  margin: 0 0 var(--freyja-space-2) var(--freyja-space-3);
+  color: var(--freyja-text-muted);
+  font-size: var(--freyja-text-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.account {
+  display: grid;
+  gap: var(--freyja-space-3);
+  margin-top: auto;
+  padding-top: var(--freyja-space-4);
+  border-top: 1px solid var(--freyja-border-subtle);
+}
+
+.who {
+  display: grid;
+  margin: 0;
+  min-width: 0;
+}
+
+.who-label {
+  color: var(--freyja-text-muted);
+  font-size: var(--freyja-text-size-xs);
+}
+
+.who-name {
+  overflow: hidden;
+  font-size: var(--freyja-text-size-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+// --- Main column ----------------------------------------------------------------
+
+.main {
+  min-width: 0;
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--freyja-header-height);
+  padding-inline: var(--freyja-gutter);
+  background: color-mix(in srgb, var(--freyja-bg) 88%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--freyja-border-subtle);
+
+  // The desktop sidebar already carries the brand and the menu.
+  @media (min-width: 64rem) {
+    display: none;
+  }
+}
+
+main {
+  padding: var(--freyja-space-5) var(--freyja-gutter) var(--freyja-space-8);
+
+  &:focus {
+    outline: none;
+  }
+}

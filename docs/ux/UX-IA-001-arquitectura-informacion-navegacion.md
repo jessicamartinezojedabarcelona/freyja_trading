@@ -75,6 +75,14 @@ Rutas públicas (fuera del sitemap autenticado), accesibles sin sesión:
 
 Este documento no cambia ninguna decisión de autenticación ya integrada.
 
+**Actualización (rediseño de interfaz):** `''` es ahora la **landing pública**
+(`features/landing/`). Las pantallas autenticadas viven bajo un *shell* común con
+guarda de sesión (`features/app-shell/`): `/dashboard` (`features/dashboard/`, que
+sustituye al placeholder `HomePage`) y `/mercados`, `/mercados/:instrumentId`. El
+login lleva a `/dashboard`; «Entrar» en la landing apunta a `/dashboard` y la guarda
+decide (con sesión entra, sin sesión va a `/login`). El texto anterior queda como
+histórico:
+
 `''` (raíz autenticada) redirige a `/dashboard`. Hoy `''` carga
 `HomePage` como *placeholder* de autenticación (`frontend/src/app/features/home/`);
 sustituirlo por el shell real es alcance de `FRONTEND-SHELL-001`, no de

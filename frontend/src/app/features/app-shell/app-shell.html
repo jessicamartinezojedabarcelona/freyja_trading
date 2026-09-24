@@ -1,0 +1,97 @@
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<div class="shell">
+  @if (menuOpen()) {
+    <button
+      type="button"
+      class="backdrop"
+      aria-label="Cerrar el menú"
+      (click)="closeMenu()"
+    ></button>
+  }
+
+  <aside class="sidebar" [class.sidebar--open]="menuOpen()" id="menu-principal">
+    <a routerLink="/dashboard" class="brand-link" aria-label="Freyja: ir al dashboard">
+      <app-brand />
+    </a>
+
+    <nav aria-label="Principal">
+      <ul class="nav-list">
+        @for (link of links; track link.path) {
+          <li>
+            <a
+              class="nav-item"
+              [routerLink]="link.path"
+              routerLinkActive="nav-item--active"
+              ariaCurrentWhenActive="page"
+              (click)="closeMenu()"
+            >
+              @switch (link.icon) {
+                @case ('dashboard') {
+                  <svg viewBox="0 0 24 24" aria-hidden="true" class="icon">
+                    <rect x="3" y="3" width="7" height="9" rx="1.5" />
+                    <rect x="14" y="3" width="7" height="5" rx="1.5" />
+                    <rect x="14" y="12" width="7" height="9" rx="1.5" />
+                    <rect x="3" y="16" width="7" height="5" rx="1.5" />
+                  </svg>
+                }
+                @case ('markets') {
+                  <svg viewBox="0 0 24 24" aria-hidden="true" class="icon">
+                    <path d="M6 4v16M6 8h0M6 7v6M12 9v10M12 12v4M18 3v14M18 6v6" />
+                    <rect x="4.5" y="8" width="3" height="5" rx="0.5" />
+                    <rect x="10.5" y="12" width="3" height="4" rx="0.5" />
+                    <rect x="16.5" y="6" width="3" height="6" rx="0.5" />
+                  </svg>
+                }
+              }
+              <span>{{ link.label }}</span>
+            </a>
+          </li>
+        }
+      </ul>
+    </nav>
+
+    <section class="upcoming" aria-labelledby="proximamente-titulo">
+      <h2 id="proximamente-titulo" class="group-title">Próximamente</h2>
+      <ul class="nav-list">
+        @for (item of upcoming; track item) {
+          <li>
+            <span class="nav-item nav-item--locked">
+              <span class="icon icon--text" aria-hidden="true">🔒</span>
+              <span>{{ item }}<span class="sr-only"> (aún no disponible)</span></span>
+            </span>
+          </li>
+        }
+      </ul>
+    </section>
+
+    <div class="account">
+      @if (user(); as current) {
+        <p class="who">
+          <span class="who-label">Sesión iniciada</span>
+          <span class="who-name" [attr.title]="current.identifier">{{ current.identifier }}</span>
+        </p>
+      }
+      <button type="button" class="btn btn--sm" (click)="logout()">Cerrar sesión</button>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <button
+        type="button"
+        class="btn btn--sm menu-button"
+        aria-controls="menu-principal"
+        [attr.aria-expanded]="menuOpen()"
+        (click)="toggleMenu()"
+      >
+        <span aria-hidden="true">☰</span> Menú
+      </button>
+      <app-brand />
+    </header>
+
+    <main id="contenido" tabindex="-1">
+      <router-outlet />
+    </main>
+  </div>
+</div>

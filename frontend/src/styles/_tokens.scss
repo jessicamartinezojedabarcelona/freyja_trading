@@ -1,0 +1,59 @@
+/* ===========================================================================
+   Freyja design tokens — the ONE place to retouch the look of the whole app.
+
+   Values follow UX-DESIGN-SYSTEM-001 (docs/ux). Colours and status tokens live in
+   src/styles.scss (:root); this file holds typography, spacing, radii, motion and
+   the layout knobs the landing and the application shell share.
+
+   Quick guide to common tweaks:
+   - Page width ............ --freyja-container
+   - Space between sections  --freyja-section-y   (landing)
+   - Card / button corners .. --freyja-radius-*
+   - Speed of hover effects . --freyja-motion-*
+   =========================================================================== */
+
+:root {
+  /* Typography ------------------------------------------------------------ */
+  --freyja-font-sans:
+    system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --freyja-font-mono: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', Menlo, Consolas, monospace;
+
+  --freyja-text-size-xs: 0.75rem;
+  --freyja-text-size-sm: 0.875rem;
+  --freyja-text-size-md: 1rem;
+  --freyja-text-size-lg: 1.25rem;
+  --freyja-text-size-xl: 1.5rem;
+  --freyja-text-size-2xl: 2rem;
+  /* Display sizes for the landing hero (fluid: they shrink on a phone). */
+  --freyja-text-size-hero: clamp(2.25rem, 5.5vw + 0.5rem, 4rem);
+  --freyja-text-size-section: clamp(1.75rem, 3vw + 0.75rem, 2.5rem);
+
+  /* Spacing scale (4px base) ------------------------------------------------ */
+  --freyja-space-1: 0.25rem;
+  --freyja-space-2: 0.5rem;
+  --freyja-space-3: 0.75rem;
+  --freyja-space-4: 1rem;
+  --freyja-space-5: 1.5rem;
+  --freyja-space-6: 2rem;
+  --freyja-space-7: 2.5rem;
+  --freyja-space-8: 3.5rem;
+
+  /* Radii and elevation ------------------------------------------------------ */
+  --freyja-radius-sm: 0.25rem;
+  --freyja-radius-md: 0.5rem;
+  --freyja-radius-lg: 0.9rem;
+  --freyja-radius-full: 999px;
+  --freyja-shadow-raised: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --freyja-glow-brand: 0 0 3rem rgba(201, 162, 74, 0.18);
+
+  /* Motion -------------------------------------------------------------------- */
+  --freyja-motion-fast: 150ms ease;
+  --freyja-motion-base: 200ms ease-out;
+
+  /* Layout knobs --------------------------------------------------------------- */
+  --freyja-container: 72rem;
+  --freyja-gutter: clamp(1rem, 4vw, 2rem);
+  --freyja-section-y: clamp(3.5rem, 8vw, 6.5rem);
+  --freyja-sidebar-width: 15rem;
+  --freyja-header-height: 4rem;
+}

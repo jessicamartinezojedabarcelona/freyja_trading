@@ -327,6 +327,24 @@ huecos, la frescura y el estado del proveedor; ver ADR 0003.
 
 ## 10. Frontend
 
+**Aspecto y estructura de la interfaz.** La landing pública (`/`) y la aplicación
+(`/dashboard`, `/mercados`…) comparten el sistema de diseño de
+`docs/ux/UX-DESIGN-SYSTEM-001`. Para retocar el aspecto sin buscar por todo el código:
+
+| Qué quieres cambiar | Dónde |
+|---|---|
+| Colores de marca y estados | `frontend/src/styles.scss` (`:root`) |
+| Tipografía, espaciados, radios, movimiento, anchos de página | `frontend/src/styles/_tokens.scss` |
+| Botones, tarjetas, etiquetas, campos, alertas (clases reutilizables) | `frontend/src/styles/_ui.scss` |
+| Estilos globales (foco, enlaces, movimiento reducido) | `frontend/src/styles/_base.scss` |
+| Textos de la landing (todos, en un solo fichero) | `frontend/src/app/features/landing/landing.content.ts` |
+| Orden o presencia de las secciones de la landing | `frontend/src/app/features/landing/landing.page.ts` |
+| Diseño de una sección concreta | su fichero en `frontend/src/app/features/landing/` |
+| Barra lateral y cabecera de la aplicación | `frontend/src/app/features/app-shell/` |
+
+Los textos de la landing tienen una guarda de test: no pueden prometer rentabilidad ni
+seguridad, todo se etiqueta «Disponible» o «Próximamente» y no hay testimonios inventados.
+
 **Explorador de mercado** (`/mercados` y `/mercados/:instrumentId`, requiere sesión):
 elige un instrumento, un periodo (1 minuto por defecto; los que el catálogo aún no
 habilita se ven bloqueados) y muestra las velas cerradas guardadas con un gráfico
