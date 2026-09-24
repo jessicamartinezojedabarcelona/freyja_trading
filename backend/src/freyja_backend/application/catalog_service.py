@@ -62,6 +62,7 @@ def list_instruments(
     symbol: str | None = None,
     timeframe_code: str | None = None,
     is_active: bool | None = None,
+    has_market_data: bool | None = None,
     limit: int,
     offset: int,
 ) -> Page[InstrumentOut]:
@@ -72,6 +73,7 @@ def list_instruments(
         symbol=symbol,
         timeframe_code=timeframe_code,
         is_active=is_active,
+        has_market_data=has_market_data,
         limit=limit,
         offset=offset,
     )

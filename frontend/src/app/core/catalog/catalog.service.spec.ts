@@ -45,6 +45,20 @@ describe('CatalogService', () => {
     req.flush({ items: [], total: 0, limit: 50, offset: 0 });
   });
 
+  it.each([true, false])('getInstruments() sends has_market_data=%s when asked', (value) => {
+    service.getInstruments({ hasMarketData: value }).subscribe();
+    const req = httpMock.expectOne((r) => r.url === `${API_BASE_URL}/catalog/instruments`);
+    expect(req.request.params.get('has_market_data')).toBe(String(value));
+    req.flush({ items: [], total: 0, limit: 50, offset: 0 });
+  });
+
+  it('getInstruments() does not send has_market_data unless it was provided', () => {
+    service.getInstruments({ marketCode: 'CRYPTO' }).subscribe();
+    const req = httpMock.expectOne((r) => r.url === `${API_BASE_URL}/catalog/instruments`);
+    expect(req.request.params.has('has_market_data')).toBe(false);
+    req.flush({ items: [], total: 0, limit: 50, offset: 0 });
+  });
+
   it('an empty catalog page is never replaced by mock data', () => {
     let result: Page<unknown> | undefined;
     service.getInstruments().subscribe((page) => (result = page));

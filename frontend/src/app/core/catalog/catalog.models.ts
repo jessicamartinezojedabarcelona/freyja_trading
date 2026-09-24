@@ -155,6 +155,8 @@ export interface InstrumentFilters {
   symbol?: string;
   timeframeCode?: string;
   isActive?: boolean;
+  /** Only instruments an active source publishes candles for. */
+  hasMarketData?: boolean;
   limit?: number;
   offset?: number;
 }

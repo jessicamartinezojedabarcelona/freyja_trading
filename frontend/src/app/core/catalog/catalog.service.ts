@@ -29,6 +29,7 @@ export class CatalogService {
       symbol: filters.symbol,
       timeframe_code: filters.timeframeCode,
       is_active: filters.isActive,
+      has_market_data: filters.hasMarketData,
       limit: filters.limit,
       offset: filters.offset,
     });

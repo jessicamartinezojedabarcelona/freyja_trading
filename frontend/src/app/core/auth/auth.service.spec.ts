@@ -21,6 +21,19 @@ describe('AuthService', () => {
     httpMock.verify();
   });
 
+  it('clearSession() forgets the user and the CSRF token without any request', () => {
+    service.login('owner@example.test', 'correct-horse-battery-staple').subscribe();
+    httpMock
+      .expectOne(`${API_BASE_URL}/auth/login`)
+      .flush({ id: 'user-id', identifier: 'owner@example.test' });
+    expect(service.currentUser()).not.toBeNull();
+
+    service.clearSession();
+
+    expect(service.currentUser()).toBeNull();
+    httpMock.expectNone(`${API_BASE_URL}/auth/logout`);
+  });
+
   it('starts with no current user', () => {
     expect(service.currentUser()).toBeNull();
   });

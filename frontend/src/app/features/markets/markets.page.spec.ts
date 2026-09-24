@@ -594,11 +594,18 @@ describe('MarketsPage', () => {
   });
 
   describe('older candles', () => {
+    // A full page means there may be more stored before it; fewer means that was all.
+    const fullPage = () => Array.from({ length: PAGE_SIZE }, (_, i) => makeCandle(i));
+    const olderButton = () =>
+      [...root().querySelectorAll<HTMLButtonElement>('.chart-actions .btn')].find((b) =>
+        squash(b).includes('velas anteriores'),
+      )!;
+
     it('asks for candles before the oldest one shown and keeps the view where it was', async () => {
-      await openLoaded();
+      await openLoaded(`/mercados/${INSTRUMENT_ID}`, makeSeries({ candles: fullPage() }));
       const oldestOpen = makeCandle(0).open_time;
 
-      root().querySelector<HTMLButtonElement>('.chart-actions .btn')!.click();
+      olderButton().click();
       const request = candlesRequest();
       expect(request.request.params.get('end')).toBe(oldestOpen);
       expect(request.request.params.get('limit')).toBe(String(PAGE_SIZE));
@@ -607,16 +614,16 @@ describe('MarketsPage', () => {
       await settle();
 
       const last = chart.drawn.at(-1)!;
-      expect(last.data.candles).toHaveLength(5);
+      expect(last.data.candles).toHaveLength(PAGE_SIZE + 2);
       const times = last.data.candles.map((c) => c.time);
       expect(times).toEqual([...times].sort((a, b) => a - b));
       expect(last.resetView).toBe(false);
     });
 
     it('says there is nothing older once a page comes back short', async () => {
-      await openLoaded();
+      await openLoaded(`/mercados/${INSTRUMENT_ID}`, makeSeries({ candles: fullPage() }));
 
-      root().querySelector<HTMLButtonElement>('.chart-actions .btn')!.click();
+      olderButton().click();
       candlesRequest().flush(makeSeries({ candles: [makeCandle(-1)] }));
       await settle();
 
@@ -625,31 +632,31 @@ describe('MarketsPage', () => {
     });
 
     it('keeps offering more while full pages keep coming', async () => {
-      await openLoaded();
-      const full = Array.from({ length: PAGE_SIZE }, (_, i) => makeCandle(-PAGE_SIZE + i));
+      await openLoaded(`/mercados/${INSTRUMENT_ID}`, makeSeries({ candles: fullPage() }));
+      const older = Array.from({ length: PAGE_SIZE }, (_, i) => makeCandle(-PAGE_SIZE + i));
 
-      root().querySelector<HTMLButtonElement>('.chart-actions .btn')!.click();
-      candlesRequest().flush(makeSeries({ candles: full }));
+      olderButton().click();
+      candlesRequest().flush(makeSeries({ candles: older }));
       await settle();
 
       expect(text()).toContain('Cargar velas anteriores');
-      expect(chart.drawn.at(-1)?.data.candles).toHaveLength(PAGE_SIZE + 3);
+      expect(chart.drawn.at(-1)?.data.candles).toHaveLength(PAGE_SIZE * 2);
     });
 
     it('reports a failure without losing what is already drawn', async () => {
-      await openLoaded();
+      await openLoaded(`/mercados/${INSTRUMENT_ID}`, makeSeries({ candles: fullPage() }));
 
-      root().querySelector<HTMLButtonElement>('.chart-actions .btn')!.click();
+      olderButton().click();
       candlesRequest().flush({}, { status: 500, statusText: 'Server Error' });
       await settle();
 
       expect(text()).toContain('No se pudieron cargar las velas anteriores.');
-      expect(chart.drawn.at(-1)?.data.candles).toHaveLength(3);
+      expect(chart.drawn.at(-1)?.data.candles).toHaveLength(PAGE_SIZE);
     });
 
     it('does not start a second request while one is running', async () => {
-      await openLoaded();
-      const button = root().querySelector<HTMLButtonElement>('.chart-actions .btn')!;
+      await openLoaded(`/mercados/${INSTRUMENT_ID}`, makeSeries({ candles: fullPage() }));
+      const button = olderButton();
 
       button.click();
       harness.detectChanges();
@@ -659,6 +666,159 @@ describe('MarketsPage', () => {
       expect(pending).toHaveLength(1);
       pending[0].flush(makeSeries({ candles: [] }));
       await settle();
+    });
+
+    it('offers nothing older when the whole stored history fits in the first page', async () => {
+      await openLoaded(); // 3 candles: fewer than a page, so that is everything there is
+
+      expect(text()).toContain('No hay velas anteriores guardadas.');
+      expect(olderButton()).toBeUndefined();
+    });
+
+    it('discards an older page that belongs to a different series', async () => {
+      await openLoaded(`/mercados/${INSTRUMENT_ID}`, makeSeries({ candles: fullPage() }));
+
+      olderButton().click();
+      candlesRequest().flush(
+        makeSeries({ timeframe_code: '5m', candles: [makeCandle(-2), makeCandle(-1)] }),
+      );
+      await settle();
+
+      expect(chart.drawn.at(-1)?.data.candles).toHaveLength(PAGE_SIZE); // nothing mixed in
+      expect(text()).toContain('No se pudieron cargar las velas anteriores.');
+    });
+  });
+
+  describe('the instrument list', () => {
+    it('asks only for instruments that have market data', async () => {
+      await open('/mercados');
+      const request = httpMock.expectOne((r) => r.url === INSTRUMENTS_URL);
+      expect(request.request.params.get('has_market_data')).toBe('true');
+      request.flush({ items: [BTC], total: 1, limit: 200, offset: 0 });
+      await settle();
+    });
+
+    it('says so, instead of blaming the filter, when no instrument has data yet', async () => {
+      await open('/mercados');
+      flushInstruments([]);
+      await settle();
+
+      expect(text()).toContain('Todavía no hay instrumentos con datos de mercado.');
+      expect(text()).not.toContain('Ningún instrumento coincide');
+    });
+  });
+
+  describe('a response for a different series than the one requested', () => {
+    it('is never drawn: it would mix two instruments or two periods', async () => {
+      await open(`/mercados/${INSTRUMENT_ID}`);
+      flushInstruments();
+      flushDetail();
+      candlesRequest().flush(makeSeries({ instrument_id: OTHER_INSTRUMENT_ID }));
+      await settle();
+
+      expect(chart.drawn).toHaveLength(0);
+      expect(root().querySelector('[role="alert"]')).not.toBeNull();
+    });
+
+    it('is rejected when only the period differs', async () => {
+      await open(`/mercados/${INSTRUMENT_ID}`);
+      flushInstruments();
+      flushDetail();
+      candlesRequest().flush(makeSeries({ timeframe_code: '5m' }));
+      await settle();
+
+      expect(chart.drawn).toHaveLength(0);
+      expect(root().querySelector('[role="alert"]')).not.toBeNull();
+    });
+  });
+
+  describe('when a refresh fails', () => {
+    const refresh = () =>
+      [...root().querySelectorAll<HTMLButtonElement>('.chart-actions .btn')]
+        .find((b) => squash(b).startsWith('Actualiz'))!
+        .click();
+
+    it('keeps the chart and warns that it may be out of date', async () => {
+      await openLoaded();
+
+      refresh();
+      candlesRequest().flush({}, { status: 500, statusText: 'Server Error' });
+      await settle();
+
+      expect(root().querySelector('app-candle-chart')).not.toBeNull();
+      expect(chart.destroyed).toBe(0);
+      const alert = squash(root().querySelector('section[aria-label="Gráfico de velas"] .alert'));
+      expect(alert).toContain('No se pudo actualizar.');
+      expect(alert).toContain('pueden estar desactualizados');
+      expect(alert).toContain('Última actualización válida:');
+    });
+
+    it('says the connection failed when Freyja cannot be reached', async () => {
+      await openLoaded();
+
+      refresh();
+      candlesRequest().error(new ProgressEvent('error'), { status: 0 });
+      await settle();
+
+      expect(text()).toContain('Sin conexión con Freyja.');
+      expect(root().querySelector('app-candle-chart')).not.toBeNull();
+    });
+
+    it('goes away once a refresh succeeds', async () => {
+      await openLoaded();
+      refresh();
+      candlesRequest().flush({}, { status: 500, statusText: 'Server Error' });
+      await settle();
+      expect(text()).toContain('No se pudo actualizar.');
+
+      refresh();
+      candlesRequest().flush(makeSeries());
+      await settle();
+
+      expect(text()).not.toContain('No se pudo actualizar.');
+    });
+
+    it('does not keep the old chart when the failure is for a different selection', async () => {
+      await openLoaded();
+
+      // Changing the period is not a refresh: the old candles would be the wrong ones.
+      await harness.navigateByUrl(`/mercados/${INSTRUMENT_ID}?tf=5m`);
+      candlesRequest().flush({}, { status: 500, statusText: 'Server Error' });
+      await settle();
+
+      expect(root().querySelector('app-candle-chart')).toBeNull();
+      expect(root().querySelector('[role="alert"]')).not.toBeNull();
+    });
+
+    it('disables the button while the refresh is running', async () => {
+      await openLoaded();
+      refresh();
+      harness.detectChanges();
+
+      const button = [...root().querySelectorAll<HTMLButtonElement>('.chart-actions .btn')].find(
+        (b) => squash(b) === 'Actualizando…',
+      )!;
+      expect(button.disabled).toBe(true);
+
+      candlesRequest().flush(makeSeries());
+      await settle();
+    });
+  });
+
+  describe('when only a little history is stored', () => {
+    it('warns that it may not be enough to analyse', async () => {
+      await openLoaded(); // 3 candles
+
+      expect(text()).toContain('Solo hay 3 velas guardadas para esta serie');
+    });
+
+    it('stays quiet once a full page is stored', async () => {
+      await openLoaded(
+        `/mercados/${INSTRUMENT_ID}`,
+        makeSeries({ candles: Array.from({ length: PAGE_SIZE }, (_, i) => makeCandle(i)) }),
+      );
+
+      expect(text()).not.toContain('velas guardadas para esta serie');
     });
   });
 

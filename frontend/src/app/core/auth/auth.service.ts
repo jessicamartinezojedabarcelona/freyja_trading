@@ -46,6 +46,13 @@ export class AuthService {
     );
   }
 
+  /** Forgets the session locally when the server says it is gone (it expired or was
+   * revoked). No request: there is nothing left to log out of. */
+  clearSession(): void {
+    this.currentUserSignal.set(null);
+    this.csrfStore.clear();
+  }
+
   me(): Observable<AuthUser> {
     return this.http
       .get<AuthUser>(`${API_BASE_URL}/auth/me`)
