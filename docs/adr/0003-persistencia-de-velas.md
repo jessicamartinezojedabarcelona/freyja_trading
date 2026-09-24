@@ -14,7 +14,7 @@ una vela confirmada no pueda reescribirse en silencio y que la API pueda
 distinguir «no hay datos nuevos» de «el proveedor está fallando».
 
 Esta tarea se entrega en dos PRs: primero la capa de persistencia y
-sincronización (este ADR); después el endpoint de lectura autenticado.
+sincronización; después el endpoint de lectura autenticado (sección 10).
 
 ## Decisión
 
@@ -105,8 +105,25 @@ tiene 1m, 5m, 15m, 1h y 4h; ampliarlo es otra tarea (nueva versión del
 catálogo y, para los periodos de segundos y algunos intermedios, decidir si se
 construyen a partir de velas de 1 s/1 m o de operaciones).
 
-## Consecuencias
+### 10. Lectura: `GET /api/v1/market-data/candles`
 
+Requiere sesión. Solo lee lo almacenado; nunca consulta al proveedor. Parámetros
+permitidos: `instrument_id` y `data_source_code` (obligatorios), `timeframe_code`
+(**1m por defecto**), `start`, `end` (con zona horaria) y `limit` (1-1000). Sin
+`start`/`end` devuelve las velas más recientes; con `start` lee hacia delante y
+avisa con `has_more`/`next_start`. Precios y volumen viajan como **texto**
+decimal exacto, nunca como número JSON.
+
+Cada respuesta identifica la fuente, la última vela y cuándo se recibió, y lleva
+`quality` con sus `issues`, los `gaps` estructurados, la `freshness` de la serie
+(siempre respecto a su vela más reciente) y el estado de la última
+sincronización (`provider`). Una serie sin velas responde 200 con
+`UNAVAILABLE`/`NO_DATA`, nunca con ceros; datos viejos salen `STALE`; si el
+último intento de sincronizar falló sale `PROVIDER_FAILING`, sin ocultar las
+velas guardadas. Instrumento o fuente inexistentes: 404; temporalidad no
+habilitada, fechas sin zona horaria o rango invertido: 422.
+
+## Consecuencias
 - Aplicar la migración a Neon **no** ocurre en el despliegue de Render (solo el
   workflow manual lo hace). Por eso el PR de esta capa no expone nada que
   consulte las tablas nuevas, y el endpoint de lectura no se fusiona hasta que
