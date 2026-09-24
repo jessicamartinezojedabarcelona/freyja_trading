@@ -1,0 +1,72 @@
+# Scheduled candle sync into Neon — a STOPGAP for history, not the trading feed.
+#
+# Every 5 minutes (GitHub's minimum) it pulls the latest closed candles of each
+# supported series from Binance's public market-data API and stores them in
+# production PostgreSQL. It is idempotent: candles already stored are left
+# untouched, and each run re-reads the last 500 candles, so a delayed or skipped
+# run loses nothing (500 x 1m = ~8 h of tolerance).
+#
+# What it is NOT: GitHub schedules are best-effort (runs are often delayed by
+# several minutes and can be skipped under load), so this can never feed
+# decisions that must react within seconds. Sub-minute candles and auto-trading
+# need an always-on worker fed by WebSocket streams (see ADR 0004, pending).
+#
+# Safe by construction: read-only public provider, no credentials for it, and
+# the only secret used is the Neon pooled connection string that already
+# exists for the deploy workflow. It runs only from `main`.
+name: Sync candles (scheduled)
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  # A slow run must never overlap the next one; the next simply waits.
+  group: sync-candles
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync closed candles into Neon
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.6"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "backend/uv.lock"
+
+      - name: Install backend dependencies (uv sync --locked)
+        working-directory: backend
+        run: uv sync --locked --no-dev
+
+      - name: Sync every supported series
+        working-directory: backend
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+        run: |
+          failures=0
+          for symbol in BTC/USDT ETH/USDT SOL/USDT XRP/USDT; do
+            for timeframe in 1m 5m 15m 1h 4h; do
+              if ! uv run freyja-sync-candles --symbol "$symbol" --timeframe "$timeframe" --limit 500; then
+                echo "::warning::sync failed for $symbol $timeframe"
+                failures=$((failures + 1))
+              fi
+            done
+          done
+          echo "series with failures: $failures of 20"
+          # Fail the run (GitHub then notifies) unless every series synced.
+          test "$failures" -eq 0
