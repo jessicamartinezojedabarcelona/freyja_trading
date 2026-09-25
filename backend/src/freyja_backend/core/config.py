@@ -1,10 +1,11 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 Environment = Literal["development", "test", "production"]
+LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 
 _ROOT_ENV_FILE = Path(__file__).resolve().parents[4] / ".env"
 
@@ -49,6 +50,9 @@ class Settings(BaseSettings):
     smtp_from_address: str | None = None
     smtp_timeout_seconds: float = 10.0
 
+    # Verbosity of the application's own log events (PLATFORM-LOGGING-001). Case-insensitive.
+    log_level: LogLevel = "INFO"
+
     # Background candle scanner (MARKET-DATA-SCANNER-001): keeps the stored candle series
     # up to date from inside the backend process. Off unless explicitly enabled, so tests,
     # CI and local runs never start it by accident.
@@ -60,6 +64,11 @@ class Settings(BaseSettings):
     # Independent secret for HMAC-keyed rate-limiting identifiers. Never
     # reused as a password pepper, session secret, or CSRF material.
     rate_limit_hmac_key: str | None = None
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def _normalise_log_level(cls, value: object) -> object:
+        return value.strip().upper() if isinstance(value, str) else value
 
     @property
     def cookie_secure(self) -> bool:
