@@ -11,6 +11,7 @@ import {
   viewChild,
 } from '@angular/core';
 
+import { USER_TIME_ZONE } from '../../core/time/local-time';
 import { ChartData } from './chart-data';
 import { CHART_FACTORY, ChartHandle } from './chart-handle';
 
@@ -68,10 +69,11 @@ export class CandleChartComponent {
 
   constructor() {
     const factory = inject(CHART_FACTORY);
+    const timeZone = inject(USER_TIME_ZONE);
     const destroyRef = inject(DestroyRef);
 
     afterNextRender(() => {
-      factory(this.host().nativeElement)
+      factory(this.host().nativeElement, { timeZone })
         .then((handle) => {
           if (this.destroyed) {
             handle.destroy();

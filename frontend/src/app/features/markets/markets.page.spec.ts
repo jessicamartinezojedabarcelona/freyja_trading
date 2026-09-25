@@ -20,9 +20,10 @@ import {
   makeSeries,
   makeSourceMapping,
 } from '../../core/market-data/market-data.testing';
+import { USER_TIME_ZONE } from '../../core/time/local-time';
 import { ChartData } from './chart-data';
 import { CHART_FACTORY, ChartHandle } from './chart-handle';
-import { MarketsPage, PAGE_SIZE } from './markets.page';
+import { MARKETS_REFRESH_MS, MarketsPage, PAGE_SIZE } from './markets.page';
 
 const CANDLES_URL = `${API_BASE_URL}/market-data/candles`;
 const INSTRUMENTS_URL = `${API_BASE_URL}/catalog/instruments`;
@@ -74,7 +75,14 @@ describe('MarketsPage', () => {
     harness.detectChanges();
   }
 
-  async function open(url: string): Promise<void> {
+  // A fixed zone (never the machine's own) and an interval too long to ever fire by itself:
+  // a test that wants the automatic refresh asks for it.
+  interface Environment {
+    zone?: string;
+    refreshMs?: number;
+  }
+
+  async function open(url: string, environment: Environment = {}): Promise<void> {
     chart = new FakeChart();
     chartsCreated = 0;
     TestBed.configureTestingModule({
@@ -85,6 +93,8 @@ describe('MarketsPage', () => {
         ]),
         provideHttpClient(),
         provideHttpClientTesting(),
+        { provide: USER_TIME_ZONE, useValue: environment.zone ?? 'Europe/Madrid' },
+        { provide: MARKETS_REFRESH_MS, useValue: environment.refreshMs ?? 3_600_000 },
         {
           provide: CHART_FACTORY,
           useValue: () => {
@@ -125,8 +135,9 @@ describe('MarketsPage', () => {
   async function openLoaded(
     url = `/mercados/${INSTRUMENT_ID}`,
     series: CandleSeriesOut = makeSeries(),
+    environment: Environment = {},
   ): Promise<TestRequest> {
-    await open(url);
+    await open(url, environment);
     flushInstruments();
     flushDetail();
     const request = candlesRequest();
@@ -239,7 +250,7 @@ describe('MarketsPage', () => {
       await openLoaded();
 
       const note = squash(root().querySelector('.chart-note'));
-      expect(note).toContain('Hora en UTC');
+      expect(note).toContain('Hora local (Europe/Madrid, GMT+2)');
       expect(note).toContain('Solo velas cerradas');
       const link = root().querySelector<HTMLAnchorElement>('.chart-note a')!;
       expect(link.href).toBe('https://www.tradingview.com/');
@@ -255,7 +266,9 @@ describe('MarketsPage', () => {
       expect(label).toContain('periodo 1m');
       expect(label).toContain('fuente Binance');
       expect(label).toContain('3 velas cerradas');
-      expect(label).toContain('UTC');
+      // 12:00-12:02 UTC is 14:00-14:02 in Madrid: the person's time, with the zone.
+      expect(label).toContain('24/09/2026, 14:00:00 GMT+2');
+      expect(label).toContain('24/09/2026, 14:03:00 GMT+2');
       expect(label).toContain('Último cierre 101');
     });
 
@@ -466,13 +479,15 @@ describe('MarketsPage', () => {
       expect(squash(details.querySelector('summary'))).toBe('Ver las últimas 20 velas como tabla');
       const rows = [...details.querySelectorAll('tbody tr')];
       expect(rows).toHaveLength(20);
-      expect(squash(rows[0].querySelector('th'))).toContain('12:24:00 UTC');
-      expect(squash(rows[19].querySelector('th'))).toContain('12:05:00 UTC');
+      expect(squash(rows[0].querySelector('th'))).toContain('14:24:00 GMT+2');
+      expect(squash(rows[19].querySelector('th'))).toContain('14:05:00 GMT+2');
       expect(squash(details.querySelector('caption'))).toContain('BTC/USDT');
-      expect(squash(details.querySelector('caption'))).toContain('hora UTC');
+      expect(squash(details.querySelector('caption'))).toContain(
+        'hora local: Europe/Madrid, GMT+2',
+      );
       const headers = [...details.querySelectorAll('thead th')].map((h) => squash(h));
       expect(headers).toEqual([
-        'Abre (UTC)',
+        'Abre (hora local)',
         'Apertura',
         'Máximo',
         'Mínimo',
@@ -835,6 +850,223 @@ describe('MarketsPage', () => {
       await settle();
 
       expect(chart.drawn.at(-1)?.data.candles).toHaveLength(4);
+    });
+  });
+
+  describe('the time shown to the person', () => {
+    it('is their own zone, in the chart note, the status and the table', async () => {
+      await openLoaded(`/mercados/${INSTRUMENT_ID}`, makeSeries(), { zone: 'America/Bogota' });
+
+      const content = text();
+      expect(content).toContain('Hora local (America/Bogota, GMT-5)');
+      expect(content).toContain('07:02:00 GMT-5'); // the last candle opens at 12:02 UTC
+      expect(content).not.toContain(' UTC');
+    });
+
+    it('says UTC when that is really the zone', async () => {
+      await openLoaded(`/mercados/${INSTRUMENT_ID}`, makeSeries(), { zone: 'UTC' });
+
+      expect(text()).toContain('Hora local (UTC)');
+      expect(text()).toContain('12:02:00 UTC');
+    });
+
+    it('asks the API in UTC whatever the zone of the person is', async () => {
+      await open(`/mercados/${INSTRUMENT_ID}`, { zone: 'Asia/Tokyo' });
+      flushInstruments();
+      flushDetail();
+      candlesRequest().flush(
+        makeSeries({ candles: Array.from({ length: PAGE_SIZE }, (_, i) => makeCandle(i)) }),
+      );
+      await settle();
+
+      [...root().querySelectorAll<HTMLButtonElement>('.chart-actions .btn')]
+        .find((b) => squash(b).includes('velas anteriores'))!
+        .click();
+      const request = candlesRequest();
+      expect(request.request.params.get('end')).toBe(makeCandle(0).open_time);
+      expect(request.request.params.get('end')).toMatch(/Z$/); // an instant in UTC, not local text
+      request.flush(makeSeries({ candles: [makeCandle(-1)] }));
+      await settle();
+    });
+  });
+
+  describe('keeping itself current', () => {
+    const refreshMs = 30_000;
+    const environment: Environment = { refreshMs };
+
+    beforeEach(() => {
+      // Only the interval and the clock are faked: promises and timeouts stay real.
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+      vi.setSystemTime(new Date('2026-09-25T17:45:12Z'));
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    const advance = (ms: number) => vi.advanceTimersByTime(ms);
+    const older = () =>
+      [...root().querySelectorAll<HTMLButtonElement>('.chart-actions .btn')].find((b) =>
+        squash(b).includes('velas anteriores'),
+      );
+
+    it('asks for the newest candles every 30 seconds without a reload of the page', async () => {
+      await openLoaded(`/mercados/${INSTRUMENT_ID}`, makeSeries(), environment);
+      expect(chart.drawn.at(-1)?.data.candles).toHaveLength(3);
+
+      advance(refreshMs);
+      const request = candlesRequest();
+      expect(request.request.params.get('limit')).toBe(String(PAGE_SIZE));
+      request.flush(
+        makeSeries({ candles: [makeCandle(0), makeCandle(1), makeCandle(2), makeCandle(3)] }),
+      );
+      await settle();
+
+      expect(chart.drawn.at(-1)?.data.candles).toHaveLength(4);
+      expect(chartsCreated).toBe(1); // the same chart, not a new page
+    });
+
+    it('does nothing before the interval has passed', async () => {
+      await openLoaded(`/mercados/${INSTRUMENT_ID}`, makeSeries(), environment);
+
+      advance(refreshMs - 1);
+      httpMock.expectNone((r) => r.url === CANDLES_URL);
+    });
+
+    it('keeps refreshing on every interval', async () => {
+      await openLoaded(`/mercados/${INSTRUMENT_ID}`, makeSeries(), environment);
+
+      for (let i = 0; i < 3; i++) {
+        advance(refreshMs);
+        candlesRequest().flush(makeSeries());
+        await settle();
+      }
+      expect(chart.drawn.length).toBeGreaterThanOrEqual(4);
+    });
+
+    it('shows a spinner while it refreshes and says when it was last updated, in local time', async () => {
+      await openLoaded(`/mercados/${INSTRUMENT_ID}`, makeSeries(), environment);
+      // Loaded at 17:45:12 UTC = 19:45:12 in Madrid.
+      expect(text()).toContain('Actualizado a las 19:45:12 · se actualiza sola cada 30 s');
+      expect(root().querySelector('.spinner')).toBeNull();
+
+      advance(refreshMs);
+      harness.detectChanges();
+      expect(root().querySelector('.live .spinner')).not.toBeNull();
+      expect(squash(root().querySelector('.live'))).toContain('Actualizando…');
+
+      candlesRequest().flush(makeSeries());
+      await settle();
+
+      expect(root().querySelector('.spinner')).toBeNull();
+      expect(text()).toContain('Actualizado a las 19:45:42'); // 30 s later on the same clock
+    });
+
+    it('never stacks requests: a refresh in progress is not asked again', async () => {
+      await openLoaded(`/mercados/${INSTRUMENT_ID}`, makeSeries(), environment);
+
+      advance(refreshMs);
+      const first = candlesRequest();
+      advance(refreshMs); // the answer has not come back yet
+      httpMock.expectNone((r) => r.url === CANDLES_URL);
+
+      first.flush(makeSeries());
+      await settle();
+    });
+
+    it('does not ask while the tab is hidden', async () => {
+      await openLoaded(`/mercados/${INSTRUMENT_ID}`, makeSeries(), environment);
+      const hidden = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+
+      advance(refreshMs * 3);
+      httpMock.expectNone((r) => r.url === CANDLES_URL);
+
+      hidden.mockRestore();
+    });
+
+    it('refreshes at once when a tab hidden for longer than the interval comes back', async () => {
+      await openLoaded(`/mercados/${INSTRUMENT_ID}`, makeSeries(), environment);
+      const state = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+      advance(refreshMs * 3);
+      httpMock.expectNone((r) => r.url === CANDLES_URL);
+
+      state.mockReturnValue('visible');
+      document.dispatchEvent(new Event('visibilitychange'));
+      candlesRequest().flush(makeSeries());
+      await settle();
+
+      state.mockRestore();
+    });
+
+    it('does not refresh again when the tab comes back before the interval is up', async () => {
+      await openLoaded(`/mercados/${INSTRUMENT_ID}`, makeSeries(), environment);
+
+      advance(5_000);
+      document.dispatchEvent(new Event('visibilitychange'));
+      httpMock.expectNone((r) => r.url === CANDLES_URL);
+    });
+
+    it('does not refresh a series that failed to load: that is for the retry button', async () => {
+      await open(`/mercados/${INSTRUMENT_ID}`, environment);
+      flushInstruments();
+      flushDetail();
+      candlesRequest().flush({}, { status: 500, statusText: 'Server Error' });
+      await settle();
+
+      advance(refreshMs * 2);
+      httpMock.expectNone((r) => r.url === CANDLES_URL);
+    });
+
+    it('does not refresh while nothing is chosen', async () => {
+      await open('/mercados', environment);
+      flushInstruments();
+      await settle();
+
+      advance(refreshMs * 2);
+      httpMock.expectNone((r) => r.url === CANDLES_URL);
+    });
+
+    it('keeps the chart and warns, without erasing anything, when a refresh fails', async () => {
+      await openLoaded(`/mercados/${INSTRUMENT_ID}`, makeSeries(), environment);
+
+      advance(refreshMs);
+      candlesRequest().flush({}, { status: 500, statusText: 'Server Error' });
+      await settle();
+
+      expect(root().querySelector('app-candle-chart')).not.toBeNull();
+      expect(chart.destroyed).toBe(0);
+      expect(text()).toContain('No se pudo actualizar.');
+      expect(chart.drawn.at(-1)?.data.candles).toHaveLength(3);
+    });
+
+    it('keeps the older candles that were loaded, and does not move the view', async () => {
+      const full = Array.from({ length: PAGE_SIZE }, (_, i) => makeCandle(i));
+      await openLoaded(`/mercados/${INSTRUMENT_ID}`, makeSeries({ candles: full }), environment);
+      older()!.click();
+      candlesRequest().flush(makeSeries({ candles: [makeCandle(-2), makeCandle(-1)] }));
+      await settle();
+      expect(chart.drawn.at(-1)?.data.candles).toHaveLength(PAGE_SIZE + 2);
+
+      // The newest page comes back with one more candle, the older ones not in it.
+      advance(refreshMs);
+      candlesRequest().flush(makeSeries({ candles: [...full.slice(1), makeCandle(PAGE_SIZE)] }));
+      await settle();
+
+      const drawn = chart.drawn.at(-1)!;
+      expect(drawn.data.candles).toHaveLength(PAGE_SIZE + 3); // two older + 500 + the new one
+      expect(drawn.resetView).toBe(false);
+      expect(drawn.data.candles[0].time).toBe(Date.parse(makeCandle(-2).open_time) / 1000);
+    });
+
+    it('does not turn "nothing older" back into "maybe more" on a refresh', async () => {
+      await openLoaded(`/mercados/${INSTRUMENT_ID}`, makeSeries(), environment); // 3 candles: all there is
+      expect(text()).toContain('No hay velas anteriores guardadas.');
+
+      advance(refreshMs);
+      candlesRequest().flush(makeSeries());
+      await settle();
+
+      expect(text()).toContain('No hay velas anteriores guardadas.');
     });
   });
 });

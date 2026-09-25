@@ -4,11 +4,12 @@ import {
   CrosshairMode,
   HistogramSeries,
   createChart,
+  type Time,
   type UTCTimestamp,
 } from 'lightweight-charts';
 
-import { ChartData } from './chart-data';
-import { ChartHandle } from './chart-handle';
+import { ChartData, axisTickLabel, crosshairLabel, followLatest } from './chart-data';
+import { ChartHandle, ChartOptions } from './chart-handle';
 
 // Drawing adapter over TradingView's lightweight-charts (Apache-2.0). Its
 // licence requires the attribution the page shows next to the chart.
@@ -32,7 +33,14 @@ function token(name: string, fallback: string): string {
 
 const HOLLOW = 'rgba(0, 0, 0, 0)';
 
-export async function createLightweightChart(host: HTMLElement): Promise<ChartHandle> {
+/** The library hands times back as the numbers it was given (seconds since the epoch). */
+const seconds = (time: Time): number =>
+  typeof time === 'number' ? time : Date.parse(String(time)) / 1000;
+
+export async function createLightweightChart(
+  host: HTMLElement,
+  options: ChartOptions,
+): Promise<ChartHandle> {
   const up = token('--freyja-market-up', FALLBACKS.up);
   const down = token('--freyja-market-down', FALLBACKS.down);
   const text = token('--freyja-text-cream', FALLBACKS.text);
@@ -47,7 +55,18 @@ export async function createLightweightChart(host: HTMLElement): Promise<ChartHa
     },
     grid: { vertLines: { color: border }, horzLines: { color: border } },
     rightPriceScale: { borderColor: border },
-    timeScale: { borderColor: border, timeVisible: true, secondsVisible: false },
+    // Times are instants (UTC seconds); the library would print them in UTC, so both the
+    // axis and the crosshair are written in the zone of the person instead.
+    localization: {
+      timeFormatter: (time: Time) => crosshairLabel(seconds(time), options.timeZone),
+    },
+    timeScale: {
+      borderColor: border,
+      timeVisible: true,
+      secondsVisible: false,
+      tickMarkFormatter: (time: Time, tickType: number) =>
+        axisTickLabel(seconds(time), tickType, options.timeZone),
+    },
     crosshair: { mode: CrosshairMode.Normal },
   });
 
@@ -67,9 +86,16 @@ export async function createLightweightChart(host: HTMLElement): Promise<ChartHa
   });
   chart.priceScale('volume').applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
 
+  let lastDrawn: number | null = null;
+
   return {
-    setData(data: ChartData, options: { resetView: boolean }): void {
-      const keptRange = options.resetView ? null : chart.timeScale().getVisibleRange();
+    setData(data: ChartData, drawOptions: { resetView: boolean }): void {
+      const visible = drawOptions.resetView ? null : chart.timeScale().getVisibleRange();
+      const keptRange = followLatest(
+        visible === null ? null : { from: seconds(visible.from), to: seconds(visible.to) },
+        lastDrawn,
+        data.candles.at(-1)?.time ?? null,
+      );
       candles.applyOptions({
         priceFormat: {
           type: 'price',
@@ -93,8 +119,12 @@ export async function createLightweightChart(host: HTMLElement): Promise<ChartHa
           color: candle.close >= candle.open ? `${up}66` : `${down}66`,
         })),
       );
+      lastDrawn = data.candles.at(-1)?.time ?? null;
       if (keptRange !== null) {
-        chart.timeScale().setVisibleRange(keptRange);
+        chart.timeScale().setVisibleRange({
+          from: keptRange.from as UTCTimestamp,
+          to: keptRange.to as UTCTimestamp,
+        });
       } else {
         chart.timeScale().fitContent();
       }

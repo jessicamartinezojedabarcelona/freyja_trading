@@ -1,5 +1,6 @@
 import { HttpErrorResponse } from '@angular/common/http';
-import { Component, computed, inject, signal } from '@angular/core';
+import { DOCUMENT } from '@angular/common';
+import { Component, InjectionToken, computed, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, NavigationEnd, Router } from '@angular/router';
 import {
@@ -9,6 +10,8 @@ import {
   distinctUntilChanged,
   filter,
   forkJoin,
+  fromEvent,
+  interval,
   map,
   of,
   startWith,
@@ -23,15 +26,23 @@ import { CatalogService } from '../../core/catalog/catalog.service';
 import { compareDecimals } from '../../core/market-data/decimal';
 import { CandleOut, CandleSeriesOut } from '../../core/market-data/market-data.models';
 import { MarketDataService } from '../../core/market-data/market-data.service';
+import { USER_TIME_ZONE, formatClock, formatInstant, zoneLabel } from '../../core/time/local-time';
 import { humanizeUnexpectedError } from '../../shared/http-error-message';
-import { formatUtc, toChartData } from './chart-data';
+import { toChartData } from './chart-data';
 import { CandleChartComponent } from './candle-chart.component';
+import { mergeCandles } from './merge-candles';
 import { buildPeriodOptions, periodLabel, pickTimeframe } from './periods';
 import { SeriesStatusComponent } from './series-status.component';
 import { TimeframePickerComponent } from './timeframe-picker.component';
 
 /** Candles requested per page: 500 x 1m is about 8 hours. */
 export const PAGE_SIZE = 500;
+/** How often the series on screen is refreshed by itself. A frontend setting: the backend
+ * already keeps the stored candles current (about every minute). */
+export const MARKETS_REFRESH_MS = new InjectionToken<number>('MARKETS_REFRESH_MS', {
+  providedIn: 'root',
+  factory: () => 30_000,
+});
 const TABLE_ROWS = 20;
 const INSTRUMENT_PAGE = 200;
 
@@ -97,6 +108,20 @@ export class MarketsPage {
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
   private readonly refresh$ = new BehaviorSubject(0);
+  private readonly document = inject(DOCUMENT);
+  private readonly refreshMs = inject(MARKETS_REFRESH_MS);
+  private readonly zone = inject(USER_TIME_ZONE);
+
+  // -- time: shown in the person's zone, always saying which -------------------------
+  protected readonly zoneText = zoneLabel(this.zone, new Date());
+  protected readonly formatTime = (iso: string | null): string => formatInstant(iso, this.zone);
+  protected readonly refreshSeconds = Math.round(this.refreshMs / 1000);
+  /** When the series on screen last arrived (this browser's clock). */
+  protected readonly lastUpdatedAt = signal<Date | null>(null);
+  protected readonly lastUpdatedClock = computed(() => {
+    const at = this.lastUpdatedAt();
+    return at === null ? null : formatClock(at, this.zone);
+  });
 
   // -- instrument list ---------------------------------------------------------
   protected readonly listState = signal<'loading' | 'ready' | 'error'>('loading');
@@ -207,12 +232,10 @@ export class MarketsPage {
     return (
       `Gráfico de velas de ${instrument.canonical_symbol}, periodo ${this.timeframeLabel()}, ` +
       `fuente ${this.sourceName()}: ${candles.length} velas cerradas entre ` +
-      `${formatUtc(first.open_time)} y ${formatUtc(last.close_time)}. ` +
+      `${this.formatTime(first.open_time)} y ${this.formatTime(last.close_time)}. ` +
       `Último cierre ${last.close}.`
     );
   });
-
-  protected readonly formatUtc = formatUtc;
 
   constructor() {
     this.loadInstruments();
@@ -238,6 +261,18 @@ export class MarketsPage {
         takeUntilDestroyed(),
       )
       .subscribe();
+
+    // Keeps the series current by itself: every `refreshMs`, and at once when a tab that was
+    // hidden longer than that becomes visible again (browsers slow timers in the background).
+    interval(this.refreshMs)
+      .pipe(takeUntilDestroyed())
+      .subscribe(() => this.autoRefresh());
+    fromEvent(this.document, 'visibilitychange')
+      .pipe(
+        filter(() => this.isStale()),
+        takeUntilDestroyed(),
+      )
+      .subscribe(() => this.autoRefresh());
   }
 
   protected marketName(instrument: InstrumentOut): string {
@@ -275,6 +310,25 @@ export class MarketsPage {
 
   protected reload(): void {
     this.refresh$.next(this.refresh$.value + 1);
+  }
+
+  /** Only while someone can see it, the series is loaded, and nothing else is loading: it
+   * never stacks requests, never hides an error, never wastes a hidden tab's requests. */
+  private autoRefresh(): void {
+    if (
+      this.document.visibilityState !== 'visible' ||
+      this.seriesState() !== 'ready' ||
+      this.refreshing() ||
+      this.olderState() === 'loading'
+    ) {
+      return;
+    }
+    this.reload();
+  }
+
+  private isStale(): boolean {
+    const at = this.lastUpdatedAt();
+    return at === null || Date.now() - at.getTime() >= this.refreshMs;
   }
 
   protected loadOlder(): void {
@@ -391,13 +445,14 @@ export class MarketsPage {
       keyOf(instrumentId, resolved.source, resolved.timeframe) === shownKey;
 
     this.selectedId.set(instrumentId);
-    this.olderState.set('idle');
     this.refreshFailure.set(null);
     if (isRefresh) {
-      // Same series: keep the chart and its data; show progress next to it.
+      // Same series: keep the chart, its data and the older pages the person loaded; show
+      // progress next to it.
       this.refreshing.set(true);
     } else {
       // Another series: never leave the previous one visible.
+      this.olderState.set('idle');
       this.refreshing.set(false);
       this.seriesState.set('loading');
     }
@@ -430,10 +485,16 @@ export class MarketsPage {
             tap((series) => {
               assertIsSeries(series, { instrumentId, source, timeframe });
               this.series.set(series);
-              this.candles.set(series.candles);
-              this.storedCount.set(series.candles.length);
-              // Fewer than a full page means the whole stored history came back.
-              this.olderState.set(series.candles.length < PAGE_SIZE ? 'exhausted' : 'idle');
+              if (isRefresh) {
+                // The newest page joins what is on screen; older pages already loaded stay.
+                this.candles.update((current) => mergeCandles(current, series.candles));
+              } else {
+                this.candles.set(series.candles);
+                this.storedCount.set(series.candles.length);
+                // Fewer than a full page means the whole stored history came back.
+                this.olderState.set(series.candles.length < PAGE_SIZE ? 'exhausted' : 'idle');
+              }
+              this.lastUpdatedAt.set(new Date());
               this.refreshing.set(false);
               this.seriesState.set('ready');
             }),

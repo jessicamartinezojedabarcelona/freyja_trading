@@ -1,7 +1,8 @@
-import { Component, computed, input } from '@angular/core';
+import { Component, computed, inject, input } from '@angular/core';
 
 import { CandleSeriesOut } from '../../core/market-data/market-data.models';
-import { formatAge, formatUtc } from './chart-data';
+import { USER_TIME_ZONE, formatInstant } from '../../core/time/local-time';
+import { formatAge } from './chart-data';
 import {
   FRESHNESS_PRESENTATION,
   PROVIDER_PRESENTATION,
@@ -22,7 +23,9 @@ export class SeriesStatusComponent {
   /** Human name of the source (e.g. "Binance"). */
   readonly sourceName = input.required<string>();
 
-  protected readonly formatUtc = formatUtc;
+  private readonly zone = inject(USER_TIME_ZONE);
+  /** Every time is shown in the person's own zone, with the zone written next to it. */
+  protected readonly formatTime = (iso: string | null): string => formatInstant(iso, this.zone);
   protected readonly issueLabel = issueLabel;
   protected readonly quality = computed(() => QUALITY_PRESENTATION[this.series().quality]);
   protected readonly freshness = computed(

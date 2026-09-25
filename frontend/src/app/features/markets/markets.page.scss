@@ -202,6 +202,36 @@
   margin-top: var(--freyja-space-3);
 }
 
+// Says the chart keeps itself current, and shows work in progress without moving anything.
+.live {
+  color: var(--freyja-text-muted);
+  font-size: 0.85rem;
+}
+
+.spinner {
+  display: inline-block;
+  width: 0.85em;
+  height: 0.85em;
+  vertical-align: -0.1em;
+  border: 2px solid currentcolor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+// Motion is decoration: with reduced motion the ring stays still, and the words say the rest.
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+}
+
 .table-alt {
   summary {
     color: var(--freyja-gold-bright);

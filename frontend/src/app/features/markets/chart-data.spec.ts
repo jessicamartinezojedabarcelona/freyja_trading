@@ -1,5 +1,5 @@
-import { isoAt, makeCandle } from '../../core/market-data/market-data.testing';
-import { formatAge, formatUtc, toChartData } from './chart-data';
+import { makeCandle } from '../../core/market-data/market-data.testing';
+import { axisTickLabel, crosshairLabel, followLatest, formatAge, toChartData } from './chart-data';
 
 describe('toChartData', () => {
   it('converts strings to numbers and the open time to UTC seconds', () => {
@@ -75,18 +75,72 @@ describe('formatAge', () => {
   });
 });
 
-describe('formatUtc', () => {
-  it('always states the zone', () => {
-    expect(formatUtc(isoAt(7.5))).toMatch(/24\/09\/2026.*12:07:30 UTC$/);
+// 2026-09-25 17:41:00 UTC is 19:41 in Madrid in summer (GMT+2), 12:41 in Bogota (GMT-5).
+const INSTANT = Date.UTC(2026, 8, 25, 17, 41, 0) / 1000;
+
+describe('axisTickLabel', () => {
+  it('writes an intraday tick as the hour in the zone of the person', () => {
+    expect(axisTickLabel(INSTANT, 3, 'Europe/Madrid')).toBe('19:41');
+    expect(axisTickLabel(INSTANT, 3, 'America/Bogota')).toBe('12:41');
+    expect(axisTickLabel(INSTANT, 3, 'UTC')).toBe('17:41');
   });
 
-  it('shows a dash for a missing or unreadable instant', () => {
-    expect(formatUtc(null)).toBe('—');
-    expect(formatUtc('garbage')).toBe('—');
+  it('writes the day, month and year ticks in that zone too', () => {
+    // 23:30 UTC on the 24th is already the 25th in Madrid.
+    const late = Date.UTC(2026, 8, 24, 23, 30, 0) / 1000;
+    expect(axisTickLabel(late, 2, 'Europe/Madrid')).toBe('25');
+    expect(axisTickLabel(late, 2, 'UTC')).toBe('24');
+    expect(axisTickLabel(late, 0, 'UTC')).toBe('2026');
+    expect(axisTickLabel(late, 1, 'UTC')).toMatch(/^sep/);
   });
 
-  it('does not depend on the browser time zone', () => {
-    // 23:30 UTC stays 23:30 UTC even where the local date is already the next day.
-    expect(formatUtc('2026-09-24T23:30:00Z')).toMatch(/24\/09\/2026.*23:30:00 UTC$/);
+  it('adds seconds for a seconds tick and falls back to UTC for an unknown zone', () => {
+    expect(axisTickLabel(INSTANT + 5, 4, 'UTC')).toBe('17:41:05');
+    expect(axisTickLabel(INSTANT, 3, 'Not/AZone')).toBe('17:41');
+  });
+
+  it('never shows 24:00 at midnight', () => {
+    const midnight = Date.UTC(2026, 8, 25, 0, 0, 0) / 1000;
+    expect(axisTickLabel(midnight, 3, 'UTC')).toBe('00:00');
+  });
+});
+
+describe('crosshairLabel', () => {
+  it('shows day and time in the zone of the person', () => {
+    expect(crosshairLabel(INSTANT, 'Europe/Madrid')).toBe('25/09/2026 19:41');
+    expect(crosshairLabel(INSTANT, 'America/Bogota')).toBe('25/09/2026 12:41');
+  });
+
+  it('follows a change of day', () => {
+    const late = Date.UTC(2026, 8, 24, 23, 30, 0) / 1000;
+    expect(crosshairLabel(late, 'Europe/Madrid')).toBe('25/09/2026 01:30');
+  });
+});
+
+describe('followLatest', () => {
+  const visible = { from: 1_000, to: 2_000 };
+
+  it('slides the window forward when the person was looking at the newest candle', () => {
+    expect(followLatest(visible, 2_000, 2_120)).toEqual({ from: 1_120, to: 2_120 });
+    // Some blank space to the right of the last candle still counts as looking at it.
+    expect(followLatest({ from: 1_000, to: 2_050 }, 2_000, 2_060)).toEqual({
+      from: 1_060,
+      to: 2_110,
+    });
+  });
+
+  it('leaves the window alone when the person was looking at older history', () => {
+    expect(followLatest(visible, 2_400, 2_520)).toEqual(visible);
+  });
+
+  it('leaves the window alone when nothing newer arrived', () => {
+    expect(followLatest(visible, 2_000, 2_000)).toEqual(visible);
+    expect(followLatest(visible, 2_000, 1_900)).toEqual(visible);
+  });
+
+  it('has nothing to follow on a first draw', () => {
+    expect(followLatest(null, null, 2_000)).toBeNull();
+    expect(followLatest(visible, null, 2_000)).toEqual(visible);
+    expect(followLatest(visible, 2_000, null)).toEqual(visible);
   });
 });
