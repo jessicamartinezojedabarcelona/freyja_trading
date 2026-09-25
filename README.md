@@ -397,10 +397,20 @@ seguridad, todo se etiqueta «Disponible» o «Próximamente» y no hay testimon
 elige un instrumento, un periodo (1 minuto por defecto; los que el catálogo aún no
 habilita se ven bloqueados) y muestra las velas cerradas guardadas con un gráfico
 (`lightweight-charts` de TradingView, cargado bajo demanda). Junto al gráfico siempre
-se ve la fuente, la hora UTC de la última vela y cuánto hace que cerró, la frescura, la
+se ve la fuente, la hora de la última vela y cuánto hace que cerró, la frescura, la
 calidad, los huecos y el estado de la última sincronización, con una tabla equivalente
 para accesibilidad. La URL guarda instrumento, periodo (`?tf=`) y fuente (`?source=`).
 Solo lee lo almacenado: no consulta a ningún proveedor.
+
+**Se actualiza sola** cada 30 segundos (solo con la pestaña visible, sin apilar peticiones, y
+al volver a una pestaña que estuvo oculta más de 30 s), con un indicador «Actualizando…» y la
+hora de la última actualización. Las velas anteriores ya cargadas se conservan, y si estabas
+mirando lo más reciente el gráfico sigue a la última vela; si mirabas historia, no se mueve.
+
+**Hora local.** UTC es la hora del backend, la base de datos, la API y la URL; lo que se
+*muestra* a la persona (ejes y cursor del gráfico, estado de la serie, tabla) va en la zona del
+navegador y **siempre con la zona indicada** (p. ej. «Europe/Madrid, GMT+2»). Solo cambia la
+presentación: las consultas siguen en UTC.
 
 Arrancar en modo desarrollo, desde `frontend/`:
 

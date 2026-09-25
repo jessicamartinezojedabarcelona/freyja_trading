@@ -38,8 +38,8 @@
     <dt>Última vela guardada</dt>
     <dd>
       @if (s.freshness.latest_open_time !== null) {
-        abre {{ formatUtc(s.freshness.latest_open_time) }}<br />
-        cierra {{ formatUtc(s.freshness.latest_close_time) }}
+        abre {{ formatTime(s.freshness.latest_open_time) }}<br />
+        cierra {{ formatTime(s.freshness.latest_close_time) }}
       } @else {
         —
       }
@@ -53,11 +53,11 @@
   }
   <div class="fact">
     <dt>Recibida por Freyja</dt>
-    <dd>{{ formatUtc(s.freshness.latest_received_at) }}</dd>
+    <dd>{{ formatTime(s.freshness.latest_received_at) }}</dd>
   </div>
   <div class="fact">
     <dt>Comprobado</dt>
-    <dd>{{ formatUtc(s.freshness.checked_at) }}</dd>
+    <dd>{{ formatTime(s.freshness.checked_at) }}</dd>
   </div>
   <div class="fact">
     <dt>Huecos</dt>
@@ -69,7 +69,7 @@
           @for (gap of s.gaps; track gap.after_open_time) {
             <li>
               {{ gap.missing }} {{ gap.missing === 1 ? 'vela' : 'velas' }} tras la de
-              {{ formatUtc(gap.after_open_time) }}
+              {{ formatTime(gap.after_open_time) }}
             </li>
           }
         </ul>
@@ -86,9 +86,9 @@
           ><span aria-hidden="true">{{ providerStatus()!.icon }}</span> Último intento:
           {{ providerStatus()!.text }}</span
         ><br />
-        {{ formatUtc(s.provider.last_attempt_at) }}<br />
+        {{ formatTime(s.provider.last_attempt_at) }}<br />
         Último éxito:
-        {{ s.provider.last_success_at === null ? 'nunca' : formatUtc(s.provider.last_success_at) }}
+        {{ s.provider.last_success_at === null ? 'nunca' : formatTime(s.provider.last_success_at) }}
         @if (s.provider.consecutive_failures > 0) {
           <br />
           {{ s.provider.consecutive_failures }}

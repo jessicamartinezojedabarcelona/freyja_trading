@@ -169,7 +169,7 @@
                       >
                       Los datos mostrados pueden estar desactualizados; no los uses como si fueran
                       actuales. Última actualización válida:
-                      {{ formatUtc(s.freshness.checked_at) }}.
+                      {{ formatTime(s.freshness.checked_at) }}.
                     </p>
                   </div>
                 }
@@ -179,8 +179,8 @@
                   [seriesKey]="seriesKey()"
                 />
                 <p class="chart-note">
-                  Hora en UTC · Precios en la moneda de cotización del instrumento · Solo velas
-                  cerradas · Gráfico:
+                  Hora local ({{ zoneText }}) · Precios en la moneda de cotización del instrumento ·
+                  Solo velas cerradas · Gráfico:
                   <a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer"
                     >TradingView Lightweight Charts™</a
                   >
@@ -217,6 +217,14 @@
                   >
                     {{ refreshing() ? 'Actualizando…' : 'Actualizar' }}
                   </button>
+                  <span class="live" role="status" aria-live="polite">
+                    @if (refreshing()) {
+                      <span class="spinner" aria-hidden="true"></span> Actualizando…
+                    } @else if (lastUpdatedClock(); as clock) {
+                      Actualizado a las {{ clock }}
+                    }
+                    · se actualiza sola cada {{ refreshSeconds }} s
+                  </span>
                 </div>
               </section>
             }
@@ -235,11 +243,14 @@
                       }}, periodo
                       {{
                         timeframeLabel()
-                      }}, más recientes primero (hora UTC)
+                      }}, más recientes primero (hora local:
+                      {{
+                        zoneText
+                      }})
                     </caption>
                     <thead>
                       <tr>
-                        <th scope="col">Abre (UTC)</th>
+                        <th scope="col">Abre (hora local)</th>
                         <th scope="col">Apertura</th>
                         <th scope="col">Máximo</th>
                         <th scope="col">Mínimo</th>
@@ -251,7 +262,7 @@
                     <tbody>
                       @for (row of tableRows(); track row.open_time) {
                         <tr>
-                          <th scope="row">{{ formatUtc(row.open_time) }}</th>
+                          <th scope="row">{{ formatTime(row.open_time) }}</th>
                           <td>{{ row.open }}</td>
                           <td>{{ row.high }}</td>
                           <td>{{ row.low }}</td>
