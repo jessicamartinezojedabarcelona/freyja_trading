@@ -342,6 +342,23 @@ enciende con Neon Free, ten presente su límite de cómputo (100 CU-horas al mes
 se consulta sin parar no se apaga. El workflow «Sync candles (manual)» de GitHub queda solo
 como respaldo manual.
 
+**Logs de la aplicación (PLATFORM-LOGGING-001).** El backend escribe sus eventos en la
+salida estándar, que es lo que Render muestra en **Logs**. Una línea tiene la forma
+`<hora UTC> <NIVEL> <componente> <evento> clave=valor ...`. El nivel se elige con
+`FREYJA_LOG_LEVEL` (`DEBUG`, `INFO` por defecto, `WARNING`, `ERROR`). Eventos que conviene
+buscar:
+
+| Evento | Nivel | Significado |
+| ------ | ----- | ----------- |
+| `app_started` | INFO | La aplicación arrancó (entorno y nivel de log). |
+| `candle_scanner_started` / `candle_scanner_disabled` | INFO | El escáner arrancó (intervalo y fuentes) o está desactivado. |
+| `candle_scan_finished` | INFO | Una pasada trajo velas nuevas (`inserted`, `outcomes`). Con todo al día solo sale a nivel `DEBUG`, así que su ausencia entre pasadas sin datos nuevos es normal. |
+| `candle_scan_finished` | WARNING | La pasada tuvo series con problemas (`failed`). |
+| `candle_scan_rejected`, `candle_scan_database_error`, `candle_scan_crashed` | WARNING / ERROR | Una serie fue rechazada, hubo un error de base de datos o un fallo inesperado (con traza). |
+
+Los eventos llevan nombres fijos y campos pequeños; nunca contraseñas, tokens, cookies ni
+correos (lo vigila `tests/unit/test_architecture_guards.py`).
+
 Las velas guardadas se leen con `GET /api/v1/market-data/candles` (requiere sesión):
 `instrument_id` y `data_source_code` obligatorios, `timeframe_code` (por defecto
 `1m`), `start`, `end` y `limit` opcionales. La respuesta incluye la calidad, los

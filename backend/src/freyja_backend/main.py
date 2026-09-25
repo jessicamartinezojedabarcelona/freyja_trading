@@ -1,3 +1,4 @@
+import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
@@ -8,6 +9,9 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from freyja_backend.api.v1.router import router as api_v1_router
 from freyja_backend.candle_scanner_wiring import build_candle_scanner_service
 from freyja_backend.core.config import Settings, get_settings
+from freyja_backend.core.logging_setup import configure_logging
+
+logger = logging.getLogger(__name__)
 
 
 def _lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
@@ -18,19 +22,34 @@ def _lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContextMan
         service = (
             build_candle_scanner_service(settings) if settings.candle_scanner_enabled else None
         )
+        logger.info(
+            "app_started",
+            extra={"environment": settings.environment, "log_level": settings.log_level},
+        )
         if service is not None:
             service.start()
+            logger.info(
+                "candle_scanner_started",
+                extra={
+                    "interval_seconds": settings.candle_scanner_interval_seconds,
+                    "sources": settings.candle_scanner_sources_list,
+                },
+            )
+        else:
+            logger.info("candle_scanner_disabled")
         try:
             yield
         finally:
             if service is not None:
                 await service.stop()
+                logger.info("candle_scanner_stopped")
 
     return lifespan
 
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    configure_logging(settings)
     app = FastAPI(
         title=settings.app_name, version=settings.app_version, lifespan=_lifespan(settings)
     )
