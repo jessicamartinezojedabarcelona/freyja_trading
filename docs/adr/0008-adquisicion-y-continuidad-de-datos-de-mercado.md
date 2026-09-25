@@ -1,7 +1,7 @@
 # ADR 0008 — Adquisición y continuidad de datos de mercado
 
-- **Estado:** Accepted (diseño técnico de Claude, 2026-09-25), **salvo la sección 11
-  (retención), que queda *Proposed* hasta que Jessica decida**: implica coste y datos.
+- **Estado:** Accepted (diseño técnico de Claude, 2026-09-25). La sección 11 (retención) la
+  decidió Jessica el mismo día, tras aclarar que las operaciones se cierran el mismo día.
 - **Fecha:** 2026-09-25
 - **Tarea:** PLATFORM-DATA-DESIGN-001 (solo diseño: no implementa código, migraciones ni API).
 - **Relacionado:** ADR 0002 (contrato y adaptador REST), 0003 (persistencia), 0004 (tiempo
@@ -292,14 +292,41 @@ Tareas que se derivan (cada una con su propio prompt aprobado; ninguna se crea s
 4. `MARKET-DATA-STREAM-CORE-001` — puerto `CandleStream`, eventos, normalización, reglas de
    §4 y máquina de estados de §3, sin red. Fase 2.
 5. `MARKET-DATA-WORKER-001` — worker de líder único y adaptadores reales de flujo. Fase 3.
-6. `MARKET-DATA-RETENTION-001` — retención (§11), tras la decisión de Jessica.
+6. `MARKET-DATA-RETENTION-001` — retención y presupuesto de espacio (§11).
 7. `MARKET-DATA-TIMEFRAMES-001` — ampliar el catálogo y agregar desde 1 s. Fase 4.
 
-### 11. Retención — *Proposed*, decisión de Jessica
+### 11. Retención — decidida por Jessica (2026-09-25): opción E
+
+**Criterio de Jessica:** que **no se agote el espacio de Neon** por ahora. Cuando Freyja sea
+rentable se planteará migrar a una base de datos mayor (seguirá siendo PostgreSQL, CLAUDE.md §7);
+hasta entonces, ninguna decisión de datos puede depender de pagar más almacenamiento.
+
+**Regla de producto (2026-09-25):** las operaciones se cierran el mismo día y, como máximo, al
+día siguiente por zona horaria. Esto acota la duración de una operación, **no** los datos que
+hacen falta para decidirla ni para demostrar que una estrategia funciona:
+
+- **Operar** necesita la ventana de cálculo del contexto y de los indicadores, no un año. El
+  clasificador de tendencia pide 100 velas del marco de contexto; se prevén indicadores de hasta
+  200 velas. Eso es distinto en cada temporalidad y fija la **ventana operativa**:
+
+  | Temporalidad | 100 velas | 200 velas | Ventana operativa (con margen) |
+  | ------------ | --------- | --------- | ------------------------------ |
+  | 1 m | 1,7 h | 3,3 h | 2 días |
+  | 5 m | 8,3 h | 16,7 h | 7 días |
+  | 15 m | 25 h | 50 h | 14 días |
+  | 1 h | 4,2 días | 8,3 días | 30 días |
+  | 4 h | 16,7 días | 33 días | 90 días |
+
+- **Validar una estrategia** exige meses de datos aunque cada operación dure horas: con una
+  operación al día por estrategia hacen falta 100 días solo para reunir 100 operaciones, y hay
+  que ver mercados distintos (CLAUDE.md §4). Es el punto 15 y **no necesita estar guardado
+  hoy**.
+- **Auditar** una señal no necesita sus velas: cada instantánea guarda su propia evidencia
+  (giros de precio y motivos, ADR de instantánea de contexto).
 
 **Medido:** 245 bytes por vela, tabla e índice (0004 §5). Neon Free ofrece 0,5 GB **en total**.
 Hoy hay 8 combinaciones (4 instrumentos × 2 fuentes), cada una con cinco temporalidades.
-Tamaño por combinación según la ventana que se conserve:
+Tamaño por combinación según la ventana:
 
 | Temporalidad | Por día | 30 días | 90 días | 1 año |
 | ------------ | ------- | ------- | ------- | ----- |
@@ -311,23 +338,36 @@ Tamaño por combinación según la ventana que se conserve:
 
 | Opción | Ventanas (1 m · 5 m · 15 m · 1 h · 4 h) | Por combinación | Las 8 de hoy |
 | ------ | ---------------------------------------- | --------------- | ------------ |
-| A. Propuesta de 0004 | 90 d · 1 a · 1 a · 1 a · 1 a | 68,8 MB | **550 MB: no cabe** |
-| **B. Recomendada** | 14 d · 90 d · 180 d · 1 a · 2 a | 18,7 MB | **150 MB** |
-| C. Mínima | 3 d · 30 d · 90 d · 1 a · 2 a | 8,5 MB | 68 MB |
+| A. Propuesta de 0004 | 90 d · 1 a · 1 a · 1 a · 1 a | 68,8 MB | 550 MB: no cabe |
+| B. | 14 d · 90 d · 180 d · 1 a · 2 a | 18,7 MB | 150 MB |
+| C. | 3 d · 30 d · 90 d · 1 a · 2 a | 8,5 MB | 68 MB |
+| **E. Elegida** | **2 d · 7 d · 14 d · 1 a · 1 a** | **4,2 MB** | **34 MB** |
 
-- **La propuesta de 0004 no cabe en Neon Free con las dos fuentes actuales.** Recomiendo la
-  **B**: deja margen para crecer a unas 20 combinaciones sin salir del plan gratuito.
+**Por qué E:**
+
+- Las ventanas de 1 m a 15 m son la **ventana operativa**; 1 h y 4 h a un año son un **historial
+  de investigación casi gratuito** (2,7 MB por combinación).
+- **Binance** permite volver a bajar su historial por REST cuando haga falta: no hay que
+  acumularlo por si acaso. **Kraken** solo da sus últimas 720 velas de cada temporalidad (ADR
+  0007), así que lo que no se conserve no se recupera; por eso se guardan a un año las
+  temporalidades gruesas, que apenas ocupan.
+- Ampliar cualquier ventana cuando llegue el punto 15 es una decisión posterior, con su coste a
+  la vista.
+
+**Reglas que acompañan a la decisión:**
+
+- **Presupuesto de espacio.** Activar una serie, una fuente o un instrumento nuevo obliga a
+  declarar antes cuánto ocupará con sus ventanas. La tarea de retención incluirá una vigilancia
+  del tamaño de la base de datos con **aviso al 60 % (300 MB)** y una regla de fallo cerrado:
+  **no se activan series nuevas** si el tamaño pasa del 80 % (400 MB). Umbrales iniciales, sin
+  validar.
+- **Mecánica.** Borrar por rangos, en lotes acotados y solo lo que salga de la ventana, dejando
+  constancia de lo retirado; el particionado queda para cuando el volumen lo justifique. Ningún
+  borrado retrospectivo toca una vela que una instantánea o una señal referencien.
 - Las velas de segundos, si llegan, **no se persisten** más allá de una ventana muy corta
   (0004 §5).
-- El coste real: la validación histórica (POINT15) querrá **mucho más historial** del que
-  cabe aquí. Habrá que decidirlo entonces: un plan de pago, o historial largo solo en las
-  temporalidades gruesas.
-- Mecánica: borrar por rangos, en lotes acotados y solo lo que salga de la ventana, dejando
-  constancia de lo retirado; el particionado queda para cuando el volumen lo justifique.
-  Ningún borrado retrospectivo toca una vela referenciada por una instantánea o una señal.
-
-**Necesito de Jessica:** elegir A, B o C (o indicar otra), y confirmar el universo (hoy 4
-instrumentos y 2 fuentes; 0004 recomienda ≤ 10 en directo).
+- **Fuera de alcance y aplazado:** migrar a una base de datos mayor. Se planteará cuando Freyja
+  sea rentable, como decisión de Jessica y de coste; este ADR no lo prepara ni lo bloquea.
 
 ## Trazabilidad con otros puntos
 
@@ -358,6 +398,7 @@ Implementación de cualquiera de estas piezas, credenciales o canales privados, 
 
 - Las tareas de la fase 1 y 2 pueden empezar **ya**, sin servidor de pago y sin tocar
   producción más allá de tablas nuevas.
-- La primera decisión que bloquea algo es la retención (§11): sin ella, nada borra datos.
+- La retención (§11) está decidida: ya puede diseñarse `MARKET-DATA-RETENTION-001`. Hasta que
+  exista, nada borra datos.
 - Todo lo que dependa de datos de segundos sigue aplazado hasta el VPS, y se mostrará como no
   disponible, no como un dato retrasado presentado como actual.

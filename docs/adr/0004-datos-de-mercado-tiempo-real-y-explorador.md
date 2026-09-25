@@ -87,7 +87,7 @@ persisten a largo plazo** (memoria o una ventana corta, p. ej. 48 h); 1 m se
 conserva una ventana acotada (p. ej. 90 días) y las de 5 m o más, por más tiempo.
 La retención se aplica borrando particiones antiguas. El tamaño del universo y los
 plazos son decisión de producto/coste. **Ojo:** los plazos de este párrafo no caben en Neon
-Free con las dos fuentes actuales; ver la comparación y la recomendación del ADR 0008 §11.
+Free con las dos fuentes actuales; la retención vigente es la del ADR 0008 §11 (opción E, decidida por Jessica el 2026-09-25).
 
 ### 6. Varias fuentes y tipos de producto
 
@@ -146,8 +146,8 @@ su diseño de seguridad); cualquier capacidad REAL, que sigue suspendida.
 ## Decisiones que necesito de Jessica
 
 1. ~~Alojamiento del worker~~ — decidido arriba (Render Free ahora, VPS después).
-2. **Universo inicial** de instrumentos en directo (recomiendo ≤ 10 al empezar) y
-   los plazos de retención propuestos arriba.
+2. **Universo inicial** de instrumentos en directo (recomiendo ≤ 10 al empezar). Los plazos de
+   retención ya están decididos: ADR 0008 §11.
 3. **Brokers**: cuáles 3–5, y cuál va primero para forex y oro. Para cada uno
    compruebo si tiene API oficial antes de diseñar el adaptador.
 4. **Base de datos**: Neon Free no basta cuando crezca el universo; habrá que
