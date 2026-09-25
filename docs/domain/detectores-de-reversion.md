@@ -1,15 +1,15 @@
 # Detectores de figuras de reversión (v1)
 
-- **Estado:** vigente y **en curso**: esta versión cubre seis de los ocho detectores (doble techo y
-  suelo, triple techo y suelo, hombro-cabeza-hombro superior e invertido). Los redondeados se
-  añaden con sus detectores en el siguiente cambio de la misma tarea.
+- **Estado:** vigente. Cubre los ocho detectores: doble techo y suelo, triple techo y suelo,
+  hombro-cabeza-hombro superior e invertido, y techo y suelo redondeados.
 - **Fecha:** 2026-09-25
 - **Tarea:** POINT3-REVERSAL-001 (3 de 7 del punto 3).
 - **Depende de:** [figuras-chartistas.md](figuras-chartistas.md) (qué es cada figura),
   [instancia-de-figura.md](instancia-de-figura.md) (cómo se representa) y
   [estructura-de-precio.md](estructura-de-precio.md) (pivotes confirmados).
 - **Código:** `backend/src/freyja_backend/domain/pattern_detection.py` (lo común),
-  `pattern_double.py`, `pattern_triple.py` y `pattern_head_shoulders.py`. Dominio puro, sin E/S. Pruebas en
+  `pattern_double.py`, `pattern_triple.py`, `pattern_head_shoulders.py` y `pattern_rounding.py`.
+  Dominio puro, sin E/S. Pruebas en
   `backend/tests/unit/test_pattern_detection.py`.
 
 Cada detector es **una unidad con sus propias reglas y su propia versión**. Lo que comparten es
@@ -54,6 +54,11 @@ igual en cualquier instrumento y temporalidad.
 | `exceed_margin` | 0,15 | Antes de romper, un cierre más allá del extremo por más de esta fracción de la altura es el precio yendo hacia el otro lado: la figura ha terminado. |
 | `min_history` | 100 | Velas que necesita el contexto observable para juzgar la serie. |
 | `head_prominence` | 0,10 | Solo hombro-cabeza-hombro: la cabeza debe superar al hombro más alto por al menos esta fracción de la altura, o no es una cabeza. |
+| `arc_fit_min` | 0,85 | Solo redondeados: los cierres del arco deben seguir una parábola con al menos este coeficiente de determinación (R²). |
+| `min_top_dwell` | 0,40 | Solo redondeados: al menos esta parte de los cierres del arco debe estar en el cuarto superior de su altura. Una parábola pasa ahí la mitad de su anchura; una punta, un cuarto. |
+| `apex_position_band` | 0,25 | Solo redondeados: el apex está entre esta fracción y su complementaria del recorrido de extremo a extremo. |
+| `min_arc_candles` | 30 | Solo redondeados: el arco abarca, de extremo a extremo, al menos estas velas. |
+| `max_arc_candles` | 150 | Solo redondeados: y como mucho estas. |
 | `shoulder_tolerance` | 0,30 | Solo hombro-cabeza-hombro: los dos hombros son comparables dentro de esta fracción de la altura (más laxa que la de los extremos de un doble techo: los hombros rara vez están al mismo nivel). |
 | `pivot_params.k` | 3 | El de `pivots-v1`, el mismo que usa la tendencia. |
 
@@ -158,9 +163,47 @@ puede ser inclinado**.
   diferencia entre hombros, subida del cuello por hora), `PRIOR_TREND` y `BREAKOUT_SCAN`.
 - **No se exige simetría temporal** entre hombros: solo de precio.
 
-## 8. Pendiente en esta tarea
+## 8. Techo y suelo redondeados
 
-Techo y suelo redondeados, cada uno con su detector.
+`ROUNDING_TOP` (`rounding-top-detector-v1`) y `ROUNDING_BOTTOM` (`rounding-bottom-detector-v1`) son
+espejo. **No hay pivotes nítidos que comparar**: es una curva, y lo que se puede comprobar, de forma
+exacta, es que los cierres la siguen.
+
+- **Anclas:** `LEFT_END`, `APEX`, `RIGHT_END`. El **extremo izquierdo** es un swing confirmado (el más
+  antiguo, dentro de `max_arc_candles`, desde el que la subida hasta el apex ya sigue una parábola); el
+  **apex**, un swing confirmado; el **extremo derecho**, **la primera vela cerrada** después del apex
+  cuyo cierre vuelve al nivel de la base. **No es un pivote, a propósito:** una cúpula que atraviesa su
+  base sin pausa no deja ahí ningún mínimo confirmado, y esperarlo ocultaría la ruptura que es el objeto
+  de la figura. Es la única figura cuyo ancla no es un pivote; su hora de confirmación es el cierre de
+  esa vela, así que nada se sabe antes de tiempo.
+- **Base:** el **nivel horizontal del extremo izquierdo**; el extremo derecho es la vuelta del precio a
+  ese nivel (dentro de `level_tolerance` de la altura). Una recta por los dos extremos subiría hasta
+  donde se «cazó» la bajada y las últimas velas del propio arco, que aún bajan hacia la base, contarían ya
+  como una ruptura. La ruptura se juzga contra la base con las mismas reglas que las demás figuras
+  (sobre cierres, margen de confirmación, ventana de fracaso).
+- **Altura:** del nivel de la base al apex. Debe cumplir `min_height_fraction`.
+- **Redondeada, no puntiaguda:** (a) los cierres desde el extremo izquierdo hasta el derecho siguen una
+  parábola abierta hacia abajo (hacia arriba en el suelo) con R² ≥ `arc_fit_min`, ajustada por mínimos
+  cuadrados en **aritmética racional exacta** (sin coma flotante); (b) al menos `min_top_dwell` de los
+  cierres están en el cuarto superior de la altura: una punta también ajusta bien una parábola, pero no
+  permanece arriba; (c) el apex está en la parte central del arco (`apex_position_band`); (d) el arco
+  abarca entre `min_arc_candles` y `max_arc_candles` velas.
+- **En formación:** el extremo izquierdo y el apex están confirmados y la subida ya se comporta como
+  la mitad de una cúpula (mismo ajuste y misma permanencia arriba, sobre la mitad izquierda), con el
+  precio bajando. **Válida:** existe el extremo derecho y el arco completo cumple lo anterior.
+- **No es figura** si el precio hace antes un extremo mayor que el apex, si el arco sería más ancho
+  del permitido (el extremo derecho se busca dentro de `max_arc_candles` desde el izquierdo), o si el
+  precio atraviesa la base en lugar de volver a ella (un cierre por debajo del nivel de la base por más
+  de `level_tolerance × altura`).
+- **La edad** de una figura sin resolver se cuenta desde su **último ancla**, porque un arco es largo por
+  naturaleza.
+- **Evidencia conservada:** `ROUNDING_ARC` (R², curvatura, posición del apex, permanencia arriba, velas
+  del arco, altura), `PRIOR_TREND` y `BREAKOUT_SCAN`.
+- **Límite conocido:** un arco con mucho ruido, o cuyo comienzo no coincida con ningún swing confirmado,
+  no se detecta. Es un umbral provisional que se validará con datos reales.
+- **Regla de la izquierda sin prueba propia:** el alcance máximo del extremo izquierdo
+  (`max_arc_candles` hacia atrás) es una salida temprana equivalente, para todas las formas
+  razonables, al límite de búsqueda del extremo derecho; se conserva por claridad.
 
 ## 9. Lo que este documento no decide
 

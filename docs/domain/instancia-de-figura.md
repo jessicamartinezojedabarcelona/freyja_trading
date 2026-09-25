@@ -144,7 +144,10 @@ hacen falta columnas por figura.
 Cada evaluación se rechaza si usa algo que no se sabía en su instante: un pivote cuya
 confirmación es posterior, una vela de ruptura que aún no había cerrado, una frontera con puntos
 posteriores, una vela leída que cierra después. Solo se aceptan pivotes **confirmados**; uno
-provisional, aunque traiga una hora de confirmación, se rechaza.
+provisional, aunque traiga una hora de confirmación, se rechaza. **Única excepción:** el extremo
+derecho de un techo o suelo redondeado es una **vela cerrada** (no un pivote), con el cierre de esa
+vela como hora de confirmación, de modo que tampoco se conoce antes de tiempo (ver
+`detectores-de-reversion.md`, sección 8).
 
 ## 8. Serialización
 

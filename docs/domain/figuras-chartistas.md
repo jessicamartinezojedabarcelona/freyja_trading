@@ -117,7 +117,7 @@ exigir más, nunca menos.
 | `DOUBLE_BOTTOM` | Doble suelo | `REVERSAL` | `BULLISH` | Dos mínimos comparables separados por un máximo intermedio, cuyo nivel es la resistencia que, rota por cierre, la confirma. Tras una tendencia bajista. | 3 (L, H, L) |
 | `TRIPLE_TOP` | Triple techo | `REVERSAL` | `BEARISH` | Tres máximos comparables separados por dos mínimos comparables, que forman el soporte cuya ruptura la confirma. Tras una tendencia alcista. | 5 (H, L, H, L, H) |
 | `TRIPLE_BOTTOM` | Triple suelo | `REVERSAL` | `BULLISH` | Tres mínimos comparables separados por dos máximos comparables, que forman la resistencia cuya ruptura la confirma. Tras una tendencia bajista. | 5 (L, H, L, H, L) |
-| `ROUNDING_TOP` | Techo redondeado | `REVERSAL` | `BEARISH` | Un ascenso y un descenso graduales que dibujan un **arco** (cúpula), sin giros bruscos. Su geometría es una curva, no una secuencia de pivotes nítidos: las anclas son el extremo del arco y sus dos extremos, y la **base** une estos últimos. | 3 (extremo izquierdo, cima, extremo derecho) |
+| `ROUNDING_TOP` | Techo redondeado | `REVERSAL` | `BEARISH` | Un ascenso y un descenso graduales que dibujan un **arco** (cúpula), sin giros bruscos. Su geometría es una curva, no una secuencia de pivotes nítidos: las anclas son el extremo del arco y sus dos extremos, y la **base** une estos últimos. El extremo derecho es la primera vela cerrada que vuelve al nivel de la base (no un pivote). | 3 (extremo izquierdo, cima, extremo derecho) |
 | `ROUNDING_BOTTOM` | Suelo redondeado | `REVERSAL` | `BULLISH` | El arco invertido (cuenco): descenso y ascenso graduales. Mismas anclas; la base une los extremos. | 3 (extremo izquierdo, fondo, extremo derecho) |
 
 ### 4.2 Continuación y consolidación

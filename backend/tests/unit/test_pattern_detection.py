@@ -20,6 +20,7 @@ from freyja_backend.domain import (
     pattern_detection,
     pattern_double,
     pattern_head_shoulders,
+    pattern_rounding,
     pattern_triple,
 )
 from freyja_backend.domain.chart_pattern import (
@@ -50,6 +51,7 @@ from freyja_backend.domain.pattern_head_shoulders import (
     HeadAndShouldersBottomDetector,
     HeadAndShouldersTopDetector,
 )
+from freyja_backend.domain.pattern_rounding import RoundingBottomDetector, RoundingTopDetector
 from freyja_backend.domain.pattern_triple import TripleBottomDetector, TripleTopDetector
 from tests.unit.test_market_trend import (
     AUTHORIZED,
@@ -74,6 +76,8 @@ DETECTORS: list[PatternDetector] = [
     TripleBottomDetector(),
     HeadAndShouldersTopDetector(),
     HeadAndShouldersBottomDetector(),
+    RoundingTopDetector(),
+    RoundingBottomDetector(),
 ]
 
 
@@ -749,6 +753,8 @@ def test_each_detector_is_its_own_unit_with_its_own_version() -> None:
         "triple-bottom-detector-v1",
         "head-and-shoulders-top-detector-v1",
         "head-and-shoulders-bottom-detector-v1",
+        "rounding-top-detector-v1",
+        "rounding-bottom-detector-v1",
     }
     assert {(d.pattern_type, d.side) for d in DETECTORS} == {
         (PatternType.DOUBLE_TOP, Side.TOP),
@@ -757,12 +763,18 @@ def test_each_detector_is_its_own_unit_with_its_own_version() -> None:
         (PatternType.TRIPLE_BOTTOM, Side.BOTTOM),
         (PatternType.HEAD_AND_SHOULDERS_TOP, Side.TOP),
         (PatternType.HEAD_AND_SHOULDERS_BOTTOM, Side.BOTTOM),
+        (PatternType.ROUNDING_TOP, Side.TOP),
+        (PatternType.ROUNDING_BOTTOM, Side.BOTTOM),
     }
+    assert {d.pattern_type for d in DETECTORS} == {
+        t for t in PatternType if t.value.startswith(("DOUBLE", "TRIPLE", "HEAD", "ROUNDING"))
+    }  # the eight reversal figures of the catalogue, no more and no fewer
     # Each family shares only the plumbing: none imports another's geometry.
     families = {
-        pattern_double: ("pattern_triple", "pattern_head_shoulders"),
-        pattern_triple: ("pattern_double", "pattern_head_shoulders"),
-        pattern_head_shoulders: ("pattern_double", "pattern_triple"),
+        pattern_double: ("pattern_triple", "pattern_head_shoulders", "pattern_rounding"),
+        pattern_triple: ("pattern_double", "pattern_head_shoulders", "pattern_rounding"),
+        pattern_head_shoulders: ("pattern_double", "pattern_triple", "pattern_rounding"),
+        pattern_rounding: ("pattern_double", "pattern_triple", "pattern_head_shoulders"),
     }
     for module, others in families.items():
         text = Path(str(module.__file__)).read_text(encoding="utf-8")
@@ -794,6 +806,11 @@ def test_the_documented_parameters_are_exactly_the_default_ones() -> None:
         "min_history": Decimal(params.min_history),
         "head_prominence": params.head_prominence,
         "shoulder_tolerance": params.shoulder_tolerance,
+        "arc_fit_min": params.arc_fit_min,
+        "min_top_dwell": params.min_top_dwell,
+        "apex_position_band": params.apex_position_band,
+        "min_arc_candles": Decimal(params.min_arc_candles),
+        "max_arc_candles": Decimal(params.max_arc_candles),
         "pivot_params.k": Decimal(params.pivot_params.k),
     }
     assert params.version == "reversal-params-v1"
@@ -869,9 +886,17 @@ def test_the_detectors_only_read_the_domain_never_a_candlestick_pattern_or_an_in
         "dataclasses",
         "datetime",
         "decimal",
+        "fractions",
+        "functools",
         "typing",
     }
-    for module in (pattern_detection, pattern_double, pattern_triple, pattern_head_shoulders):
+    for module in (
+        pattern_detection,
+        pattern_double,
+        pattern_triple,
+        pattern_head_shoulders,
+        pattern_rounding,
+    ):
         tree = ast.parse(Path(str(module.__file__)).read_text(encoding="utf-8"))
         imported = {
             n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module
