@@ -1,15 +1,15 @@
 # Detectores de figuras de reversión (v1)
 
-- **Estado:** vigente y **en curso**: esta versión cubre cuatro de los ocho detectores (doble techo,
-  doble suelo, triple techo, triple suelo). Hombro-cabeza-hombro y los redondeados se añaden con
-  sus detectores en los siguientes cambios de la misma tarea.
+- **Estado:** vigente y **en curso**: esta versión cubre seis de los ocho detectores (doble techo y
+  suelo, triple techo y suelo, hombro-cabeza-hombro superior e invertido). Los redondeados se
+  añaden con sus detectores en el siguiente cambio de la misma tarea.
 - **Fecha:** 2026-09-25
 - **Tarea:** POINT3-REVERSAL-001 (3 de 7 del punto 3).
 - **Depende de:** [figuras-chartistas.md](figuras-chartistas.md) (qué es cada figura),
   [instancia-de-figura.md](instancia-de-figura.md) (cómo se representa) y
   [estructura-de-precio.md](estructura-de-precio.md) (pivotes confirmados).
 - **Código:** `backend/src/freyja_backend/domain/pattern_detection.py` (lo común),
-  `pattern_double.py` y `pattern_triple.py`. Dominio puro, sin E/S. Pruebas en
+  `pattern_double.py`, `pattern_triple.py` y `pattern_head_shoulders.py`. Dominio puro, sin E/S. Pruebas en
   `backend/tests/unit/test_pattern_detection.py`.
 
 Cada detector es **una unidad con sus propias reglas y su propia versión**. Lo que comparten es
@@ -53,6 +53,8 @@ igual en cualquier instrumento y temporalidad.
 | `max_age_candles` | 150 | Una figura sin resolver más vieja que esto (desde su primer pivote) caduca. |
 | `exceed_margin` | 0,15 | Antes de romper, un cierre más allá del extremo por más de esta fracción de la altura es el precio yendo hacia el otro lado: la figura ha terminado. |
 | `min_history` | 100 | Velas que necesita el contexto observable para juzgar la serie. |
+| `head_prominence` | 0,10 | Solo hombro-cabeza-hombro: la cabeza debe superar al hombro más alto por al menos esta fracción de la altura, o no es una cabeza. |
+| `shoulder_tolerance` | 0,30 | Solo hombro-cabeza-hombro: los dos hombros son comparables dentro de esta fracción de la altura (más laxa que la de los extremos de un doble techo: los hombros rara vez están al mismo nivel). |
 | `pivot_params.k` | 3 | El de `pivots-v1`, el mismo que usa la tendencia. |
 
 ## 3. Estados: cuándo cada uno
@@ -128,17 +130,45 @@ anterior al real). Detrás, los estados solo avanzan (ver el modelo).
 - Un triple techo **coexiste** con dobles techos sobre las mismas velas: son figuras distintas con su
   propia identidad.
 
-## 7. Pendiente en esta tarea
+## 7. Hombro-cabeza-hombro y su invertido
 
-Hombro-cabeza-hombro (superior e invertido) y techo y suelo redondeados, cada uno con su detector.
+`HEAD_AND_SHOULDERS_TOP` (`head-and-shoulders-top-detector-v1`) y `HEAD_AND_SHOULDERS_BOTTOM`
+(`head-and-shoulders-bottom-detector-v1`) son espejo. No comparten geometría con los dobles y triples:
+tienen una **cabeza** que debe destacar, dos **hombros** solo aproximadamente iguales y un **cuello que
+puede ser inclinado**.
 
-## 8. Lo que este documento no decide
+- **Pivotes:** cinco puntos consecutivos: hombro, valle, cabeza, valle, hombro (en el invertido, al
+  revés). Anclas: `LEFT_SHOULDER`, `LEFT_TROUGH`, `HEAD`, `RIGHT_TROUGH`, `RIGHT_SHOULDER`.
+- **Cuello:** la **recta** que pasa por los dos valles, evaluada en cada instante. La ruptura se juzga
+  contra esa recta, no contra un nivel horizontal: un cierre que rompería el valle más alto puede
+  seguir por encima del cuello real. El valor de la recta se calcula con `Decimal`, multiplicando
+  antes de dividir y redondeado a los 12 decimales con los que se guardan los precios.
+- **Altura:** la distancia vertical de la cabeza al cuello en el instante de la cabeza. Debe cumplir
+  `min_height_fraction`.
+- **La cabeza destaca:** supera al hombro más alto por al menos `head_prominence × altura`. Sin eso no
+  es una cabeza y no hay figura.
+- **Hombros comparables:** difieren como mucho `shoulder_tolerance × altura`, y el derecho no supera a
+  la cabeza.
+- **En formación:** primer hombro, ambos valles y cabeza confirmados, y el precio de vuelta al nivel
+  del primer hombro. **Válida:** el hombro derecho confirmado y comparable.
+- **Se invalida** si el hombro derecho iguala o supera a la cabeza (`ANCHOR_EXCEEDED`) o no es
+  comparable (`GEOMETRY_BROKEN`); y, antes de romper, por un cierre más allá de la cabeza por más de
+  `exceed_margin × altura`.
+- **Evidencia conservada:** `HEAD_AND_SHOULDERS` (altura, prominencia de la cabeza y la exigida,
+  diferencia entre hombros, subida del cuello por hora), `PRIOR_TREND` y `BREAKOUT_SCAN`.
+- **No se exige simetría temporal** entre hombros: solo de precio.
+
+## 8. Pendiente en esta tarea
+
+Techo y suelo redondeados, cada uno con su detector.
+
+## 9. Lo que este documento no decide
 
 Las figuras de continuación y de expansión (POINT3-CONTINUATION-001 y EXPANSION-001), cómo se
 integran varias figuras como evidencia de una hipótesis (POINT3-HYPOTHESIS-001), objetivos, entradas,
 señales y órdenes, y la persistencia de las instancias.
 
-## 9. Decisiones técnicas tomadas al redactar
+## 10. Decisiones técnicas tomadas al redactar
 
 Registradas aquí para que se puedan corregir; ninguna es de producto.
 
