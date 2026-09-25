@@ -1,7 +1,7 @@
 import { Component, computed, inject, input } from '@angular/core';
 
 import { CandleSeriesOut } from '../../core/market-data/market-data.models';
-import { USER_TIME_ZONE, formatInstant } from '../../core/time/local-time';
+import { USER_TIME_ZONE, formatInstant, zoneLabel } from '../../core/time/local-time';
 import { formatAge } from './chart-data';
 import {
   FRESHNESS_PRESENTATION,
@@ -24,6 +24,8 @@ export class SeriesStatusComponent {
   readonly sourceName = input.required<string>();
 
   private readonly zone = inject(USER_TIME_ZONE);
+  /** Where every time on this card is: said once, so the times themselves stay plain. */
+  protected readonly zoneText = zoneLabel(this.zone, new Date());
   /** Every time is shown in the person's own zone, with the zone written next to it. */
   protected readonly formatTime = (iso: string | null): string => formatInstant(iso, this.zone);
   protected readonly issueLabel = issueLabel;

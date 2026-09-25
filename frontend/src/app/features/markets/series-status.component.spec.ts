@@ -34,7 +34,8 @@ describe('SeriesStatusComponent', () => {
     expect(content).toContain('Al día');
     expect(content).toContain('Calidad correcta');
     expect(content).toContain('Ninguno en el periodo mostrado');
-    expect(content).toContain('GMT+2');
+    // The zone is said once, for the whole card; the times themselves stay plain.
+    expect(content).toContain('Todas las horas son de tu hora local (Europe/Madrid, GMT+2).');
     expect(element.querySelector('.banner')).toBeNull();
     expect(element.querySelector('[role="alert"], [role="status"]')).toBeNull();
     expect(element.querySelector('.issues')).toBeNull();
@@ -59,22 +60,24 @@ describe('SeriesStatusComponent', () => {
   it('states when the last candle closed and when Freyja received it, with the zone', () => {
     const content = text(render(makeSeries()));
 
-    // 12:02 UTC is 14:02 in Madrid in September (GMT+2): the person's own time, zone stated.
-    expect(content).toMatch(/abre 24\/09\/2026, 14:02:00 GMT\+2/);
-    expect(content).toMatch(/cierra 24\/09\/2026, 14:03:00 GMT\+2/);
-    expect(content).toMatch(/Recibida por Freyja\s*24\/09\/2026, 14:03:00 GMT\+2/);
-    expect(content).toMatch(/Comprobado\s*24\/09\/2026, 14:04:00 GMT\+2/);
-    expect(content).not.toContain('UTC');
+    // 12:02 UTC is 14:02 on a clock in Madrid in September: shown as 14:02, nothing to convert.
+    expect(content).toMatch(/abre 24\/09\/2026, 14:02:00 cierra/);
+    expect(content).toMatch(/cierra 24\/09\/2026, 14:03:00/);
+    expect(content).toMatch(/Recibida por Freyja\s*24\/09\/2026, 14:03:00/);
+    expect(content).toMatch(/Comprobado\s*24\/09\/2026, 14:04:00/);
+    expect(content).not.toMatch(/UTC|GMT\+2, 14/);
   });
 
   it('writes the same instants in whatever zone the person is in', () => {
     const bogota = text(render(makeSeries(), 'America/Bogota'));
-    expect(bogota).toMatch(/abre 24\/09\/2026, 07:02:00 GMT-5/);
-    expect(bogota).toMatch(/Comprobado\s*24\/09\/2026, 07:04:00 GMT-5/);
+    expect(bogota).toMatch(/abre 24\/09\/2026, 07:02:00 cierra/);
+    expect(bogota).toMatch(/Comprobado\s*24\/09\/2026, 07:04:00/);
+    expect(bogota).toContain('(America/Bogota, GMT-5)');
 
     TestBed.resetTestingModule(); // a test module can only be configured once
     const utc = text(render(makeSeries(), 'UTC'));
-    expect(utc).toMatch(/abre 24\/09\/2026, 12:02:00 UTC/);
+    expect(utc).toMatch(/abre 24\/09\/2026, 12:02:00 cierra/);
+    expect(utc).toContain('(UTC)');
   });
 
   it('announces old data before anything else and never as current', () => {
@@ -140,8 +143,8 @@ describe('SeriesStatusComponent', () => {
     const items = [...element.querySelectorAll('.fact ul li')].map((li) => text(li as HTMLElement));
 
     expect(items).toHaveLength(2);
-    expect(items[0]).toMatch(/^1 vela tras la de 24\/09\/2026, 14:01:00 GMT\+2/);
-    expect(items[1]).toMatch(/^3 velas tras la de 24\/09\/2026, 14:10:00 GMT\+2/);
+    expect(items[0]).toMatch(/^1 vela tras la de 24\/09\/2026, 14:01:00$/);
+    expect(items[1]).toMatch(/^3 velas tras la de 24\/09\/2026, 14:10:00$/);
     expect(text(element)).not.toContain('Ninguno en el periodo mostrado');
   });
 

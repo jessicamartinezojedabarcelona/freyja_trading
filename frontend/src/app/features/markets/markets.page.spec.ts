@@ -267,8 +267,8 @@ describe('MarketsPage', () => {
       expect(label).toContain('fuente Binance');
       expect(label).toContain('3 velas cerradas');
       // 12:00-12:02 UTC is 14:00-14:02 in Madrid: the person's time, with the zone.
-      expect(label).toContain('24/09/2026, 14:00:00 GMT+2');
-      expect(label).toContain('24/09/2026, 14:03:00 GMT+2');
+      expect(label).toContain('24/09/2026, 14:00:00 y 24/09/2026, 14:03:00');
+      expect(label).toContain('Horas en tu hora local (Europe/Madrid, GMT+2)');
       expect(label).toContain('Último cierre 101');
     });
 
@@ -479,8 +479,8 @@ describe('MarketsPage', () => {
       expect(squash(details.querySelector('summary'))).toBe('Ver las últimas 20 velas como tabla');
       const rows = [...details.querySelectorAll('tbody tr')];
       expect(rows).toHaveLength(20);
-      expect(squash(rows[0].querySelector('th'))).toContain('14:24:00 GMT+2');
-      expect(squash(rows[19].querySelector('th'))).toContain('14:05:00 GMT+2');
+      expect(squash(rows[0].querySelector('th'))).toBe('24/09/2026, 14:24:00');
+      expect(squash(rows[19].querySelector('th'))).toBe('24/09/2026, 14:05:00');
       expect(squash(details.querySelector('caption'))).toContain('BTC/USDT');
       expect(squash(details.querySelector('caption'))).toContain(
         'hora local: Europe/Madrid, GMT+2',
@@ -587,6 +587,74 @@ describe('MarketsPage', () => {
 
       expect(request.request.params.get('data_source_code')).toBe('BROKER_X');
       expect(squash(root().querySelector('app-series-status'))).toContain('Broker X');
+    });
+
+    it('opens on the source in the URL, not on the first one, when the page is loaded or shared', async () => {
+      // A reload (F5) or a shared link lands straight on ?source=BROKER_X: the selector is
+      // created before its options exist, so it used to show the first source (Binance) while
+      // the data on screen was Broker X's.
+      await open(`/mercados/${INSTRUMENT_ID}?source=BROKER_X`);
+      flushInstruments();
+      flushDetail(
+        BTC,
+        makeMappings([
+          makeSourceMapping('BINANCE', 'Binance'),
+          makeSourceMapping('BROKER_X', 'Broker X'),
+        ]),
+      );
+      const request = candlesRequest();
+      expect(request.request.params.get('data_source_code')).toBe('BROKER_X');
+      request.flush(makeSeries({ data_source_code: 'BROKER_X' }));
+      await settle();
+
+      const select = root().querySelector<HTMLSelectElement>('.field--inline select')!;
+      expect(select.value).toBe('BROKER_X');
+      expect(select.selectedOptions[0].textContent?.trim()).toBe('Broker X');
+      expect(squash(root().querySelector('app-series-status'))).toContain('Broker X');
+    });
+
+    it('always shows in the selector the source whose data is on screen', async () => {
+      await open(`/mercados/${INSTRUMENT_ID}`, { refreshMs: 30_000 });
+      flushInstruments();
+      flushDetail(
+        BTC,
+        makeMappings([
+          makeSourceMapping('BINANCE', 'Binance'),
+          makeSourceMapping('BROKER_X', 'Broker X'),
+        ]),
+      );
+      candlesRequest().flush(makeSeries());
+      await settle();
+
+      const select = () => root().querySelector<HTMLSelectElement>('.field--inline select')!;
+      const shownSource = () => squash(root().querySelector('app-series-status .fact dd'));
+      const agree = () =>
+        expect(select().selectedOptions[0].textContent?.trim()).toBe(shownSource());
+
+      agree(); // Binance on both
+
+      select().value = 'BROKER_X';
+      select().dispatchEvent(new Event('change'));
+      await settle();
+      candlesRequest().flush(makeSeries({ data_source_code: 'BROKER_X' }));
+      await settle();
+      agree(); // Broker X on both
+
+      // Changing the period keeps the source: the selector must not fall back to the first.
+      await harness.navigateByUrl(`/mercados/${INSTRUMENT_ID}?source=BROKER_X&tf=5m`);
+      candlesRequest().flush(makeSeries({ data_source_code: 'BROKER_X', timeframe_code: '5m' }));
+      await settle();
+      agree();
+
+      // And a refresh of that same series keeps agreeing.
+      (
+        [...root().querySelectorAll<HTMLButtonElement>('.chart-actions .btn')].find((b) =>
+          squash(b).startsWith('Actualiz'),
+        ) as HTMLButtonElement
+      ).click();
+      candlesRequest().flush(makeSeries({ data_source_code: 'BROKER_X', timeframe_code: '5m' }));
+      await settle();
+      agree();
     });
 
     it('applies only the latest choice when the user changes their mind quickly', async () => {
@@ -859,15 +927,16 @@ describe('MarketsPage', () => {
 
       const content = text();
       expect(content).toContain('Hora local (America/Bogota, GMT-5)');
-      expect(content).toContain('07:02:00 GMT-5'); // the last candle opens at 12:02 UTC
+      expect(content).toContain('24/09/2026, 07:02:00'); // the last candle opens at 12:02 UTC
       expect(content).not.toContain(' UTC');
+      expect(content).not.toContain('GMT-5,'); // the zone is said in the notes, not on every time
     });
 
     it('says UTC when that is really the zone', async () => {
       await openLoaded(`/mercados/${INSTRUMENT_ID}`, makeSeries(), { zone: 'UTC' });
 
       expect(text()).toContain('Hora local (UTC)');
-      expect(text()).toContain('12:02:00 UTC');
+      expect(text()).toContain('24/09/2026, 12:02:00');
     });
 
     it('asks the API in UTC whatever the zone of the person is', async () => {

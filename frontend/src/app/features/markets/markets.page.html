@@ -114,7 +114,9 @@
               (change)="chooseSource(sourceBox.value)"
             >
               @for (source of sources(); track source.code) {
-                <option [value]="source.code">{{ source.name }}</option>
+                <option [value]="source.code" [selected]="source.code === selectedSource()">
+                  {{ source.name }}
+                </option>
               }
             </select>
           </label>

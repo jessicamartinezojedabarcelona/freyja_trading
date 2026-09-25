@@ -12,25 +12,23 @@ const SUMMER = '2026-09-25T17:41:07Z';
 const WINTER = '2026-01-15T17:41:07Z';
 
 describe('formatInstant', () => {
-  it('writes the instant in the zone of the person and always says which offset', () => {
-    expect(formatInstant(SUMMER, 'Europe/Madrid')).toBe('25/09/2026, 19:41:07 GMT+2');
-    expect(formatInstant(SUMMER, 'America/Bogota')).toBe('25/09/2026, 12:41:07 GMT-5');
-    expect(formatInstant(SUMMER, 'UTC')).toBe('25/09/2026, 17:41:07 UTC');
+  it('writes the time as it is on the clock of the person, with no offset to read wrongly', () => {
+    expect(formatInstant(SUMMER, 'Europe/Madrid')).toBe('25/09/2026, 19:41:07');
+    expect(formatInstant(SUMMER, 'America/Bogota')).toBe('25/09/2026, 12:41:07');
+    expect(formatInstant(SUMMER, 'UTC')).toBe('25/09/2026, 17:41:07');
+    expect(formatInstant(SUMMER, 'Europe/Madrid')).not.toMatch(/GMT|UTC/);
   });
 
   it('applies the offset that was in force at that instant (daylight saving)', () => {
-    expect(formatInstant(WINTER, 'Europe/Madrid')).toBe('15/01/2026, 18:41:07 GMT+1');
-    expect(formatInstant(SUMMER, 'Europe/Madrid')).toContain('GMT+2');
+    // The same UTC hour is one hour apart from summer to winter in Madrid.
+    expect(formatInstant(WINTER, 'Europe/Madrid')).toBe('15/01/2026, 18:41:07');
+    expect(formatInstant(SUMMER, 'Europe/Madrid')).toBe('25/09/2026, 19:41:07');
   });
 
   it('follows a change of day and never prints 24:00', () => {
-    expect(formatInstant('2026-09-24T23:30:00Z', 'Europe/Madrid')).toBe(
-      '25/09/2026, 01:30:00 GMT+2',
-    );
-    expect(formatInstant('2026-09-25T00:00:00Z', 'UTC')).toBe('25/09/2026, 00:00:00 UTC');
-    expect(formatInstant('2026-09-24T22:00:00Z', 'Europe/Madrid')).toBe(
-      '25/09/2026, 00:00:00 GMT+2',
-    );
+    expect(formatInstant('2026-09-24T23:30:00Z', 'Europe/Madrid')).toBe('25/09/2026, 01:30:00');
+    expect(formatInstant('2026-09-25T00:00:00Z', 'UTC')).toBe('25/09/2026, 00:00:00');
+    expect(formatInstant('2026-09-24T22:00:00Z', 'Europe/Madrid')).toBe('25/09/2026, 00:00:00');
   });
 
   it('shows a dash for a missing or unreadable instant', () => {
@@ -38,8 +36,8 @@ describe('formatInstant', () => {
     expect(formatInstant('garbage', 'UTC')).toBe('—');
   });
 
-  it('falls back to UTC, saying so, when the zone is not real', () => {
-    expect(formatInstant(SUMMER, 'Not/AZone')).toBe('25/09/2026, 17:41:07 UTC');
+  it('falls back to UTC when the zone is not real', () => {
+    expect(formatInstant(SUMMER, 'Not/AZone')).toBe('25/09/2026, 17:41:07');
   });
 
   it('is the same instant however it is written (the API is UTC, an offset is equal)', () => {

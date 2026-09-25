@@ -233,7 +233,7 @@ export class MarketsPage {
       `Gráfico de velas de ${instrument.canonical_symbol}, periodo ${this.timeframeLabel()}, ` +
       `fuente ${this.sourceName()}: ${candles.length} velas cerradas entre ` +
       `${this.formatTime(first.open_time)} y ${this.formatTime(last.close_time)}. ` +
-      `Último cierre ${last.close}.`
+      `Último cierre ${last.close}. Horas en tu hora local (${this.zoneText}).`
     );
   });
 

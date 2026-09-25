@@ -409,8 +409,10 @@ mirando lo más reciente el gráfico sigue a la última vela; si mirabas histori
 
 **Hora local.** UTC es la hora del backend, la base de datos, la API y la URL; lo que se
 *muestra* a la persona (ejes y cursor del gráfico, estado de la serie, tabla) va en la zona del
-navegador y **siempre con la zona indicada** (p. ej. «Europe/Madrid, GMT+2»). Solo cambia la
-presentación: las consultas siguen en UTC.
+navegador, **tal como está en su reloj** («25/09/2026, 18:58:36»), sin un desfase pegado a cada
+hora que parezca aún por convertir. La zona se dice **una vez** junto a los datos («Hora local:
+Europe/Madrid, GMT+2») y en el texto accesible del gráfico. Solo cambia la presentación: las
+consultas siguen en UTC.
 
 Arrancar en modo desarrollo, desde `frontend/`:
 
