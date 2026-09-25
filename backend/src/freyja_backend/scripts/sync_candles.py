@@ -34,10 +34,15 @@ from freyja_backend.infrastructure.market_data.binance_spot_rest import (
     SOURCE_CODE as BINANCE,
 )
 from freyja_backend.infrastructure.market_data.binance_spot_rest import BinanceSpotRestClient
+from freyja_backend.infrastructure.market_data.kraken_spot_rest import (
+    SOURCE_CODE as KRAKEN,
+)
+from freyja_backend.infrastructure.market_data.kraken_spot_rest import KrakenSpotRestClient
 
 # 1 minute is Freyja's standard candle period; the user may pick another.
 DEFAULT_TIMEFRAME = Timeframe.M1
-_SUPPORTED_SOURCES = (BINANCE,)
+_CLIENTS = {BINANCE: BinanceSpotRestClient, KRAKEN: KrakenSpotRestClient}
+_SUPPORTED_SOURCES = tuple(_CLIENTS)
 
 
 def _parse_utc(value: str) -> datetime:
@@ -67,7 +72,12 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=[timeframe.value for timeframe in Timeframe],
         help=f"Periodo de las velas (por defecto {DEFAULT_TIMEFRAME.value})",
     )
-    parser.add_argument("--limit", type=int, default=500, help="Velas recientes a leer (1-1000)")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=500,
+        help="Velas recientes a leer (máximo del proveedor: Binance 1000, Kraken 720)",
+    )
     parser.add_argument("--start", type=_parse_utc, help="Inicio de un backfill (con zona horaria)")
     parser.add_argument("--end", type=_parse_utc, help="Fin del backfill; por defecto, ahora")
     parser.add_argument(
@@ -96,7 +106,7 @@ def main(
     try:
         if provider is not None:
             return _run(args, provider, db_engine, clock)
-        with BinanceSpotRestClient() as client:
+        with _CLIENTS[args.source]() as client:
             return _run(args, client, db_engine, clock)
     finally:
         if owns_engine:

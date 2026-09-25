@@ -25,8 +25,22 @@ from freyja_backend.infrastructure.market_data.binance_spot_rest import (
     BinanceRestConfig,
     BinanceSpotRestClient,
 )
+from freyja_backend.infrastructure.market_data.kraken_spot_rest import (
+    KrakenRestConfig,
+    KrakenSpotRestClient,
+)
 from freyja_backend.main import create_app
-from tests.market_data_support import BTC, ETH, M1, M5, NOW, Rows, SyntheticExchange, at
+from tests.market_data_support import (
+    BTC,
+    ETH,
+    M1,
+    M5,
+    NOW,
+    Rows,
+    SyntheticExchange,
+    SyntheticKraken,
+    at,
+)
 
 NOW_Z = "2026-09-24T12:07:30Z"
 URL = "/api/v1/market-data/candles"
@@ -405,7 +419,7 @@ def test_a_failing_provider_is_visible_next_to_the_data_it_could_not_refresh(
     ("overrides", "status_code", "detail"),
     [
         ({"instrument_id": str(uuid.uuid4())}, 404, "Instrumento no encontrado."),
-        ({"data_source_code": "KRAKEN"}, 404, "Fuente de datos no encontrada."),
+        ({"data_source_code": "NOWHERE"}, 404, "Fuente de datos no encontrada."),
         ({"timeframe_code": "30s"}, 422, "Temporalidad no válida."),
         ({"start": "2026-09-24T12:00:00"}, 422, "start debe incluir zona horaria"),
         ({"end": "2026-09-24T12:00:00"}, 422, "end debe incluir zona horaria"),
@@ -485,3 +499,78 @@ def test_the_endpoint_is_read_only(api: TestClient, market_data_engine: Engine) 
     }
     for method in ("post", "put", "patch", "delete"):
         assert getattr(api, method)(URL, params=query).status_code == 405
+
+
+# -- Kraken as a second source (MARKET-DATA-KRAKEN-REST-001) ----------------------------------
+
+
+def store_from_kraken(
+    engine: Engine, kraken: SyntheticKraken, *, limit: int = 3, now: datetime = NOW
+) -> market_data_service.SyncResult:
+    """Ingest through the real Kraken adapter and the same service, exactly as the CLI does."""
+    client = KrakenSpotRestClient(
+        KrakenRestConfig(max_attempts=1, min_request_interval_seconds=0.0),
+        transport=httpx2.MockTransport(kraken),
+        clock=lambda: now,
+        sleep=lambda _seconds: None,
+    )
+    try:
+        with create_session_factory(engine)() as session:
+            result = market_data_service.sync_candles(
+                session,
+                client,
+                source_code="KRAKEN",
+                instrument=BTC,
+                timeframe=M1,
+                limit=limit,
+            )
+            session.commit()
+            return result
+    finally:
+        client.close()
+
+
+def test_the_same_instrument_and_period_from_two_sources_are_never_mixed(
+    api: TestClient, market_data_engine: Engine
+) -> None:
+    store(market_data_engine, SyntheticExchange(), limit=6)  # Binance: 5 closed candles
+    store_from_kraken(market_data_engine, SyntheticKraken(), limit=3)  # Kraken: 3
+
+    binance = read(api, market_data_engine, data_source_code="BINANCE")
+    kraken = read(api, market_data_engine, data_source_code="KRAKEN")
+
+    assert (binance["data_source_code"], len(binance["candles"])) == ("BINANCE", 5)
+    assert (kraken["data_source_code"], len(kraken["candles"])) == ("KRAKEN", 3)
+    # Kraken's three are the newest three; nothing was borrowed from Binance's series.
+    assert opens(kraken) == opens(binance)[-3:]
+
+
+def test_a_source_with_no_candles_yet_says_so_instead_of_failing(
+    api: TestClient, market_data_engine: Engine
+) -> None:
+    """Kraken exists in the catalog as soon as 0014 runs, before the scanner has stored
+    anything for it: a reader gets an honest empty series, never an error or Binance's data."""
+    store(market_data_engine, SyntheticExchange(), limit=6)
+
+    body = read(api, market_data_engine, data_source_code="KRAKEN")
+
+    assert body["candles"] == []
+    assert body["freshness"]["status"] == "NO_DATA"
+    assert [i["code"] for i in body["issues"]] == ["NO_DATA"]
+
+
+def test_a_symbol_s_sources_are_listed_in_a_fixed_order_binance_first(
+    api: TestClient, market_data_engine: Engine
+) -> None:
+    """The explorer opens on the first source of this list, so its order is part of the
+    contract: Binance (by code) stays the default when Kraken is added."""
+    response = api.get(
+        f"/api/v1/catalog/instruments/{instrument_id(market_data_engine, 'BTC/USDT')}/mappings"
+    )
+    assert response.status_code == 200
+    analysis = [
+        (m["data_source"]["code"], m["provider_symbol"])
+        for m in response.json()["data_source_instruments"]
+        if m["purpose"] == "ANALYSIS"
+    ]
+    assert analysis == [("BINANCE", "BTCUSDT"), ("KRAKEN", "XBTUSDT")]

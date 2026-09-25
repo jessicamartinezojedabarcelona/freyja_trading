@@ -232,8 +232,32 @@ class MetadataResult:
     provenance: Provenance
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderLimits:
+    """What one provider can actually serve, so callers never assume another's limits.
+
+    `max_candles_per_request` is the most candles one request may return.
+    `history_candles` is how many of the most recent *closed* candles the provider can
+    still serve for a timeframe (None: no practical limit). Anything older is out of
+    reach for this source: it is reported as a gap, never invented and never filled from
+    another source.
+    """
+
+    max_candles_per_request: int
+    history_candles: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.max_candles_per_request < 1:
+            raise ValueError("max_candles_per_request must be at least 1")
+        if self.history_candles is not None and self.history_candles < 1:
+            raise ValueError("history_candles must be at least 1 when set")
+
+
 class CandleProvider(Protocol):
     """Port implemented by every market-data adapter."""
+
+    @property
+    def limits(self) -> ProviderLimits: ...
 
     def get_closed_candles(
         self,

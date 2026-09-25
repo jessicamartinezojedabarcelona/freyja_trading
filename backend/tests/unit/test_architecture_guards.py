@@ -125,12 +125,31 @@ _BROKER_DOMAIN_RE = re.compile(
 )
 
 
+# The one exchange hostname each authorized adapter may contain: its own public
+# market-data host, and nothing else (`www.kraken.com`, another exchange, ... still trip
+# the guard above).
+_OWN_PUBLIC_HOST = {
+    "market_data/kraken_spot_rest.py": "api.kraken.com",
+}
+
+
+def _text_without_own_public_host(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    host = (
+        _OWN_PUBLIC_HOST.get(path.relative_to(SRC_DIR / "infrastructure").as_posix())
+        if (SRC_DIR / "infrastructure" in path.parents)
+        else None
+    )
+    return text.replace(host, "") if host else text
+
+
 # Adapters explicitly authorized so far. Adding a file here is a deliberate,
 # reviewed act: each new provider adapter needs its own task and ADR.
 _AUTHORIZED_INFRASTRUCTURE_FILES = frozenset(
     {
         "market_data/__init__.py",
         "market_data/binance_spot_rest.py",  # MARKET-DATA-BINANCE-REST-001
+        "market_data/kraken_spot_rest.py",  # MARKET-DATA-KRAKEN-REST-001
     }
 )
 
@@ -143,7 +162,7 @@ def test_no_real_broker_or_exchange_client_code_exists() -> None:
     offenders = [
         str(path)
         for path in _source_files(SRC_DIR)
-        if _BROKER_DOMAIN_RE.search(path.read_text(encoding="utf-8"))
+        if _BROKER_DOMAIN_RE.search(_text_without_own_public_host(path))
     ]
     assert offenders == [], (
         f"no source file may reference a real broker/exchange domain: {offenders}"
@@ -191,13 +210,46 @@ def test_binance_adapter_is_public_read_only_and_credential_free() -> None:
     assert found == [], f"Binance adapter must not touch credentials or trading: {found}"
 
 
+_KRAKEN_ADAPTER = SRC_DIR / "infrastructure" / "market_data" / "kraken_spot_rest.py"
+_FORBIDDEN_KRAKEN_TOKENS = (
+    "api-key",
+    "api-sign",
+    "api_key",
+    "apikey",
+    "secret",
+    "signature",
+    "hmac",
+    "nonce",
+    "/0/private",
+    "addorder",
+    "withdraw",
+    "wss://",
+    "ws.kraken",
+    "futures.kraken",
+)
+
+
+def test_kraken_adapter_is_public_read_only_and_credential_free() -> None:
+    """Same boundary as Binance's: public market data only. No key material, signing,
+    private (account/order/funding) endpoints, WebSocket or futures — those need their own
+    authorized tasks, and REAL stays suspended."""
+    text = _KRAKEN_ADAPTER.read_text(encoding="utf-8").lower()
+    found = [token for token in _FORBIDDEN_KRAKEN_TOKENS if token in text]
+    assert found == [], f"Kraken adapter must not touch credentials or trading: {found}"
+
+
+def test_kraken_adapter_only_ever_names_its_own_public_host() -> None:
+    hosts = set(re.findall(r"[a-z0-9.-]+\.kraken\.com", _KRAKEN_ADAPTER.read_text("utf-8")))
+    assert hosts == {"api.kraken.com"}
+
+
 def test_domain_and_application_contracts_never_mention_the_provider() -> None:
-    """Internal contracts must not carry provider types or names: Binance is
+    """Internal contracts must not carry provider types or names: each provider is
     confined to its adapter."""
     offenders = [
         str(path)
         for area in ("domain", "application", "dto", "repositories", "db")
         for path in _source_files(SRC_DIR / area)
-        if "binance" in path.read_text(encoding="utf-8").lower()
+        if any(name in path.read_text(encoding="utf-8").lower() for name in ("binance", "kraken"))
     ]
     assert offenders == [], f"provider names leaked into internal layers: {offenders}"

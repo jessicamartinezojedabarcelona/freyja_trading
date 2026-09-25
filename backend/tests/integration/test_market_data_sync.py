@@ -30,6 +30,7 @@ from freyja_backend.domain.market_data import (
     MarketDataRequestError,
     MetadataResult,
     Provenance,
+    ProviderLimits,
     QualityIssueCode,
     Timeframe,
 )
@@ -140,7 +141,11 @@ def test_stores_closed_candles_exactly_with_provenance(
     assert all(c.quality is DataQuality.OK for c in candles)
     assert all(c.received_at == NOW for c in candles)
     assert {str(c.data_source_id) for c in candles} == {
-        str(market_data_session.execute(text("SELECT id FROM freyja2_data_sources")).scalar_one())
+        str(
+            market_data_session.execute(
+                text("SELECT id FROM freyja2_data_sources WHERE code = 'BINANCE'")
+            ).scalar_one()
+        )
     }
 
 
@@ -330,11 +335,11 @@ def test_unknown_or_unmapped_series_are_refused_before_anything_is_fetched(
     exchange = SyntheticExchange()
     provider = make_provider(exchange)
 
-    with pytest.raises(MarketDataConfigurationError, match="'KRAKEN' is not active"):
+    with pytest.raises(MarketDataConfigurationError, match="'NOWHERE' is not active"):
         sync_candles(
             market_data_session,
             provider,
-            source_code="KRAKEN",
+            source_code="NOWHERE",
             instrument=BTC,
             timeframe=M1,
             limit=5,
@@ -396,6 +401,8 @@ def test_inactive_source_mapping_or_timeframe_association_is_refused(
 
 class _MislabelledProvider:
     """A provider that answers for another symbol than the catalog maps."""
+
+    limits = ProviderLimits(max_candles_per_request=1000)
 
     def get_closed_candles(
         self,

@@ -232,7 +232,7 @@ Consultar los heads disponibles:
 uv run alembic heads
 ```
 
-Actualmente existe un único head: `0013_market_data_persistence (head)`.
+Actualmente existe un único head: `0014_kraken_data_source (head)`.
 
 Consultar la revisión actual aplicada:
 
@@ -327,7 +327,7 @@ está en marcha, sin depender de ningún cron externo. Se activa con variables d
 | -------- | ----- | ----------- |
 | `FREYJA_CANDLE_SCANNER_ENABLED` | `true` / `false` (defecto `false`) | Arranca el escáner con la aplicación. |
 | `FREYJA_CANDLE_SCANNER_INTERVAL_SECONDS` | 30 a 3600 (defecto 60) | Pausa entre pasadas. |
-| `FREYJA_CANDLE_SCANNER_SOURCES` | `BINANCE` (defecto) | Fuentes a leer, separadas por comas. |
+| `FREYJA_CANDLE_SCANNER_SOURCES` | `BINANCE` (defecto), `KRAKEN` | Fuentes a leer, separadas por comas. Cada fuente guarda su propia serie. |
 
 En cada pasada, cada serie (fuente × instrumento × temporalidad) se comprueba por separado:
 si ya está al día **no se hace ninguna petición**; si le faltan pocas velas se piden las
@@ -358,6 +358,15 @@ buscar:
 
 Los eventos llevan nombres fijos y campos pequeños; nunca contraseñas, tokens, cookies ni
 correos (lo vigila `tests/unit/test_architecture_guards.py`).
+
+**Kraken como segunda fuente (ADR 0007).** Además de Binance, el escáner y la CLI
+(`freyja-sync-candles --source KRAKEN`) pueden leer las velas públicas de Kraken. Es una serie
+aparte: mismos instrumentos y periodos, pero sin mezclarse con la de Binance. Diferencias que
+conviene conocer: Kraken solo sirve sus últimas 720 velas por temporalidad (en 1 m, unas 12 h), así
+que tras una parada más larga queda un hueco visible, nunca velas inventadas; y limita las
+peticiones, por lo que el adaptador las espacia. Para activarla en un entorno hay que aplicar antes
+la migración 0014 (en Neon, con `docs/operations/neon-0014-kraken-manual.sql`) y añadir `KRAKEN` a
+`FREYJA_CANDLE_SCANNER_SOURCES`. Mientras no se haga, nada cambia: Mercados sigue abriendo en Binance.
 
 Las velas guardadas se leen con `GET /api/v1/market-data/candles` (requiere sesión):
 `instrument_id` y `data_source_code` obligatorios, `timeframe_code` (por defecto
@@ -750,7 +759,7 @@ freyja_trading/
   `docker compose logs postgres`; normalmente indica que el proceso sigue
   inicializando o que las variables de entorno no son válidas. No borres
   el volumen como primera solución.
-- **`alembic current` aparece vacío o distinto de `0013_market_data_persistence (head)`**:
+- **`alembic current` aparece vacío o distinto de `0014_kraken_data_source (head)`**:
   ejecuta `uv run alembic upgrade head` desde `backend/` con PostgreSQL
   `healthy`. Un valor vacío es normal en una base de datos recién creada
   antes de aplicar migraciones.

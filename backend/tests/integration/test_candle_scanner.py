@@ -28,6 +28,7 @@ from freyja_backend.domain.market_data import (
     InstrumentRef,
     MetadataResult,
     Provenance,
+    ProviderLimits,
     Timeframe,
 )
 from freyja_backend.infrastructure.market_data.binance_spot_rest import (
@@ -243,6 +244,8 @@ def test_an_instrument_missing_from_the_catalog_or_without_a_provider_is_not_con
 
 class _WrongSymbolProvider:
     """A provider that answers for a different symbol than the catalog maps."""
+
+    limits = ProviderLimits(max_candles_per_request=1000)
 
     def get_closed_candles(
         self,

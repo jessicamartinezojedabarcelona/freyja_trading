@@ -12,7 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 BACKEND_DIR = REPO_ROOT / "backend"
 FRONTEND_DIR = REPO_ROOT / "frontend"
 
-EXPECTED_HEAD = "0013_market_data_persistence (head)"
+EXPECTED_HEAD = "0014_kraken_data_source (head)"
 _ALEMBIC_INFO_PREFIX = "INFO  [alembic."
 
 

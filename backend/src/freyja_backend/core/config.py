@@ -10,7 +10,7 @@ LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 _ROOT_ENV_FILE = Path(__file__).resolve().parents[4] / ".env"
 
 # Market-data sources the background candle scanner knows how to read.
-SCANNER_SOURCES = frozenset({"BINANCE"})
+SCANNER_SOURCES = frozenset({"BINANCE", "KRAKEN"})
 
 # Development-only defaults. Also used to detect a production deployment that
 # forgot to override them (see _require_production_configuration below).
