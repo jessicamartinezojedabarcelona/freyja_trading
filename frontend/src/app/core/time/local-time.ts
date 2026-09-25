@@ -65,12 +65,14 @@ const DATE_TIME: Intl.DateTimeFormatOptions = {
   second: '2-digit',
 };
 
-/** "25/09/2026, 19:41:00 GMT+2" for an ISO instant; the zone is always explicit. */
+/** "25/09/2026, 19:41:00" for an ISO instant: the time on the person's own clock, as it is,
+ * with no offset attached to read wrongly ("18:58 GMT+2" looks like a time still to convert).
+ * The zone is stated once, next to the data, with `zoneLabel`. */
 export function formatInstant(iso: string | null, zone: string): string {
   if (iso === null) return '—';
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return '—';
-  return `${format(zone, 'datetime', DATE_TIME).format(date)} ${zoneAbbreviation(zone, date)}`;
+  return format(zone, 'datetime', DATE_TIME).format(date);
 }
 
 /** "19:45:12", the wall clock in the zone (no zone printed: the page already states it). */
