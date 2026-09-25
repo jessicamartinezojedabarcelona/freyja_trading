@@ -16,7 +16,12 @@ from typing import Any
 
 import pytest
 
-from freyja_backend.domain import pattern_detection, pattern_double, pattern_triple
+from freyja_backend.domain import (
+    pattern_detection,
+    pattern_double,
+    pattern_head_shoulders,
+    pattern_triple,
+)
 from freyja_backend.domain.chart_pattern import (
     BoundaryRole,
     BreakoutDirection,
@@ -41,6 +46,10 @@ from freyja_backend.domain.pattern_detection import (
     update_instances,
 )
 from freyja_backend.domain.pattern_double import DoubleBottomDetector, DoubleTopDetector
+from freyja_backend.domain.pattern_head_shoulders import (
+    HeadAndShouldersBottomDetector,
+    HeadAndShouldersTopDetector,
+)
 from freyja_backend.domain.pattern_triple import TripleBottomDetector, TripleTopDetector
 from tests.unit.test_market_trend import (
     AUTHORIZED,
@@ -63,6 +72,8 @@ DETECTORS: list[PatternDetector] = [
     DoubleBottomDetector(),
     TripleTopDetector(),
     TripleBottomDetector(),
+    HeadAndShouldersTopDetector(),
+    HeadAndShouldersBottomDetector(),
 ]
 
 
@@ -90,6 +101,7 @@ def context_for(candles: Sequence[Candle], **params: Any) -> DetectionContext:
 # An uptrend that peaks at 130, then the figure, then what the price does next.
 DOUBLE_TOP = [*UP, 118, "130.5", 105]
 TRIPLE_TOP = [*UP, 118, "130.2", "117.6", "129.8", 100]
+HEAD_AND_SHOULDERS = [*UP, 118, 140, 119, 131, 105]
 
 
 def instances_of(
@@ -633,6 +645,12 @@ _FIGURES = {
     "double bottom": (DoubleBottomDetector, mirror(DOUBLE_TOP), 196),
     "triple top": (TripleTopDetector, TRIPLE_TOP, 99),
     "triple bottom": (TripleBottomDetector, mirror(TRIPLE_TOP), 201),
+    "head and shoulders top": (HeadAndShouldersTopDetector, HEAD_AND_SHOULDERS, 104),
+    "head and shoulders bottom": (
+        HeadAndShouldersBottomDetector,
+        mirror(HEAD_AND_SHOULDERS),
+        196,
+    ),
 }
 
 
@@ -729,27 +747,26 @@ def test_each_detector_is_its_own_unit_with_its_own_version() -> None:
         "double-bottom-detector-v1",
         "triple-top-detector-v1",
         "triple-bottom-detector-v1",
-    }
-    assert {d.pattern_type for d in DETECTORS} == {
-        PatternType.DOUBLE_TOP,
-        PatternType.DOUBLE_BOTTOM,
-        PatternType.TRIPLE_TOP,
-        PatternType.TRIPLE_BOTTOM,
+        "head-and-shoulders-top-detector-v1",
+        "head-and-shoulders-bottom-detector-v1",
     }
     assert {(d.pattern_type, d.side) for d in DETECTORS} == {
         (PatternType.DOUBLE_TOP, Side.TOP),
         (PatternType.DOUBLE_BOTTOM, Side.BOTTOM),
         (PatternType.TRIPLE_TOP, Side.TOP),
         (PatternType.TRIPLE_BOTTOM, Side.BOTTOM),
+        (PatternType.HEAD_AND_SHOULDERS_TOP, Side.TOP),
+        (PatternType.HEAD_AND_SHOULDERS_BOTTOM, Side.BOTTOM),
     }
-    # Double and triple share only the plumbing: neither imports the other's geometry.
-    for module in (pattern_double, pattern_triple):
+    # Each family shares only the plumbing: none imports another's geometry.
+    families = {
+        pattern_double: ("pattern_triple", "pattern_head_shoulders"),
+        pattern_triple: ("pattern_double", "pattern_head_shoulders"),
+        pattern_head_shoulders: ("pattern_double", "pattern_triple"),
+    }
+    for module, others in families.items():
         text = Path(str(module.__file__)).read_text(encoding="utf-8")
-        assert (
-            "pattern_triple" not in text
-            if module is pattern_double
-            else "pattern_double" not in text
-        )
+        assert not any(other in text for other in others), module.__name__
 
 
 def _doc_parameters() -> dict[str, Decimal]:
@@ -775,6 +792,8 @@ def test_the_documented_parameters_are_exactly_the_default_ones() -> None:
         "max_age_candles": Decimal(params.max_age_candles),
         "exceed_margin": params.exceed_margin,
         "min_history": Decimal(params.min_history),
+        "head_prominence": params.head_prominence,
+        "shoulder_tolerance": params.shoulder_tolerance,
         "pivot_params.k": Decimal(params.pivot_params.k),
     }
     assert params.version == "reversal-params-v1"
@@ -792,6 +811,8 @@ def test_the_documented_parameters_are_exactly_the_default_ones() -> None:
         {"failure_window_candles": 0},
         {"max_age_candles": True},
         {"min_history": 1.5},
+        {"head_prominence": Decimal(0)},
+        {"shoulder_tolerance": Decimal(2)},
         {"range_window_candles": -1},
         {"version": " "},
     ],
@@ -850,7 +871,7 @@ def test_the_detectors_only_read_the_domain_never_a_candlestick_pattern_or_an_in
         "decimal",
         "typing",
     }
-    for module in (pattern_detection, pattern_double, pattern_triple):
+    for module in (pattern_detection, pattern_double, pattern_triple, pattern_head_shoulders):
         tree = ast.parse(Path(str(module.__file__)).read_text(encoding="utf-8"))
         imported = {
             n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module

@@ -68,6 +68,9 @@ from freyja_backend.domain.market_trend import TrendState, classify_trend
 # Bump on ANY change to a threshold or to how the parameters are read.
 REVERSAL_PARAMETER_VERSION = "reversal-params-v1"
 
+# Prices are stored with 12 decimals (NUMERIC(38,12)): a computed level is never finer than that.
+_PRICE_STEP = Decimal("0.000000000001")
+
 
 class InvalidDetectionRequestError(ValueError):
     """The request itself is wrong (not the data): a configuration error to fix."""
@@ -136,11 +139,24 @@ class ReversalParams:
     exceed_margin: Decimal = Decimal("0.15")
     # Candles the data must have (and be free of gaps over) for the figure to be judged at all.
     min_history: int = MIN_HISTORY_CANDLES
+    # Head and shoulders only. The head must stand out from the higher shoulder by at least this
+    # fraction of the height, or it is not a head.
+    head_prominence: Decimal = Decimal("0.10")
+    # Head and shoulders only. The two shoulders are comparable within this fraction of the
+    # height (looser than the extremes of a double top: shoulders are rarely level).
+    shoulder_tolerance: Decimal = Decimal("0.30")
 
     def __post_init__(self) -> None:
         if not self.version.strip():
             raise InvalidDetectionRequestError("the parameters must carry their version")
-        for name in ("level_tolerance", "min_height_fraction", "breakout_margin", "exceed_margin"):
+        for name in (
+            "level_tolerance",
+            "min_height_fraction",
+            "breakout_margin",
+            "exceed_margin",
+            "head_prominence",
+            "shoulder_tolerance",
+        ):
             value = getattr(self, name)
             if not isinstance(value, Decimal) or not (Decimal(0) < value < Decimal(1)):
                 raise InvalidDetectionRequestError(f"{name} must be a Decimal between 0 and 1")
@@ -305,6 +321,25 @@ def reference_range(closed: Sequence[Candle], end_index: int, window: int) -> De
 
 def anchor_of(pivot: Pivot, label: str) -> AnchorPivot:
     return AnchorPivot.from_pivot(pivot, label)
+
+
+def line_through(
+    first_time: datetime, first_price: Decimal, second_time: datetime, second_price: Decimal
+) -> Callable[[datetime], Decimal]:
+    """The straight line through two points, as a function of time: `price(t)` is the line's price
+    at instant `t`, also before the first point and after the second. `Decimal` arithmetic, never a
+    float, multiplying before dividing and rounded to the 12 decimals prices are stored with; a
+    line needs two different instants."""
+    span = Decimal((second_time - first_time).total_seconds())
+    if span <= 0:
+        raise InvalidDetectionRequestError("a line is drawn through two different instants")
+    rise = second_price - first_price
+
+    def price(at: datetime) -> Decimal:
+        elapsed = Decimal((at - first_time).total_seconds())
+        return (first_price + rise * elapsed / span).quantize(_PRICE_STEP)
+
+    return price
 
 
 def prior_trend_evidence(
