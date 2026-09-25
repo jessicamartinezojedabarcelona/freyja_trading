@@ -584,17 +584,24 @@ def test_anything_that_makes_it_another_figure_makes_another_identity(
 
 # From each state, the states an evaluation may go to. Written out on its own, from the task:
 # a figure forms, becomes valid, is broken out of, and the breakout is confirmed or fails; at
-# any point it may be invalidated; FAILED_BREAKOUT and INVALIDATED are final.
+# any point it may be invalidated; FAILED_BREAKOUT and INVALIDATED are final. It moves forward,
+# possibly several milestones at once (they can become knowable together), never backwards.
+_RESOLVED = {S.CONFIRMED_UP, S.CONFIRMED_DOWN, S.FAILED_BREAKOUT}
 ALLOWED: dict[PatternState, set[PatternState]] = {
-    S.FORMING: {S.FORMING, S.GEOMETRICALLY_VALID, S.INVALIDATED},
-    S.GEOMETRICALLY_VALID: {S.GEOMETRICALLY_VALID, S.BREAKOUT_PENDING_CONFIRMATION, S.INVALIDATED},
-    S.BREAKOUT_PENDING_CONFIRMATION: {
+    S.FORMING: {
+        S.FORMING,
+        S.GEOMETRICALLY_VALID,
         S.BREAKOUT_PENDING_CONFIRMATION,
-        S.CONFIRMED_UP,
-        S.CONFIRMED_DOWN,
-        S.FAILED_BREAKOUT,
         S.INVALIDATED,
+        *_RESOLVED,
     },
+    S.GEOMETRICALLY_VALID: {
+        S.GEOMETRICALLY_VALID,
+        S.BREAKOUT_PENDING_CONFIRMATION,
+        S.INVALIDATED,
+        *_RESOLVED,
+    },
+    S.BREAKOUT_PENDING_CONFIRMATION: {S.BREAKOUT_PENDING_CONFIRMATION, S.INVALIDATED, *_RESOLVED},
     S.CONFIRMED_UP: {S.CONFIRMED_UP, S.FAILED_BREAKOUT, S.INVALIDATED},
     S.CONFIRMED_DOWN: {S.CONFIRMED_DOWN, S.FAILED_BREAKOUT, S.INVALIDATED},
     S.FAILED_BREAKOUT: set(),
@@ -660,14 +667,23 @@ def test_a_figure_can_be_unjudgeable_at_any_moment_and_then_carry_on() -> None:
             assert paused.advance(evaluation_in(target, step + 1)).state is target
 
 
-def test_an_interruption_does_not_let_a_figure_skip_or_go_back() -> None:
+def test_an_interruption_does_not_let_a_figure_go_back() -> None:
     valid = instance_from(S.FORMING, S.GEOMETRICALLY_VALID).advance(
         evaluation_in(S.INSUFFICIENT_DATA, 2)
     )
     with pytest.raises(InvalidPatternError, match="GEOMETRICALLY_VALID cannot go to FORMING"):
         valid.advance(evaluation_in(S.FORMING, 3))
-    with pytest.raises(InvalidPatternError, match="cannot go to CONFIRMED_UP"):
-        valid.advance(evaluation_in(S.CONFIRMED_UP, 3))
+    # Forward is fine: the pause hides nothing that the state before it could not have done.
+    assert valid.advance(evaluation_in(S.CONFIRMED_UP, 3)).state is S.CONFIRMED_UP
+
+
+def test_several_milestones_known_at_once_are_one_evaluation_not_a_refusal() -> None:
+    """A pivot is confirmed k candles late: the breakout it precedes may already have happened,
+    so a figure can go from forming straight to a confirmed breakout in one evaluation."""
+    forming = instance_from(S.FORMING)
+    assert forming.advance(evaluation_in(S.CONFIRMED_DOWN, 1)).state is S.CONFIRMED_DOWN
+    valid = instance_from(S.FORMING, S.GEOMETRICALLY_VALID)
+    assert valid.advance(evaluation_in(S.FAILED_BREAKOUT, 2)).state is S.FAILED_BREAKOUT
 
 
 def test_a_figure_that_was_born_without_enough_data_can_still_start_forming() -> None:
@@ -682,8 +698,7 @@ def test_a_figure_that_was_born_without_enough_data_can_still_start_forming() ->
     )
     assert born.advance(evaluation_in(S.FORMING, 1)).state is S.FORMING
     assert born.advance(evaluation_in(S.GEOMETRICALLY_VALID, 1)).state is S.GEOMETRICALLY_VALID
-    with pytest.raises(InvalidPatternError):
-        born.advance(evaluation_in(S.CONFIRMED_UP, 1))
+    assert born.advance(evaluation_in(S.CONFIRMED_UP, 1)).state is S.CONFIRMED_UP  # forward
 
 
 @pytest.mark.parametrize("final", [S.INVALIDATED, S.FAILED_BREAKOUT])
