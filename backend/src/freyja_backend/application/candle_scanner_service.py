@@ -29,6 +29,7 @@ _FAILURE_OUTCOMES = frozenset(
         ScanOutcome.NOT_CONFIGURED,
         ScanOutcome.REJECTED,
         ScanOutcome.DATABASE_ERROR,
+        ScanOutcome.COOLING_DOWN,
     }
 )
 
