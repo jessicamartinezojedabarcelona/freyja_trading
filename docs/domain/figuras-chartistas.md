@@ -124,23 +124,23 @@ exigir más, nunca menos.
 
 | Identificador | Nombre | Roles | Sesgo | Geometría y lectura tradicional | Anclas |
 | ------------- | ------ | ----- | ----- | -------------------------------- | ------ |
-| `BULL_FLAG` | Bandera alcista | `CONTINUATION` | `BULLISH` | Un **mástil**: avance brusco y de corta duración. Le sigue una consolidación breve entre dos fronteras aproximadamente paralelas, ligeramente descendentes o laterales. Se confirma con el cierre por encima de la frontera superior. | 2 del mástil (L, H) + 2 por frontera |
-| `BEAR_FLAG` | Bandera bajista | `CONTINUATION` | `BEARISH` | Un mástil de caída brusca y una consolidación breve entre fronteras aproximadamente paralelas, ligeramente ascendentes o laterales. Se confirma con el cierre por debajo de la frontera inferior. | 2 del mástil (H, L) + 2 por frontera |
-| `BULL_PENNANT` | Banderín alcista | `CONTINUATION` | `BULLISH` | Un mástil alcista seguido de una consolidación breve entre fronteras que **convergen** (un triángulo pequeño). Se confirma con el cierre por encima. | 2 del mástil + 2 por frontera |
-| `BEAR_PENNANT` | Banderín bajista | `CONTINUATION` | `BEARISH` | Un mástil bajista seguido de una consolidación breve entre fronteras que convergen. Se confirma con el cierre por debajo. | 2 del mástil + 2 por frontera |
-| `ASCENDING_TRIANGLE` | Triángulo ascendente | `CONTINUATION`, `REVERSAL` | `BULLISH` | Una **resistencia horizontal** y un soporte **ascendente**: las fronteras convergen. Tradicionalmente continúa una tendencia alcista, pero también puede aparecer al final de una bajista. Se confirma con el cierre por encima de la resistencia. | 2 por frontera |
-| `DESCENDING_TRIANGLE` | Triángulo descendente | `CONTINUATION`, `REVERSAL` | `BEARISH` | Un **soporte horizontal** y una resistencia **descendente**: convergen. Tradicionalmente continúa una tendencia bajista, pero también puede coronar una alcista. Se confirma con el cierre por debajo del soporte. | 2 por frontera |
-| `SYMMETRICAL_TRIANGLE` | Triángulo simétrico | `CONTINUATION`, `REVERSAL`, `COMPRESSION` | `BREAKOUT_DEPENDENT` | Máximos descendentes y mínimos ascendentes: dos fronteras que convergen sin favorecer un lado. **Su dirección depende de la ruptura**: la tradición lo lee como continuación, pero puede revertir. | 2 por frontera |
-| `RECTANGLE` | Rectángulo | `CONSOLIDATION`, `CONTINUATION`, `REVERSAL` | `BREAKOUT_DEPENDENT` | Un soporte y una resistencia **horizontales y paralelos** con contactos en ambos. Es una contención del precio; **su dirección depende de la ruptura**. | 2 por frontera |
+| `BULL_FLAG` | Bandera alcista | `CONTINUATION` | `BULLISH` | Un **mástil**: avance brusco y de corta duración. Le sigue una consolidación breve entre dos fronteras aproximadamente paralelas, ligeramente descendentes o laterales. Se confirma con el cierre por encima de la frontera superior. | 5 (mástil L, H; frontera superior H, H; frontera inferior L, L) |
+| `BEAR_FLAG` | Bandera bajista | `CONTINUATION` | `BEARISH` | Un mástil de caída brusca y una consolidación breve entre fronteras aproximadamente paralelas, ligeramente ascendentes o laterales. Se confirma con el cierre por debajo de la frontera inferior. | 5 (mástil H, L; frontera inferior L, L; frontera superior H, H) |
+| `BULL_PENNANT` | Banderín alcista | `CONTINUATION` | `BULLISH` | Un mástil alcista seguido de una consolidación breve entre fronteras que **convergen** (un triángulo pequeño). Se confirma con el cierre por encima. | 5 (mástil y dos contactos por frontera, uno de ellos compartido con el mástil) |
+| `BEAR_PENNANT` | Banderín bajista | `CONTINUATION` | `BEARISH` | Un mástil bajista seguido de una consolidación breve entre fronteras que convergen. Se confirma con el cierre por debajo. | 5 (mástil y dos contactos por frontera, uno de ellos compartido con el mástil) |
+| `ASCENDING_TRIANGLE` | Triángulo ascendente | `CONTINUATION`, `REVERSAL` | `BULLISH` | Una **resistencia horizontal** y un soporte **ascendente**: las fronteras convergen. Tradicionalmente continúa una tendencia alcista, pero también puede aparecer al final de una bajista. Se confirma con el cierre por encima de la resistencia. | 4 (2 por frontera) |
+| `DESCENDING_TRIANGLE` | Triángulo descendente | `CONTINUATION`, `REVERSAL` | `BEARISH` | Un **soporte horizontal** y una resistencia **descendente**: convergen. Tradicionalmente continúa una tendencia bajista, pero también puede coronar una alcista. Se confirma con el cierre por debajo del soporte. | 4 (2 por frontera) |
+| `SYMMETRICAL_TRIANGLE` | Triángulo simétrico | `CONTINUATION`, `REVERSAL`, `COMPRESSION` | `BREAKOUT_DEPENDENT` | Máximos descendentes y mínimos ascendentes: dos fronteras que convergen sin favorecer un lado. **Su dirección depende de la ruptura**: la tradición lo lee como continuación, pero puede revertir. | 4 (2 por frontera) |
+| `RECTANGLE` | Rectángulo | `CONSOLIDATION`, `CONTINUATION`, `REVERSAL` | `BREAKOUT_DEPENDENT` | Un soporte y una resistencia **horizontales y paralelos** con contactos en ambos. Es una contención del precio; **su dirección depende de la ruptura**. | 4 (2 por frontera) |
 
 ### 4.3 Compresión, expansión y contextuales
 
 | Identificador | Nombre | Roles | Sesgo | Geometría y lectura tradicional | Anclas |
 | ------------- | ------ | ----- | ----- | -------------------------------- | ------ |
-| `RISING_WEDGE` | Cuña ascendente | `REVERSAL`, `CONTINUATION`, `COMPRESSION` | `BEARISH` | Dos fronteras **ascendentes que convergen** (la inferior más inclinada). Tradicionalmente bajista: revierte una tendencia alcista o, dentro de una bajista, continúa la caída. | 2 por frontera |
-| `FALLING_WEDGE` | Cuña descendente | `REVERSAL`, `CONTINUATION`, `COMPRESSION` | `BULLISH` | Dos fronteras **descendentes que convergen**. Tradicionalmente alcista: revierte una bajista o, dentro de una alcista, continúa la subida. | 2 por frontera |
+| `RISING_WEDGE` | Cuña ascendente | `REVERSAL`, `CONTINUATION`, `COMPRESSION` | `BEARISH` | Dos fronteras **ascendentes que convergen** (la inferior más inclinada). Tradicionalmente bajista: revierte una tendencia alcista o, dentro de una bajista, continúa la caída. | 4 (2 por frontera) |
+| `FALLING_WEDGE` | Cuña descendente | `REVERSAL`, `CONTINUATION`, `COMPRESSION` | `BULLISH` | Dos fronteras **descendentes que convergen**. Tradicionalmente alcista: revierte una bajista o, dentro de una alcista, continúa la subida. | 4 (2 por frontera) |
 | `BROADENING_FORMATION` | Formación expansiva | `REVERSAL`, `EXPANSION` | `CONTEXT_DEPENDENT` | Máximos crecientes y mínimos decrecientes: dos fronteras que **divergen** y un rango cada vez mayor. Suele asociarse con el agotamiento de la tendencia previa; el sentido lo da esa tendencia. | 5 (3 de un tipo, 2 del otro) |
-| `DIAMOND` | Diamante | `REVERSAL`, `EXPANSION`, `COMPRESSION` | `CONTEXT_DEPENDENT` | Una fase que se ensancha seguida de otra que se estrecha, con forma de rombo. Figura poco frecuente, asociada al agotamiento de la tendencia previa; el sentido lo da esa tendencia. | 6 o más, en dos fases |
+| `DIAMOND` | Diamante | `REVERSAL`, `EXPANSION`, `COMPRESSION` | `CONTEXT_DEPENDENT` | Una fase que se ensancha seguida de otra que se estrecha, con forma de rombo. Figura poco frecuente, asociada al agotamiento de la tendencia previa; el sentido lo da esa tendencia. | 6 (o más, en dos fases) |
 
 Notas sobre la tabla:
 
@@ -151,8 +151,10 @@ Notas sobre la tabla:
 - **`CONTEXT_DEPENDENT`** significa que el sesgo solo existe respecto de una tendencia previa
   (revierte la que traía). Cómo se conoce esa tendencia es el punto 2, y cómo se combina con la
   figura es POINT3-HYPOTHESIS-001.
-- **Las anclas de una fase** son los pivotes que definen las fronteras: «2 por frontera» quiere
-  decir dos contactos como mínimo en cada una.
+- **Las anclas** son el número **total de pivotes distintos** que la geometría necesita como
+  mínimo; el primer valor de la columna es ese total. «2 por frontera» quiere decir dos contactos
+  como mínimo en cada una. En las banderas y banderines el extremo del mástil es también el
+  primer contacto de una de las fronteras, y se cuenta una sola vez.
 - **Las figuras con mástil** exigen que el avance o la caída previos sean *bruscos y cortos*
   frente a la consolidación posterior; cuánto es «brusco» y «corto» lo fija el detector.
 
