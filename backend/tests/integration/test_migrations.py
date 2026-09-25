@@ -111,7 +111,7 @@ def test_upgrade_downgrade_upgrade_cycle(temp_database_name: str) -> None:
             current = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-        assert current == "0014_kraken_data_source"
+        assert current == "0015_context_snapshots"
 
         command.downgrade(cfg, "base")
         with engine.connect() as connection:
@@ -123,7 +123,7 @@ def test_upgrade_downgrade_upgrade_cycle(temp_database_name: str) -> None:
         command.upgrade(cfg, "head")
         with engine.connect() as connection:
             final = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert final == "0014_kraken_data_source"
+        assert final == "0015_context_snapshots"
     finally:
         engine.dispose()
 
@@ -235,7 +235,7 @@ def test_upgrade_from_empty_to_head_reaches_expected_head_with_exact_seed(
             current = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            assert current == "0014_kraken_data_source"
+            assert current == "0015_context_snapshots"
             counts = {
                 table: connection.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
                 for table in _CATALOG_TABLES
@@ -542,7 +542,7 @@ def test_0012_downgrade_upgrade_is_reversible(temp_database_name: str) -> None:
             current = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            assert current == "0014_kraken_data_source"
+            assert current == "0015_context_snapshots"
     finally:
         engine.dispose()
 
@@ -1209,7 +1209,7 @@ def test_0014_downgrade_refuses_to_delete_stored_kraken_candles(temp_database_na
         # Nothing was touched: the revision, the source, its mappings and the candle remain.
         with engine.connect() as connection:
             assert _scalar(connection, "SELECT version_num FROM alembic_version") == (
-                "0014_kraken_data_source"
+                "0015_context_snapshots"
             )
             assert [row[0] for row in _data_sources(connection)] == ["BINANCE", "KRAKEN"]
             assert len(_mappings_of(connection, "KRAKEN")) == 4
@@ -1307,7 +1307,7 @@ def test_0014_manual_neon_script_does_exactly_what_the_migration_does(
         command.downgrade(cfg, _BEFORE_KRAKEN)  # Alembic accepts what the script left behind
         with engine.connect() as connection:
             assert _data_sources(connection) == [("BINANCE", "EXCHANGE", True)]
-        command.upgrade(cfg, "head")
+        command.upgrade(cfg, "0014_kraken_data_source")  # the script's revision, not head
         with engine.connect() as connection:
             by_migration = _kraken_state(connection)
 
@@ -1338,5 +1338,242 @@ def test_0014_manual_neon_script_refuses_to_run_twice_or_on_the_wrong_revision(
             connection.exec_driver_sql(script)
         with engine.connect() as connection:
             assert _kraken_state(connection) == after_first  # the second run changed nothing
+    finally:
+        engine.dispose()
+
+
+# --- 0015_context_snapshots (POINT2-SNAPSHOT-001) ----------------------------------------------
+
+_SNAPSHOTS_TABLE = "freyja2_context_snapshots"
+_BEFORE_SNAPSHOTS = "0014_kraken_data_source"
+_MANUAL_SNAPSHOTS_SQL = (
+    Path(__file__).resolve().parents[3]
+    / "docs"
+    / "operations"
+    / "neon-0015-context-snapshots-manual.sql"
+)
+
+# The smallest row the table accepts: a document that agrees with every copied column.
+_INSERT_SNAPSHOT = text(
+    """
+    INSERT INTO freyja2_context_snapshots (
+        id, content_hash, snapshot_version, instrument_id, data_source_id,
+        signal_timeframe_id, context_timeframe_id, observed_at, computed_at,
+        signal_trend, context_trend, signal_data_quality, context_data_quality,
+        market_session, policy_version, required_relationship, orientation,
+        policy_outcome, context_compatible, reasons, document)
+    SELECT
+        gen_random_uuid(), repeat('a', 64), 'context-snapshot-v1', i.instrument_id, s.id,
+        t5.id, t1h.id, now(), now(),
+        'UPTREND', 'UPTREND', 'OK', 'OK',
+        NULL, 'p-v1', 'WITH_TREND', 'BULLISH',
+        'COMPATIBLE', true, '{}',
+        '{"snapshot_version": "context-snapshot-v1",
+          "observed": {"signal": {"trend": "UPTREND", "data_quality": "OK"},
+                       "context": {"trend": "UPTREND", "data_quality": "OK"},
+                       "market_session": null},
+          "judged": {"policy_version": "p-v1", "required_relationship": "WITH_TREND",
+                     "orientation": "BULLISH", "outcome": "COMPATIBLE",
+                     "context_compatible": true}}'::jsonb
+    FROM freyja2_instruments i, freyja2_data_sources s,
+         freyja2_timeframes t5, freyja2_timeframes t1h
+    WHERE i.canonical_symbol = 'BTC/USDT' AND s.code = 'BINANCE'
+      AND t5.code = '5m' AND t1h.code = '1h'
+    """
+)
+
+
+def _snapshot_schema(connection: Connection) -> dict[str, object]:
+    """Everything the migration is responsible for, in the form PostgreSQL itself reports it."""
+    table = f"'{_SNAPSHOTS_TABLE}'::regclass"
+    return {
+        "columns": connection.execute(
+            text(
+                "SELECT column_name, data_type, udt_name, is_nullable, character_maximum_length"
+                " FROM information_schema.columns WHERE table_name = :t ORDER BY ordinal_position"
+            ),
+            {"t": _SNAPSHOTS_TABLE},
+        ).all(),
+        "constraints": connection.execute(
+            text(
+                "SELECT conname, contype, pg_get_constraintdef(oid) FROM pg_constraint"
+                f" WHERE conrelid = {table} ORDER BY conname"
+            )
+        ).all(),
+        "indexes": connection.execute(
+            text("SELECT indexdef FROM pg_indexes WHERE tablename = :t ORDER BY indexname"),
+            {"t": _SNAPSHOTS_TABLE},
+        ).all(),
+        "triggers": connection.execute(
+            text(
+                "SELECT pg_get_triggerdef(oid) FROM pg_trigger"
+                f" WHERE tgrelid = {table} AND NOT tgisinternal ORDER BY tgname"
+            )
+        ).all(),
+        # The body's indentation is not semantic: compared with its whitespace collapsed.
+        "functions": [
+            " ".join(str(row[0]).split())
+            for row in connection.execute(
+                text(
+                    "SELECT pg_get_functiondef(oid) FROM pg_proc"
+                    " WHERE proname = 'freyja2_context_snapshots_reject_update'"
+                )
+            )
+        ],
+        "revision": connection.execute(text("SELECT version_num FROM alembic_version")).all(),
+    }
+
+
+def test_0015_adds_the_snapshots_table_and_changes_nothing_else(temp_database_name: str) -> None:
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, _BEFORE_SNAPSHOTS)
+        with engine.connect() as connection:
+            assert _existing_tables(connection, (_SNAPSHOTS_TABLE,)) == set()
+            catalog_before = {
+                table: connection.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
+                for table in _CATALOG_TABLES
+            }
+            sources_before = _data_sources(connection)
+
+        command.upgrade(cfg, "head")
+        with engine.connect() as connection:
+            assert _existing_tables(connection, (_SNAPSHOTS_TABLE,)) == {_SNAPSHOTS_TABLE}
+            assert _scalar(connection, f"SELECT COUNT(*) FROM {_SNAPSHOTS_TABLE}") == 0
+            assert {
+                table: connection.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
+                for table in _CATALOG_TABLES
+            } == catalog_before
+            assert _data_sources(connection) == sources_before
+            assert _existing_tables(connection, _MARKET_DATA_TABLES) == set(_MARKET_DATA_TABLES)
+    finally:
+        engine.dispose()
+
+
+def test_0015_downgrade_upgrade_is_reversible_while_no_snapshot_is_stored(
+    temp_database_name: str,
+) -> None:
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, "head")
+        command.downgrade(cfg, _BEFORE_SNAPSHOTS)
+        with engine.connect() as connection:
+            assert (
+                _scalar(connection, "SELECT version_num FROM alembic_version") == _BEFORE_SNAPSHOTS
+            )
+            assert _existing_tables(connection, (_SNAPSHOTS_TABLE,)) == set()
+            leftover = _scalar(
+                connection,
+                "SELECT COUNT(*) FROM pg_proc"
+                " WHERE proname = 'freyja2_context_snapshots_reject_update'",
+            )
+            assert leftover == 0  # nothing of it is left behind
+
+        command.upgrade(cfg, "head")
+        with engine.connect() as connection:
+            assert _existing_tables(connection, (_SNAPSHOTS_TABLE,)) == {_SNAPSHOTS_TABLE}
+    finally:
+        engine.dispose()
+
+
+def test_0015_downgrade_refuses_to_delete_stored_snapshots(temp_database_name: str) -> None:
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, "head")
+        with engine.begin() as connection:
+            connection.execute(_INSERT_SNAPSHOT)
+
+        with pytest.raises(RuntimeError, match="would delete 1 stored context snapshot"):
+            command.downgrade(cfg, _BEFORE_SNAPSHOTS)
+
+        with engine.connect() as connection:  # nothing was touched
+            assert _scalar(connection, "SELECT version_num FROM alembic_version") == (
+                "0015_context_snapshots"
+            )
+            assert _scalar(connection, f"SELECT COUNT(*) FROM {_SNAPSHOTS_TABLE}") == 1
+
+        with engine.begin() as connection:  # once removed on purpose, it is allowed
+            connection.execute(text(f"DELETE FROM {_SNAPSHOTS_TABLE}"))
+        command.downgrade(cfg, _BEFORE_SNAPSHOTS)
+        with engine.connect() as connection:
+            assert _existing_tables(connection, (_SNAPSHOTS_TABLE,)) == set()
+    finally:
+        engine.dispose()
+
+
+def test_0015_the_table_rejects_updates_at_the_database(temp_database_name: str) -> None:
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, "head")
+        with engine.begin() as connection:
+            connection.execute(_INSERT_SNAPSHOT)
+        with pytest.raises(DBAPIError, match="immutable"), engine.begin() as connection:
+            connection.execute(text(f"UPDATE {_SNAPSHOTS_TABLE} SET policy_outcome = 'COMPATIBLE'"))
+    finally:
+        engine.dispose()
+
+
+def test_0015_manual_neon_script_leaves_exactly_the_schema_the_migration_leaves(
+    temp_database_name: str,
+) -> None:
+    """Neon is migrated by hand with this script (Render never runs migrations), so it must
+    never drift from the migration: same columns, constraints, index, trigger and function,
+    same revision, and a database it touched must still be downgradable by Alembic."""
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, _BEFORE_SNAPSHOTS)
+        script = _MANUAL_SNAPSHOTS_SQL.read_text(encoding="utf-8")
+        with engine.begin() as connection:
+            connection.exec_driver_sql(script)
+        with engine.connect() as connection:
+            by_script = _snapshot_schema(connection)
+
+        command.downgrade(cfg, _BEFORE_SNAPSHOTS)  # Alembic accepts what the script left behind
+        with engine.connect() as connection:
+            assert _existing_tables(connection, (_SNAPSHOTS_TABLE,)) == set()
+        command.upgrade(cfg, "head")
+        with engine.connect() as connection:
+            by_migration = _snapshot_schema(connection)
+
+        assert by_script["columns"], "the script created no table"
+        assert by_script == by_migration
+    finally:
+        engine.dispose()
+
+
+def test_0015_manual_neon_script_refuses_to_run_twice_or_on_the_wrong_revision(
+    temp_database_name: str,
+) -> None:
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    script = _MANUAL_SNAPSHOTS_SQL.read_text(encoding="utf-8")
+    try:
+        command.upgrade(cfg, "0013_market_data_persistence")  # before Kraken: not 0014 yet
+        with pytest.raises(DBAPIError, match="0015 abortada"), engine.begin() as connection:
+            connection.exec_driver_sql(script)
+        with engine.connect() as connection:
+            assert _existing_tables(connection, (_SNAPSHOTS_TABLE,)) == set()
+
+        command.upgrade(cfg, _BEFORE_SNAPSHOTS)
+        with engine.begin() as connection:
+            connection.exec_driver_sql(script)
+        with engine.connect() as connection:
+            after_first = _snapshot_schema(connection)
+
+        with pytest.raises(DBAPIError, match="0015 abortada"), engine.begin() as connection:
+            connection.exec_driver_sql(script)
+        with engine.connect() as connection:
+            assert _snapshot_schema(connection) == after_first  # the second run changed nothing
     finally:
         engine.dispose()

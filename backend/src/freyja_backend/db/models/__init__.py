@@ -24,6 +24,7 @@ from freyja_backend.db.models.catalog import (
     Timeframe,
     UnderlyingMarket,
 )
+from freyja_backend.db.models.context_snapshot import ContextSnapshotRow
 from freyja_backend.db.models.market_data import Candle, MarketDataSyncState
 from freyja_backend.db.models.provider import (
     DataSource,
@@ -44,6 +45,7 @@ __all__ = [
     "AuthUser",
     "Candle",
     "CapabilityStatus",
+    "ContextSnapshotRow",
     "CredentialsStatus",
     "DataSource",
     "DataSourceInstrument",
