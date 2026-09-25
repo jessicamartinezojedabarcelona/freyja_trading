@@ -1,6 +1,8 @@
 import re
 from pathlib import Path
 
+from freyja_backend.core.config import SCANNER_SOURCES
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _RENDER_YAML = _REPO_ROOT / "render.yaml"
 
@@ -164,3 +166,13 @@ def test_both_services_disable_auto_deploy_on_commit() -> None:
     content = _code_only_content()
     assert content.count('autoDeployTrigger: "off"') == 2
     assert "autoDeployTrigger: off\n" not in content
+
+
+def test_the_candle_scanner_reads_every_known_source_and_nothing_else() -> None:
+    """The production scanner is told its sources here, not in the dashboard: this must
+    stay exactly the set the backend knows how to read (an unknown code would stop the
+    service from starting)."""
+    lines = _code_only_content().splitlines()
+    index = next(i for i, line in enumerate(lines) if "key: FREYJA_CANDLE_SCANNER_SOURCES" in line)
+    declared = lines[index + 1].split("value:", 1)[1].strip()
+    assert set(declared.split(",")) == SCANNER_SOURCES
