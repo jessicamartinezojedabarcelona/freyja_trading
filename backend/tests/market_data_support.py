@@ -145,3 +145,75 @@ class SyntheticExchange:
             opens = list(range(last - (limit - 1) * step, last + 1, step))
         rows = [self.candle(open_ms, step) for open_ms in opens if open_ms <= newest]
         return ok(self._mutate(rows) if self._mutate is not None else rows)
+
+
+class SyntheticKraken:
+    """A deterministic Kraken public endpoint, faithful to the real one.
+
+    Behaviour reproduced from the live API (checked on 2026-09-25): OHLC always answers
+    with the 720 most recent closed candles plus the one still in progress, takes no limit
+    or end, and `since` only trims the front (an old `since` still returns the latest
+    720). Failures arrive inside a 200 response, in `error`. Prices are a pure function of
+    the open time, so any two requests covering the same candle agree.
+
+    `errors_by_call` maps a 1-based call number to the `error` list that call answers
+    with; `mutate` can rewrite the rows of a response to inject gaps or revised values.
+    """
+
+    HISTORY = 720
+
+    def __init__(
+        self,
+        *,
+        now: datetime = NOW,
+        errors_by_call: dict[int, list[str]] | None = None,
+        mutate: Callable[[Rows], Rows] | None = None,
+    ) -> None:
+        self._now_s = int(now.timestamp())
+        self._errors = errors_by_call or {}
+        self._mutate = mutate
+        self.requests: list[httpx2.Request] = []
+
+    def set_now(self, now: datetime) -> None:
+        self._now_s = int(now.timestamp())
+
+    @staticmethod
+    def candle(open_s: int, step_s: int) -> list[object]:
+        base = 100 + (open_s // step_s) % 50
+        return [
+            open_s,
+            f"{base}.10000000",
+            f"{base + 2}.00000000",
+            f"{base - 1}.00000000",
+            f"{base + 1}.00000000",
+            f"{base}.50000000",
+            "10.50000000",
+            3,
+        ]
+
+    def __call__(self, request: httpx2.Request) -> httpx2.Response:
+        self.requests.append(request)
+        errors = self._errors.get(len(self.requests))
+        if errors is not None:
+            return ok({"error": errors})
+        params = request.url.params
+        pair = params["pair"]
+        if request.url.path.endswith("/AssetPairs"):
+            base = pair.removesuffix("USDT")
+            info = {
+                "altname": pair,
+                "wsname": f"{base}/USDT",
+                "base": base,
+                "quote": "USDT",
+                "status": "online",
+            }
+            return ok({"error": [], "result": {pair: info}})
+        step_s = int(params["interval"]) * 60
+        open_now = self._now_s - self._now_s % step_s
+        opens = [open_now - step_s * k for k in range(self.HISTORY, -1, -1)]
+        if "since" in params:
+            opens = [open_s for open_s in opens if open_s >= int(params["since"])]
+        rows = [self.candle(open_s, step_s) for open_s in opens]
+        if self._mutate is not None:
+            rows = self._mutate(rows)
+        return ok({"error": [], "result": {pair: rows, "last": open_now - step_s}})

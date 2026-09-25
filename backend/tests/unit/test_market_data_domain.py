@@ -14,6 +14,7 @@ from freyja_backend.domain.market_data import (
     CandleGap,
     DataQuality,
     InvalidMarketDataError,
+    ProviderLimits,
     QualityIssue,
     QualityIssueCode,
     Timeframe,
@@ -309,3 +310,17 @@ def test_no_data_is_unavailable_and_a_failing_provider_only_degrades() -> None:
     assert quality_from_issues((no_data,)) is DataQuality.UNAVAILABLE
     assert quality_from_issues((failing,)) is DataQuality.DEGRADED
     assert quality_from_issues((failing, no_data)) is DataQuality.UNAVAILABLE
+
+
+# -- what a provider can serve (MARKET-DATA-KRAKEN-REST-001) --------------------------------
+
+
+def test_provider_limits_default_to_no_history_limit() -> None:
+    limits = ProviderLimits(max_candles_per_request=1000)
+    assert (limits.max_candles_per_request, limits.history_candles) == (1000, None)
+
+
+@pytest.mark.parametrize(("page", "history"), [(0, None), (-1, None), (10, 0), (10, -5)])
+def test_provider_limits_reject_impossible_values(page: int, history: int | None) -> None:
+    with pytest.raises(ValueError):
+        ProviderLimits(max_candles_per_request=page, history_candles=history)

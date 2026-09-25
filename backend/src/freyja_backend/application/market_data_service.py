@@ -204,7 +204,7 @@ def backfill_candles(
     timeframe: Timeframe,
     start: datetime,
     end: datetime,
-    page_limit: int = DEFAULT_PAGE_LIMIT,
+    page_limit: int | None = None,
     max_candles: int = MAX_BACKFILL_CANDLES,
     clock: Clock = utc_now,
 ) -> BackfillResult:
@@ -218,6 +218,8 @@ def backfill_candles(
     for name, moment in (("start", start), ("end", end)):
         if moment.tzinfo is None or moment.utcoffset() != timedelta(0):
             raise MarketDataRequestError(f"{name} must be timezone-aware UTC")
+    if page_limit is None:
+        page_limit = provider.limits.max_candles_per_request
     duration = timeframe.duration
     first = timeframe.floor(start)
     if first < start:

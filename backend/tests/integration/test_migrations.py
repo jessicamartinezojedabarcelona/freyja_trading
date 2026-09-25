@@ -12,6 +12,9 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 from alembic import command
 from freyja_backend.core.database import get_postgres_settings
 from freyja_backend.infrastructure.market_data.binance_spot_rest import PROVIDER_SYMBOLS
+from freyja_backend.infrastructure.market_data.kraken_spot_rest import (
+    PROVIDER_SYMBOLS as KRAKEN_PROVIDER_SYMBOLS,
+)
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 TEMP_DB_PATTERN = re.compile(r"freyja_test_[0-9a-f]{12}")
@@ -108,7 +111,7 @@ def test_upgrade_downgrade_upgrade_cycle(temp_database_name: str) -> None:
             current = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-        assert current == "0013_market_data_persistence"
+        assert current == "0014_kraken_data_source"
 
         command.downgrade(cfg, "base")
         with engine.connect() as connection:
@@ -120,7 +123,7 @@ def test_upgrade_downgrade_upgrade_cycle(temp_database_name: str) -> None:
         command.upgrade(cfg, "head")
         with engine.connect() as connection:
             final = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert final == "0013_market_data_persistence"
+        assert final == "0014_kraken_data_source"
     finally:
         engine.dispose()
 
@@ -232,7 +235,7 @@ def test_upgrade_from_empty_to_head_reaches_expected_head_with_exact_seed(
             current = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            assert current == "0013_market_data_persistence"
+            assert current == "0014_kraken_data_source"
             counts = {
                 table: connection.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
                 for table in _CATALOG_TABLES
@@ -539,7 +542,7 @@ def test_0012_downgrade_upgrade_is_reversible(temp_database_name: str) -> None:
             current = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            assert current == "0013_market_data_persistence"
+            assert current == "0014_kraken_data_source"
     finally:
         engine.dispose()
 
@@ -934,7 +937,7 @@ def test_0013_creates_market_data_schema_and_seeds_the_binance_source(
     cfg = _alembic_config(temp_url)
     engine = create_engine(temp_url)
     try:
-        command.upgrade(cfg, "head")
+        command.upgrade(cfg, "0013_market_data_persistence")
         with engine.connect() as connection:
             assert _existing_tables(connection, _MARKET_DATA_TABLES) == set(_MARKET_DATA_TABLES)
             source = connection.execute(
@@ -1021,7 +1024,7 @@ def test_0013_downgrade_upgrade_is_reversible_and_leaves_the_catalog_intact(
     cfg = _alembic_config(temp_url)
     engine = create_engine(temp_url)
     try:
-        command.upgrade(cfg, "head")
+        command.upgrade(cfg, "0013_market_data_persistence")
         command.downgrade(cfg, "0012_remove_regulatory_engine")
         with engine.connect() as connection:
             assert _existing_tables(connection, _MARKET_DATA_TABLES) == set()
@@ -1047,7 +1050,7 @@ def test_0013_downgrade_upgrade_is_reversible_and_leaves_the_catalog_intact(
             }
             assert counts == _CANONICAL_COUNTS
 
-        command.upgrade(cfg, "head")
+        command.upgrade(cfg, "0013_market_data_persistence")
         with engine.connect() as connection:
             assert _existing_tables(connection, _MARKET_DATA_TABLES) == set(_MARKET_DATA_TABLES)
             assert _scalar(connection, "SELECT COUNT(*) FROM freyja2_data_sources") == 1
@@ -1088,5 +1091,252 @@ def test_0013_aborts_without_guessing_when_a_catalog_instrument_is_missing(
             assert _scalar(connection, "SELECT version_num FROM alembic_version") == (
                 "0012_remove_regulatory_engine"
             )
+    finally:
+        engine.dispose()
+
+
+# --- 0014_kraken_data_source (MARKET-DATA-KRAKEN-REST-001) ------------------------
+
+_KRAKEN_MAPPINGS = {
+    "BTC/USDT": "XBTUSDT",  # Kraken's name for Bitcoin
+    "ETH/USDT": "ETHUSDT",
+    "SOL/USDT": "SOLUSDT",
+    "XRP/USDT": "XRPUSDT",
+}
+_BEFORE_KRAKEN = "0013_market_data_persistence"
+
+
+def _data_sources(connection: Connection) -> list[tuple[str, str, bool]]:
+    rows = connection.execute(
+        text("SELECT code, source_type, is_active FROM freyja2_data_sources ORDER BY code")
+    ).all()
+    return [(row[0], row[1], row[2]) for row in rows]
+
+
+def _mappings_of(connection: Connection, code: str) -> list[tuple[str, str, str, bool]]:
+    rows = connection.execute(
+        text(
+            "SELECT i.canonical_symbol, m.provider_symbol, m.purpose, m.is_active "
+            "FROM freyja2_data_source_instruments m "
+            "JOIN freyja2_instruments i ON i.instrument_id = m.instrument_id "
+            "JOIN freyja2_data_sources s ON s.id = m.data_source_id "
+            "WHERE s.code = :code ORDER BY i.canonical_symbol"
+        ),
+        {"code": code},
+    ).all()
+    return [(row[0], row[1], row[2], row[3]) for row in rows]
+
+
+def test_0014_adds_the_kraken_source_and_mappings_and_changes_nothing_else(
+    temp_database_name: str,
+) -> None:
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, _BEFORE_KRAKEN)
+        with engine.connect() as connection:
+            binance_before = _mappings_of(connection, "BINANCE")
+            catalog_before = {
+                table: connection.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
+                for table in _CATALOG_TABLES
+            }
+            tables_before = _existing_tables(connection, _MARKET_DATA_TABLES)
+
+        command.upgrade(cfg, "head")
+        with engine.connect() as connection:
+            assert _data_sources(connection) == [
+                ("BINANCE", "EXCHANGE", True),
+                ("KRAKEN", "EXCHANGE", True),
+            ]
+            kraken = _mappings_of(connection, "KRAKEN")
+            assert {row[0]: row[1] for row in kraken} == _KRAKEN_MAPPINGS
+            # What the migration seeded is exactly what the adapter is allowed to request.
+            assert dict(KRAKEN_PROVIDER_SYMBOLS) == _KRAKEN_MAPPINGS
+            assert all(row[2] == "ANALYSIS" and row[3] is True for row in kraken)
+            # Binance, the catalog and the schema are exactly as they were.
+            assert _mappings_of(connection, "BINANCE") == binance_before
+            assert {
+                table: connection.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
+                for table in _CATALOG_TABLES
+            } == catalog_before
+            assert _existing_tables(connection, _MARKET_DATA_TABLES) == tables_before
+    finally:
+        engine.dispose()
+
+
+def test_0014_downgrade_upgrade_is_reversible_and_leaves_binance_intact(
+    temp_database_name: str,
+) -> None:
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, "head")
+        command.downgrade(cfg, _BEFORE_KRAKEN)
+        with engine.connect() as connection:
+            assert _scalar(connection, "SELECT version_num FROM alembic_version") == _BEFORE_KRAKEN
+            assert _data_sources(connection) == [("BINANCE", "EXCHANGE", True)]
+            assert _mappings_of(connection, "KRAKEN") == []
+            assert {row[0]: row[1] for row in _mappings_of(connection, "BINANCE")} == (
+                _BINANCE_MAPPINGS
+            )
+            assert _existing_tables(connection, _MARKET_DATA_TABLES) == set(_MARKET_DATA_TABLES)
+
+        command.upgrade(cfg, "head")
+        with engine.connect() as connection:
+            assert [row[0] for row in _data_sources(connection)] == ["BINANCE", "KRAKEN"]
+            assert len(_mappings_of(connection, "KRAKEN")) == 4
+    finally:
+        engine.dispose()
+
+
+def test_0014_downgrade_refuses_to_delete_stored_kraken_candles(temp_database_name: str) -> None:
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, "head")
+        with engine.begin() as connection:
+            kraken_id = connection.execute(
+                text("SELECT id FROM freyja2_data_sources WHERE code = 'KRAKEN'")
+            ).scalar_one()
+            connection.execute(_INSERT_CANDLE, _candle_params(connection, source=kraken_id))
+
+        with pytest.raises(RuntimeError, match="would delete stored KRAKEN market data"):
+            command.downgrade(cfg, _BEFORE_KRAKEN)
+
+        # Nothing was touched: the revision, the source, its mappings and the candle remain.
+        with engine.connect() as connection:
+            assert _scalar(connection, "SELECT version_num FROM alembic_version") == (
+                "0014_kraken_data_source"
+            )
+            assert [row[0] for row in _data_sources(connection)] == ["BINANCE", "KRAKEN"]
+            assert len(_mappings_of(connection, "KRAKEN")) == 4
+            assert _scalar(connection, "SELECT COUNT(*) FROM freyja2_candles") == 1
+
+        # Once that data is removed on purpose, the downgrade is allowed.
+        with engine.begin() as connection:
+            connection.execute(text("DELETE FROM freyja2_candles"))
+        command.downgrade(cfg, _BEFORE_KRAKEN)
+        with engine.connect() as connection:
+            assert [row[0] for row in _data_sources(connection)] == ["BINANCE"]
+    finally:
+        engine.dispose()
+
+
+def test_0014_aborts_without_guessing_when_a_catalog_instrument_is_missing(
+    temp_database_name: str,
+) -> None:
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, _BEFORE_KRAKEN)
+        with engine.begin() as connection:
+            # Remove ETH/USDT (SPOT) and everything that references it.
+            eth = connection.execute(
+                text(
+                    "SELECT instrument_id FROM freyja2_instruments "
+                    "WHERE canonical_symbol = 'ETH/USDT' AND base_asset_id IS NOT NULL"
+                )
+            ).scalar_one()
+            connection.execute(
+                text("DELETE FROM freyja2_data_source_instruments WHERE instrument_id = :id"),
+                {"id": eth},
+            )
+            connection.execute(
+                text("DELETE FROM freyja2_instrument_timeframes WHERE instrument_id = :id"),
+                {"id": eth},
+            )
+            connection.execute(
+                text("DELETE FROM freyja2_instruments WHERE instrument_id = :id"), {"id": eth}
+            )
+
+        with pytest.raises(RuntimeError, match="0014 aborted: expected exactly one"):
+            command.upgrade(cfg, "head")
+
+        with engine.connect() as connection:
+            assert _scalar(connection, "SELECT version_num FROM alembic_version") == _BEFORE_KRAKEN
+            assert _data_sources(connection) == [("BINANCE", "EXCHANGE", True)]  # no half-seed
+    finally:
+        engine.dispose()
+
+
+_MANUAL_KRAKEN_SQL = (
+    Path(__file__).resolve().parents[3] / "docs" / "operations" / "neon-0014-kraken-manual.sql"
+)
+
+
+def _kraken_state(connection: Connection) -> tuple[object, ...]:
+    """Everything 0014 is responsible for, ids included (they are deterministic)."""
+    sources = connection.execute(
+        text("SELECT id, code, display_name, source_type, is_active FROM freyja2_data_sources")
+    ).all()
+    mappings = connection.execute(
+        text(
+            "SELECT id, data_source_id, instrument_id, provider_symbol, purpose, is_active "
+            "FROM freyja2_data_source_instruments"
+        )
+    ).all()
+    version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+    return (
+        sorted(tuple(map(str, row)) for row in sources),
+        sorted(tuple(map(str, row)) for row in mappings),
+        version,
+    )
+
+
+def test_0014_manual_neon_script_does_exactly_what_the_migration_does(
+    temp_database_name: str,
+) -> None:
+    """Neon is migrated by hand with this script (Render never runs migrations), so it must
+    never drift from the migration: same rows, same ids, same revision, and a database it
+    touched must still be downgradable by Alembic."""
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, _BEFORE_KRAKEN)
+        script = _MANUAL_KRAKEN_SQL.read_text(encoding="utf-8")
+        with engine.begin() as connection:
+            connection.exec_driver_sql(script)
+        with engine.connect() as connection:
+            by_script = _kraken_state(connection)
+
+        command.downgrade(cfg, _BEFORE_KRAKEN)  # Alembic accepts what the script left behind
+        with engine.connect() as connection:
+            assert _data_sources(connection) == [("BINANCE", "EXCHANGE", True)]
+        command.upgrade(cfg, "head")
+        with engine.connect() as connection:
+            by_migration = _kraken_state(connection)
+
+        assert by_script == by_migration
+    finally:
+        engine.dispose()
+
+
+def test_0014_manual_neon_script_refuses_to_run_twice_or_on_the_wrong_revision(
+    temp_database_name: str,
+) -> None:
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    script = _MANUAL_KRAKEN_SQL.read_text(encoding="utf-8")
+    try:
+        command.upgrade(cfg, "0012_remove_regulatory_engine")  # before market data existed
+        with pytest.raises(DBAPIError), engine.begin() as connection:
+            connection.exec_driver_sql(script)
+
+        command.upgrade(cfg, _BEFORE_KRAKEN)
+        with engine.begin() as connection:
+            connection.exec_driver_sql(script)
+        with engine.connect() as connection:
+            after_first = _kraken_state(connection)
+
+        with pytest.raises(DBAPIError, match="0014 abortada"), engine.begin() as connection:
+            connection.exec_driver_sql(script)
+        with engine.connect() as connection:
+            assert _kraken_state(connection) == after_first  # the second run changed nothing
     finally:
         engine.dispose()

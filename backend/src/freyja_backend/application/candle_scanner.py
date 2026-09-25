@@ -168,12 +168,21 @@ class CandleScanner:
         if latest is not None and latest >= expected:
             return ScanReport(target, ScanOutcome.UP_TO_DATE)
 
+        limits = provider.limits
+        recent = min(self._recent_limit, limits.max_candles_per_request)
         if latest is None:
-            return self._fetch_recent(target, provider)
+            return self._fetch_recent(target, provider, limit=recent)
         missing = int((expected - latest) / step)
-        if missing < self._recent_limit:
-            return self._fetch_recent(target, provider)
-        return self._catch_up(target, provider, first=latest + step, last=expected)
+        if missing < recent:
+            return self._fetch_recent(target, provider, limit=recent)
+        first = latest + step
+        if limits.history_candles is not None:
+            # This provider only serves its most recent candles. Whatever is older cannot
+            # be fetched from it, so catching up starts at the oldest reachable candle and
+            # the skipped range stays a visible gap: never invented, never filled from
+            # another source.
+            first = max(first, expected - step * (limits.history_candles - 1))
+        return self._catch_up(target, provider, first=first, last=expected)
 
     def _latest_stored(self, target: ScanTarget) -> datetime | None:
         with session_scope(self._session_factory) as session:
@@ -184,8 +193,10 @@ class CandleScanner:
                 timeframe=target.timeframe,
             )
 
-    def _fetch_recent(self, target: ScanTarget, provider: CandleProvider) -> ScanReport:
-        result = self._sync_page(target, provider, limit=self._recent_limit)
+    def _fetch_recent(
+        self, target: ScanTarget, provider: CandleProvider, *, limit: int
+    ) -> ScanReport:
+        result = self._sync_page(target, provider, limit=limit)
         if result is None:
             return ScanReport(target, ScanOutcome.LOCKED_BY_ANOTHER)
         if result.quality is DataQuality.UNAVAILABLE:
@@ -198,14 +209,13 @@ class CandleScanner:
         self, target: ScanTarget, provider: CandleProvider, *, first: datetime, last: datetime
     ) -> ScanReport:
         duration = target.timeframe.duration
+        page = provider.limits.max_candles_per_request
         cursor, end = first, last + duration  # `end` is exclusive: it includes `last`
         inserted = requests = 0
         budget = self._max_catchup
         while cursor < end:
-            page_end = min(end, cursor + duration * DEFAULT_PAGE_LIMIT)
-            result = self._sync_page(
-                target, provider, limit=DEFAULT_PAGE_LIMIT, start=cursor, end=page_end
-            )
+            page_end = min(end, cursor + duration * page)
+            result = self._sync_page(target, provider, limit=page, start=cursor, end=page_end)
             if result is None:
                 return ScanReport(
                     target, ScanOutcome.LOCKED_BY_ANOTHER, inserted=inserted, requests=requests
@@ -221,7 +231,7 @@ class CandleScanner:
                 )
             inserted += result.inserted
             cursor = page_end
-            budget -= DEFAULT_PAGE_LIMIT
+            budget -= page
             if cursor < end and budget <= 0:
                 return ScanReport(target, ScanOutcome.PARTIAL, inserted=inserted, requests=requests)
         return ScanReport(target, ScanOutcome.SYNCED, inserted=inserted, requests=requests)

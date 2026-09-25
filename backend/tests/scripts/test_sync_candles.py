@@ -15,8 +15,12 @@ from freyja_backend.infrastructure.market_data.binance_spot_rest import (
     BinanceRestConfig,
     BinanceSpotRestClient,
 )
+from freyja_backend.infrastructure.market_data.kraken_spot_rest import (
+    KrakenRestConfig,
+    KrakenSpotRestClient,
+)
 from freyja_backend.scripts import sync_candles
-from tests.market_data_support import NOW, SyntheticExchange
+from tests.market_data_support import NOW, SyntheticExchange, SyntheticKraken
 
 pytestmark = pytest.mark.usefixtures("clean_market_data")
 
@@ -208,7 +212,7 @@ def test_bad_input_exits_with_2_and_touches_nothing(
         ["--symbol", "BTC/USDT", "--start", "2026-09-24T11:00:00"],  # no time zone
         ["--symbol", "BTC/USDT", "--start", "yesterday"],
         ["--symbol", "BTC/USDT", "--timeframe", "30s"],
-        ["--symbol", "BTC/USDT", "--source", "KRAKEN"],
+        ["--symbol", "BTC/USDT", "--source", "NOWHERE"],
         ["--timeframe", "5m"],  # symbol is required
     ],
 )
@@ -220,3 +224,78 @@ def test_malformed_arguments_are_rejected_by_the_parser(
     with pytest.raises(SystemExit) as raised:
         run_cli(args, engine=market_data_engine, provider=provider_for(SyntheticExchange()))
     assert raised.value.code == 2
+
+
+# -- Kraken as a source (MARKET-DATA-KRAKEN-REST-001) ------------------------------------------
+
+
+@pytest.fixture
+def kraken_provider() -> Iterator[Callable[[SyntheticKraken], KrakenSpotRestClient]]:
+    created: list[KrakenSpotRestClient] = []
+
+    def build(kraken: SyntheticKraken) -> KrakenSpotRestClient:
+        client = KrakenSpotRestClient(
+            KrakenRestConfig(max_attempts=1, min_request_interval_seconds=0.0),
+            transport=httpx2.MockTransport(kraken),
+            clock=lambda: NOW,
+            sleep=lambda _seconds: None,
+        )
+        created.append(client)
+        return client
+
+    yield build
+    for client in created:
+        client.close()
+
+
+def test_the_source_can_be_kraken_and_is_stored_under_kraken(
+    market_data_engine: Engine,
+    kraken_provider: Callable[[SyntheticKraken], KrakenSpotRestClient],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    exit_code = sync_candles.main(
+        ["--source", "KRAKEN", "--symbol", "BTC/USDT", "--limit", "5"],
+        engine=market_data_engine,
+        provider=kraken_provider(SyntheticKraken()),
+        clock=lambda: NOW,
+    )
+
+    assert exit_code == 0
+    assert "KRAKEN BTC/USDT 1m: OK; nuevas 5, ya existentes 0, revisadas 0." in (
+        capsys.readouterr().out
+    )
+    with market_data_engine.connect() as connection:
+        sources = connection.execute(
+            text(
+                "SELECT s.code, count(*) FROM freyja2_candles c "
+                "JOIN freyja2_data_sources s ON s.id = c.data_source_id GROUP BY s.code"
+            )
+        ).all()
+    assert [(row[0], row[1]) for row in sources] == [("KRAKEN", 5)]
+
+
+def test_a_backfill_from_kraken_pages_by_kraken_s_own_limit(
+    market_data_engine: Engine,
+    kraken_provider: Callable[[SyntheticKraken], KrakenSpotRestClient],
+) -> None:
+    """The CLI must not assume Binance's 1000-candle page: Kraken serves at most 720."""
+    kraken = SyntheticKraken()
+    exit_code = sync_candles.main(
+        [
+            "--source",
+            "KRAKEN",
+            "--symbol",
+            "BTC/USDT",
+            "--start",
+            "2026-09-24T02:00:00+00:00",  # 10 h before NOW: 600 one-minute candles
+            "--end",
+            "2026-09-24T12:00:00+00:00",
+        ],
+        engine=market_data_engine,
+        provider=kraken_provider(kraken),
+        clock=lambda: NOW,
+    )
+
+    assert exit_code == 0
+    assert stored_by_timeframe(market_data_engine) == {"1m": 600}
+    assert len(kraken.requests) == 1  # one page of 720 covers it; 1000 would have been refused
