@@ -168,14 +168,20 @@ _S = PatternState
 TERMINAL_STATES = frozenset({_S.FAILED_BREAKOUT, _S.INVALIDATED})
 
 # From each state, the states an evaluation may move to (staying is always allowed unless the
-# state is terminal). INSUFFICIENT_DATA is handled apart: see `_check_step`.
+# state is terminal). Forward only, but not necessarily one step at a time: an evaluation is a
+# discrete instant, and several milestones can become knowable at once (a pivot is confirmed k
+# candles late, so the breakout it precedes may already have happened). Never backwards.
+# INSUFFICIENT_DATA is handled apart: see `_check_step`.
+_RESOLVED = frozenset({_S.CONFIRMED_UP, _S.CONFIRMED_DOWN, _S.FAILED_BREAKOUT})
 _NEXT: Mapping[PatternState, frozenset[PatternState]] = MappingProxyType(
     {
-        _S.FORMING: frozenset({_S.GEOMETRICALLY_VALID, _S.INVALIDATED}),
-        _S.GEOMETRICALLY_VALID: frozenset({_S.BREAKOUT_PENDING_CONFIRMATION, _S.INVALIDATED}),
-        _S.BREAKOUT_PENDING_CONFIRMATION: frozenset(
-            {_S.CONFIRMED_UP, _S.CONFIRMED_DOWN, _S.FAILED_BREAKOUT, _S.INVALIDATED}
+        _S.FORMING: frozenset(
+            {_S.GEOMETRICALLY_VALID, _S.BREAKOUT_PENDING_CONFIRMATION, _S.INVALIDATED} | _RESOLVED
         ),
+        _S.GEOMETRICALLY_VALID: frozenset(
+            {_S.BREAKOUT_PENDING_CONFIRMATION, _S.INVALIDATED} | _RESOLVED
+        ),
+        _S.BREAKOUT_PENDING_CONFIRMATION: frozenset({_S.INVALIDATED} | _RESOLVED),
         _S.CONFIRMED_UP: frozenset({_S.FAILED_BREAKOUT, _S.INVALIDATED}),
         _S.CONFIRMED_DOWN: frozenset({_S.FAILED_BREAKOUT, _S.INVALIDATED}),
         _S.FAILED_BREAKOUT: frozenset(),

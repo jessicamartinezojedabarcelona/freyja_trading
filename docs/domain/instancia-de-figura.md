@@ -83,14 +83,17 @@ estado, si no es final, siempre está permitido):
 
 | Desde | Puede pasar a |
 | ----- | ------------- |
-| `FORMING` | `GEOMETRICALLY_VALID`, `INVALIDATED` |
-| `GEOMETRICALLY_VALID` | `BREAKOUT_PENDING_CONFIRMATION`, `INVALIDATED` |
+| `FORMING` | `GEOMETRICALLY_VALID`, `BREAKOUT_PENDING_CONFIRMATION`, `CONFIRMED_UP`, `CONFIRMED_DOWN`, `FAILED_BREAKOUT`, `INVALIDATED` |
+| `GEOMETRICALLY_VALID` | `BREAKOUT_PENDING_CONFIRMATION`, `CONFIRMED_UP`, `CONFIRMED_DOWN`, `FAILED_BREAKOUT`, `INVALIDATED` |
 | `BREAKOUT_PENDING_CONFIRMATION` | `CONFIRMED_UP`, `CONFIRMED_DOWN`, `FAILED_BREAKOUT`, `INVALIDATED` |
 | `CONFIRMED_UP`, `CONFIRMED_DOWN` | `FAILED_BREAKOUT`, `INVALIDATED` |
 | `FAILED_BREAKOUT`, `INVALIDATED` | nada: **ninguna evaluación posterior, ni siquiera una pausa** |
 
-- Una figura **no salta**: para llegar a una ruptura debe haber sido antes geométricamente válida.
-  Un detector que evalúe con retraso emite las evaluaciones intermedias, cada una con su instante.
+- Una figura **avanza, nunca retrocede**, y puede saltar varios hitos a la vez: una evaluación
+  es un instante discreto y varios hitos pueden hacerse conocibles juntos (un pivote se confirma
+  `k` velas tarde, así que la ruptura que lo sigue puede haber ocurrido ya). Se corrigió al
+  escribir los detectores de POINT3-REVERSAL-001: exigir el paso intermedio obligaba a informar
+  de un estado anterior al real.
 - **`INSUFFICIENT_DATA` es una pausa, no un estado del mercado.** Cualquier estado no final puede
   pasar a él, y al salir la figura continúa desde el estado que tenía o desde cualquiera al que
   este pudiera ir; no puede retroceder ni saltar por haber estado en pausa. Una figura que nace
