@@ -99,7 +99,10 @@ services:
       - key: FREYJA_CANDLE_SCANNER_INTERVAL_SECONDS
         value: "60"
       - key: FREYJA_CANDLE_SCANNER_SOURCES
-        value: BINANCE
+        value: BINANCE,KRAKEN
+        # MARKET-DATA-KRAKEN-REST-001 (ADR 0007): two sources, each with its own series.
+        # KRAKEN needs migration 0014 applied to the database first (it was, in Neon);
+        # without it the scanner would report those series as NOT_CONFIGURED.
         # No FREYJA_SMTP_* variables here at all: no SMTP provider is
         # approved yet (see README, "SMTP pendiente"), and Settings no
         # longer requires any of them to start in production (see
