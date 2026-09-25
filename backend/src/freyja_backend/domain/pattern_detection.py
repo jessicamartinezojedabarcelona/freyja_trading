@@ -145,6 +145,19 @@ class ReversalParams:
     # Head and shoulders only. The two shoulders are comparable within this fraction of the
     # height (looser than the extremes of a double top: shoulders are rarely level).
     shoulder_tolerance: Decimal = Decimal("0.30")
+    # Rounding tops and bottoms only. The closes of the whole arc must follow a parabola with at
+    # least this coefficient of determination (R squared), open downwards for a top.
+    arc_fit_min: Decimal = Decimal("0.85")
+    # Rounding only. At least this share of the arc's closes must be within the top quarter of its
+    # height: a dome dwells near its top (a parabola: half of its width), a pointed peak does not
+    # (a tent: a quarter), and R squared alone cannot tell them apart.
+    min_top_dwell: Decimal = Decimal("0.40")
+    # Rounding only. The apex lies in the middle part of the arc: between this fraction and its
+    # complement of the way from the left end to the right end.
+    apex_position_band: Decimal = Decimal("0.25")
+    # Rounding only. An arc spans at least / at most this many candles (left end to right end).
+    min_arc_candles: int = 30
+    max_arc_candles: int = 150
 
     def __post_init__(self) -> None:
         if not self.version.strip():
@@ -156,6 +169,9 @@ class ReversalParams:
             "exceed_margin",
             "head_prominence",
             "shoulder_tolerance",
+            "arc_fit_min",
+            "min_top_dwell",
+            "apex_position_band",
         ):
             value = getattr(self, name)
             if not isinstance(value, Decimal) or not (Decimal(0) < value < Decimal(1)):
@@ -165,10 +181,14 @@ class ReversalParams:
             "failure_window_candles",
             "max_age_candles",
             "min_history",
+            "min_arc_candles",
+            "max_arc_candles",
         ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise InvalidDetectionRequestError(f"{name} must be an integer of at least 1")
+        if self.min_arc_candles > self.max_arc_candles:
+            raise InvalidDetectionRequestError("an arc cannot be required longer than it may be")
 
 
 DEFAULT_REVERSAL_PARAMS = ReversalParams()
@@ -399,6 +419,7 @@ def judge(
     neckline_at: Callable[[Candle], Decimal],
     height: Decimal,
     extreme_price: Decimal,
+    boundary_role: BoundaryRole = BoundaryRole.NECKLINE,
 ) -> Judgement | None:
     """Where a figure stands, from the candles closed by the instant. None: it is not one (yet).
 
@@ -451,14 +472,14 @@ def judge(
             shown = confirmed if was_confirmed and confirmed is not None else first
             return Judgement(
                 PatternState.FAILED_BREAKOUT,
-                _breakout(closed[shown], side, was_confirmed),
+                _breakout(closed[shown], side, was_confirmed, boundary_role),
                 first_beyond_index=first,
                 resolved_index=failed,
             )
         if confirmed is not None:
             return Judgement(
                 side.confirmed_state,
-                _breakout(closed[confirmed], side, True),
+                _breakout(closed[confirmed], side, True, boundary_role),
                 first_beyond_index=first,
                 resolved_index=confirmed,
             )
@@ -468,7 +489,7 @@ def judge(
             )
         return Judgement(
             PatternState.BREAKOUT_PENDING_CONFIRMATION,
-            _breakout(closed[first], side, False),
+            _breakout(closed[first], side, False, boundary_role),
             first_beyond_index=first,
         )
     if stale:
@@ -482,10 +503,10 @@ def judge(
     return None
 
 
-def _breakout(candle: Candle, side: Side, confirmed: bool) -> Breakout:
+def _breakout(candle: Candle, side: Side, confirmed: bool, role: BoundaryRole) -> Breakout:
     return Breakout(
         direction=side.breakout_direction,
-        boundary=BoundaryRole.NECKLINE,
+        boundary=role,
         candle_open_time=candle.open_time,
         candle_close_time=candle.close_time,
         close_price=candle.close,
