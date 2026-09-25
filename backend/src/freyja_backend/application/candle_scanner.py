@@ -16,6 +16,11 @@ fetch the same series at the same time.
 Failures never stop the pass. A provider that answers badly is recorded by the sync
 service (so the API can show it as failing); a database error ends the pass early
 instead of hammering a database that is down.
+
+A provider that says "too many requests" is not asked again: insisting is what turns a
+temporary limit into an IP ban. The first RATE_LIMITED answer of a source puts the whole
+source in a cooldown (2 minutes, doubling to 30 while it keeps saying so), during which none
+of its series makes any request; when it ends, one series probes it. Other sources carry on.
 """
 
 import enum
@@ -23,7 +28,7 @@ import hashlib
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
@@ -43,6 +48,7 @@ from freyja_backend.domain.market_data import (
     DataQuality,
     InstrumentRef,
     MarketDataRequestError,
+    QualityIssueCode,
     Timeframe,
     newest_expected_open,
     utc_now,
@@ -54,6 +60,9 @@ DEFAULT_RECENT_LIMIT = 500
 # Most candles one pass will fetch for a single series while catching up. The rest is
 # fetched by the next pass, which resumes from what is already stored.
 DEFAULT_MAX_CATCHUP_CANDLES = 5_000
+# How long a source that answered "too many requests" is left alone, by consecutive rate-limited
+# probes: 2, 4, 8, 16 minutes, then 30 minutes for as long as it keeps saying so.
+RATE_LIMIT_COOLDOWN_SECONDS = (120, 240, 480, 960, 1800)
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +91,8 @@ class ScanOutcome(enum.StrEnum):
     DATABASE_ERROR = "DATABASE_ERROR"
     # The pass ended early (database error) before reaching this series.
     NOT_ATTEMPTED = "NOT_ATTEMPTED"
+    # Skipped without a request: the source asked us to stop for a while (rate limit).
+    COOLING_DOWN = "COOLING_DOWN"
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +102,15 @@ class ScanReport:
     inserted: int = 0
     requests: int = 0
     detail: str | None = None
+
+
+@dataclass(slots=True)
+class _Cooldown:
+    """A source that said "too many requests": left alone until `until`. `streak` counts the
+    rate-limited answers in a row and sets how long the next cooldown is."""
+
+    until: datetime
+    streak: int
 
 
 def advisory_lock_key(target: ScanTarget) -> int:
@@ -120,6 +140,7 @@ class CandleScanner:
         self._clock = clock
         self._recent_limit = recent_limit
         self._max_catchup = max_catchup_candles
+        self._cooldowns: dict[str, _Cooldown] = {}
 
     @property
     def targets(self) -> tuple[ScanTarget, ...]:
@@ -129,7 +150,7 @@ class CandleScanner:
         """One pass over every target, in order. Never raises for a data or provider problem."""
         reports: list[ScanReport] = []
         for index, target in enumerate(self._targets):
-            report = self._scan_target(target)
+            report = self._scan_or_skip(target)
             reports.append(report)
             if report.outcome is ScanOutcome.DATABASE_ERROR:
                 reports.extend(
@@ -138,6 +159,47 @@ class CandleScanner:
                 )
                 break
         return tuple(reports)
+
+    # -- a source that asked us to stop -----------------------------------------
+
+    def _scan_or_skip(self, target: ScanTarget) -> ScanReport:
+        """The series, unless its source is cooling down after a rate limit: then nothing is
+        requested at all and the series is reported as skipped (its recorded state, which
+        already says the last attempt failed, is left as it is)."""
+        now = self._clock()
+        cooldown = self._cooldowns.get(target.source_code)
+        if cooldown is not None and now < cooldown.until:
+            return ScanReport(
+                target,
+                ScanOutcome.COOLING_DOWN,
+                detail=f"rate limited; not asked again before {cooldown.until.isoformat()}",
+            )
+        report = self._scan_target(target)
+        self._note(target.source_code, report, now)
+        return report
+
+    def _note(self, source: str, report: ScanReport, now: datetime) -> None:
+        """Open a cooldown on a rate-limited answer; close it once a request goes through.
+        A series that made no request says nothing about the source."""
+        if (
+            report.outcome is ScanOutcome.PROVIDER_UNAVAILABLE
+            and report.detail == QualityIssueCode.RATE_LIMITED.value
+        ):
+            previous = self._cooldowns.get(source)
+            streak = 1 if previous is None else previous.streak + 1
+            seconds = RATE_LIMIT_COOLDOWN_SECONDS[min(streak, len(RATE_LIMIT_COOLDOWN_SECONDS)) - 1]
+            self._cooldowns[source] = _Cooldown(now + timedelta(seconds=seconds), streak)
+            logger.warning(
+                "candle_source_rate_limited",
+                extra={"source": source, "cooldown_seconds": seconds, "streak": streak},
+            )
+        elif (
+            report.outcome in (ScanOutcome.SYNCED, ScanOutcome.PARTIAL)
+            and report.requests > 0
+            and source in self._cooldowns
+        ):
+            del self._cooldowns[source]
+            logger.info("candle_source_recovered", extra={"source": source})
 
     # -- one series ------------------------------------------------------------
 

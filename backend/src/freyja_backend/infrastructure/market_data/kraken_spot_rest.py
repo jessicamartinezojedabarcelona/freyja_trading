@@ -458,6 +458,8 @@ def _log_failure(provider_symbol: str, issue: QualityIssue, attempts: int) -> No
             "source": SOURCE_CODE,
             "provider_symbol": provider_symbol,
             "issue": issue.code.value,
+            # Fixed, non-sensitive text ("rate limited (429), Retry-After 30s", "banned (418)").
+            "detail": issue.detail,
             "attempts": attempts,
         },
     )
