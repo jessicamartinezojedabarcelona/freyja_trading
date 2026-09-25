@@ -5,6 +5,8 @@
 - **Fecha:** 2026-09-24
 - **Relacionado:** ADR 0002 (contrato y adaptador REST), ADR 0003 (persistencia),
   PLATFORM-DATA-DESIGN-001 (este ADR es su diseño de tiempo real).
+- **Refinado por:** ADR 0008 (contratos de flujo, estados de conexión, huecos, revisiones, salud de
+  fuentes y retención). Donde difieren, manda el 0008.
 
 ## Contexto
 
@@ -51,7 +53,8 @@ estrategias se evalúan de forma determinista sobre velas **cerradas** (sin
 - Suscribe solo el **universo activo** (lo que hay en watchlists y estrategias),
   no todo el catálogo.
 - Reconexión con espera acotada; al reconectar, **relleno por REST** del hueco.
-  Estados de conexión y salud publicados en `freyja2_market_data_sync_state`.
+  Estados de conexión y salud: ver ADR 0008 §3 y §7 (`freyja2_market_data_sync_state` queda como
+  estado por serie del último intento).
 - Sin Redis ni Kafka (CLAUDE.md §7): los cierres se publican con PostgreSQL
   `LISTEN/NOTIFY` (conexión directa, no la agrupada) y la API los retransmite al
   navegador por **Server-Sent Events**, más simples que un WebSocket propio y
@@ -83,7 +86,8 @@ Neon Free ofrece 0,5 GB **en total**. Por tanto: las velas **de segundos no se
 persisten a largo plazo** (memoria o una ventana corta, p. ej. 48 h); 1 m se
 conserva una ventana acotada (p. ej. 90 días) y las de 5 m o más, por más tiempo.
 La retención se aplica borrando particiones antiguas. El tamaño del universo y los
-plazos son decisión de producto/coste.
+plazos son decisión de producto/coste. **Ojo:** los plazos de este párrafo no caben en Neon
+Free con las dos fuentes actuales; ver la comparación y la recomendación del ADR 0008 §11.
 
 ### 6. Varias fuentes y tipos de producto
 
