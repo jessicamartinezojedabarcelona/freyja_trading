@@ -21,6 +21,7 @@ from freyja_backend.domain import fibonacci
 from freyja_backend.domain.fibonacci import (
     DEFAULT_FIBONACCI_PARAMS,
     DEFAULT_LEVEL_RATIOS,
+    Availability,
     FibonacciParams,
     Impulse,
     ImpulseDirection,
@@ -95,6 +96,13 @@ def impulse(
         20,
         D(100),
     )
+
+
+def delivered(
+    candles: Sequence[Candle], delay: timedelta = timedelta(0)
+) -> dict[datetime, datetime]:
+    """When each finished candle reached Freyja: `delay` after it closed (no delay by default)."""
+    return {c.open_time: c.close_time + delay for c in candles}
 
 
 BULL = impulse(BULLISH, "100", "120")
@@ -180,17 +188,21 @@ def test_the_levels_are_the_same_whatever_the_timeframe() -> None:
 
 
 @pytest.mark.parametrize("timeframe", list(Timeframe), ids=lambda t: t.value)
-def test_it_is_known_at_the_close_of_the_third_candle_after_b_and_not_a_moment_before(
+def test_the_pivot_is_confirmed_in_market_time_at_the_close_of_the_third_candle_after_b(
     timeframe: Timeframe,
 ) -> None:
     duration = timeframe.duration
     fib = impulse(BULLISH, "100", "120", duration=duration)
     # B's candle opens at T0; the candles after it open at T0+d, T0+2d and T0+3d, and the third one
-    # closes at T0+4d: that is when B becomes a pivot.
-    assert fib.known_at == T0 + duration * 4
+    # closes at T0+4d: that is when B becomes a pivot, in market time.
+    assert fib.pivot_confirmed_market_time == T0 + duration * 4
     with pytest.raises(InvalidFibonacciRequestError, match="not known yet"):
-        observe(fib, [], observed_at=fib.known_at - timedelta(seconds=1))
-    assert observe(fib, [], observed_at=fib.known_at).candles_observed == 0
+        observe(fib, [], observed_at=fib.pivot_confirmed_market_time - timedelta(seconds=1))
+    seen = observe(fib, [], observed_at=fib.pivot_confirmed_market_time)
+    assert seen.candles_observed == 0
+    # Both times are kept: the market one, and the receipt (unknown here: nothing was said of it).
+    assert seen.pivot_confirmed_market_time == T0 + duration * 4
+    assert seen.pivot_received_at is None and seen.known_at is None
 
 
 @pytest.mark.parametrize("timeframe", list(Timeframe), ids=lambda t: t.value)
@@ -204,22 +216,115 @@ def test_a_touch_in_the_candle_that_confirms_b_is_retrospective_and_the_next_one
         if direction is BULLISH
         else impulse(BEARISH, "120", "100", duration=d)
     )
-    # The 50 % level is at 110 in both. The candle that closes at known_at reaches it; so does the
-    # one that opens at known_at.
+    # The 50 % level is at 110 in both. The candle that closes at the confirmation reaches it; so
+    # does the one that opens at it. Each candle reaches Freyja the moment it closes.
     confirming = candle(T0 + d * 3, d, low="109", high="111", close="110")
     first_operable = candle(T0 + d * 4, d, low="109.5", high="110.5", close="110")
     before = candle(T0 + d, d, low="115", high="116", close="115.5")
-    seen = observe(fib, [before, confirming, first_operable], observed_at=T0 + d * 5)
+    candles = [before, confirming, first_operable]
+    seen = observe(fib, candles, observed_at=T0 + d * 5, received_at=delivered(candles))
+    assert seen.pivot_received_at == T0 + d * 4 and seen.known_at == T0 + d * 4
     half = next(x for x in seen.levels if x.level.ratio == D("0.5"))
     assert half.first_touch is not None and half.first_touch.retrospective is True
     assert half.first_touch.candle_open_time == T0 + d * 3
     assert half.first_operable_touch is not None
-    assert half.first_operable_touch.retrospective is False
-    assert half.first_operable_touch.candle_open_time == T0 + d * 4  # opens exactly at known_at
+    assert half.first_operable_touch.availability is Availability.OPERABLE
+    assert half.first_operable_touch.candle_open_time == T0 + d * 4  # opens exactly when known
     # Without the operable candle, nothing operable was seen: only the retrospective touch.
-    only_past = observe(fib, [before, confirming], observed_at=T0 + d * 4)
+    only_past = observe(
+        fib, candles[:2], observed_at=T0 + d * 4, received_at=delivered(candles[:2])
+    )
     half = next(x for x in only_past.levels if x.level.ratio == D("0.5"))
     assert half.first_touch is not None and half.first_operable_touch is None
+
+
+@pytest.mark.parametrize("timeframe", [Timeframe.M1, Timeframe.M5, Timeframe.H1], ids=str)
+def test_a_confirming_candle_received_late_moves_the_moment_the_fibonacci_was_really_known(
+    timeframe: Timeframe,
+) -> None:
+    """The pivot is confirmed in market time when the third candle closes, but Freyja had it only
+    when it received it. The candles that opened before that were not opened knowing the Fibonacci,
+    even if they opened after the market confirmation: their touches are retrospective."""
+    d = timeframe.duration
+    fib = impulse(BULLISH, "100", "120", duration=d)
+    late = d * 2 + timedelta(
+        seconds=30
+    )  # the confirming candle arrives two and a half candles late
+    confirming = candle(T0 + d * 3, d, low="112", high="113", close="112.5")
+    # Candles opening at T0+4d (the market confirmation), T0+5d and T0+6d all touch the 50 % (110).
+    at_market = candle(T0 + d * 4, d, low="109.5", high="110.5", close="110")
+    next_one = candle(T0 + d * 5, d, low="109.5", high="110.5", close="110")
+    third = candle(T0 + d * 6, d, low="109.5", high="110.5", close="110")
+    later = candle(T0 + d * 7, d, low="109.5", high="110.5", close="110")
+    candles = [confirming, at_market, next_one, third, later]
+    receipts = delivered(candles)
+    receipts[confirming.open_time] = confirming.close_time + late  # the only one that is late
+    known = T0 + d * 4 + late  # = T0 + 6d + 30 s
+    seen = observe(fib, candles, observed_at=T0 + d * 9, received_at=receipts)
+    assert seen.pivot_confirmed_market_time == T0 + d * 4  # unchanged: it is the market's
+    assert seen.pivot_received_at == known and seen.known_at == known  # and this is Freyja's
+    half = next(x for x in seen.levels if x.level.ratio == D("0.5"))
+    # The candles that opened at T0+4d, +5d and +6d opened before Freyja knew: retrospective, though
+    # they opened after the market confirmation. The first operable one opens at T0+7d.
+    assert half.first_touch is not None
+    assert half.first_touch.candle_open_time == T0 + d * 4
+    assert half.first_touch.availability is Availability.RETROSPECTIVE
+    assert half.first_operable_touch is not None
+    assert half.first_operable_touch.candle_open_time == T0 + d * 7
+    assert half.first_operable_touch.availability is Availability.OPERABLE
+    # Before the receipt the Fibonacci did not exist for Freyja, though it did in the market.
+    with pytest.raises(InvalidFibonacciRequestError, match="not known yet"):
+        observe(fib, candles, observed_at=known - timedelta(seconds=1), received_at=receipts)
+    # And a candle that has closed but not yet arrived is not read: at `known` three candles had
+    # closed and arrived (the confirming one, just received, and the two that opened after it); the
+    # candle that opened at T0+6d closes at T0+7d, which is still to come.
+    at_known = observe(fib, candles, observed_at=known, received_at=receipts)
+    assert at_known.candles_observed == 3
+
+
+def test_without_the_receipt_nothing_after_the_confirmation_can_be_proven_operable() -> None:
+    d = timedelta(minutes=5)
+    confirming = candle(T0 + d * 3, d, low="112", high="113", close="112.5")
+    early = candle(T0 + d, d, low="109", high="111", close="110")
+    after = candle(T0 + d * 4, d, low="109.5", high="110.5", close="110")
+    candles = [early, confirming, after]
+    unknown = observe(BULL, candles, observed_at=T0 + d * 5)  # no receipts at all
+    half = next(x for x in unknown.levels if x.level.ratio == D("0.5"))
+    assert half.first_touch is not None and half.first_touch.retrospective  # before the market time
+    assert half.first_operable_touch is None
+    only_after = observe(BULL, candles[1:], observed_at=T0 + d * 5)
+    half = next(x for x in only_after.levels if x.level.ratio == D("0.5"))
+    assert half.first_touch is not None
+    assert half.first_touch.availability is Availability.UNPROVEN  # not claimed, not denied
+    assert half.first_operable_touch is None
+    # A receipt log that does not cover the confirming candle is the same: fail-closed.
+    partial = observe(
+        BULL, candles, observed_at=T0 + d * 5, received_at={after.open_time: T0 + d * 5}
+    )
+    assert partial.pivot_received_at is None and partial.known_at is None
+    half = next(x for x in partial.levels if x.level.ratio == D("0.5"))
+    assert half.first_operable_touch is None
+
+
+def test_a_candle_without_a_receipt_is_not_read_when_a_receipt_log_is_given() -> None:
+    d = timedelta(minutes=5)
+    confirming = candle(T0 + d * 3, d, low="112", high="113", close="112.5")
+    after = candle(T0 + d * 4, d, low="109.5", high="110.5", close="110")
+    receipts = {confirming.open_time: confirming.close_time}  # `after` has none
+    seen = observe(BULL, [confirming, after], observed_at=T0 + d * 5, received_at=receipts)
+    assert seen.candles_observed == 1
+
+
+def test_a_finished_candle_cannot_have_been_received_before_it_closed() -> None:
+    d = timedelta(minutes=5)
+    confirming = candle(T0 + d * 3, d, low="112", high="113", close="112.5")
+    with pytest.raises(InvalidFibonacciRequestError, match="before it closes"):
+        observe(
+            BULL,
+            [confirming],
+            observed_at=T0 + d * 5,
+            received_at={confirming.open_time: confirming.close_time - timedelta(seconds=1)},
+        )
 
 
 def test_the_candle_of_b_itself_is_not_observed_and_nor_is_one_that_closes_later() -> None:
@@ -393,7 +498,9 @@ def test_a_pair_of_pivots_with_no_candle_beyond_the_extremes_is_an_impulse() -> 
     check = check_impulse(candles, a, b)
     assert check.rejection is None and check.impulse is not None
     assert check.impulse.direction is BULLISH and check.impulse.impulse_candles == 2
-    assert check.impulse.size == D(20) and check.impulse.known_at == b.confirmed_at
+    assert (
+        check.impulse.size == D(20) and check.impulse.pivot_confirmed_market_time == b.confirmed_at
+    )
     assert check.impulse.reference_range == D(22)  # 121 down to 99, the candles ending at A
     bearish = check_impulse(*_args(stretch(BEARISH, start_price="120", end_price="100")))
     assert bearish.impulse is not None and bearish.impulse.direction is BEARISH
@@ -584,7 +691,7 @@ def test_the_same_shape_gives_the_same_levels_and_the_same_touches_on_every_time
     fib = check.impulse
     assert fib.direction is (BEARISH if upside_down else BULLISH)
     assert fib.size == D(23)  # 117.5 to 140.5 (or its mirror)
-    assert fib.known_at == b.open_time + timeframe.duration * (K + 1)
+    assert fib.pivot_confirmed_market_time == b.open_time + timeframe.duration * (K + 1)
     observed = observe(fib, candles, observed_at=candles[-1].close_time)
     assert observed.candles_observed == len([c for c in candles if c.open_time > b.open_time])
     # Levels 135.072, 131.714, 129.0, 126.286 and 122.422 (bullish; its mirror otherwise). The price
@@ -629,7 +736,7 @@ def test_an_observation_at_an_instant_depends_only_on_what_was_closed_by_then(
     seen_touch = False
     for c in candles:
         at = c.close_time
-        if at < fib.known_at:
+        if at < fib.pivot_confirmed_market_time:
             continue
         upto = [k for k in candles if k.close_time <= at]
         past = observe(fib, upto, observed_at=at)
@@ -637,6 +744,28 @@ def test_an_observation_at_an_instant_depends_only_on_what_was_closed_by_then(
         assert observe(fib, wild(candles, at), observed_at=at) == past, at
         seen_touch = seen_touch or any(x.first_touch for x in past.levels)
     assert seen_touch  # not vacuous
+
+
+def test_the_same_holds_when_every_candle_reaches_freyja_a_little_late() -> None:
+    timeframe = Timeframe.M5
+    candles = zigzag([*UP, 118, 140, 126, 133, 128], timeframe=timeframe)
+    swings = swings_of(candles, timeframe)
+    a = next(s for s in swings if s.kind is PivotKind.LOW and s.price == D("117.5"))
+    b = next(s for s in swings if s.open_time > a.open_time and s.kind is not a.kind)
+    fib = check_impulse(candles, a, b).impulse
+    assert fib is not None
+    receipts = delivered(candles, timedelta(seconds=45))
+    seen_operable = False
+    for c in candles:
+        at = c.close_time + timedelta(seconds=45)  # the instants at which candles have arrived
+        if at < fib.pivot_confirmed_market_time + timedelta(seconds=45):
+            continue
+        upto = [k for k in candles if k.close_time <= at]
+        past = observe(fib, upto, observed_at=at, received_at=receipts)
+        assert observe(fib, candles, observed_at=at, received_at=receipts) == past, at
+        assert observe(fib, wild(candles, at), observed_at=at, received_at=receipts) == past, at
+        seen_operable = seen_operable or any(x.first_operable_touch for x in past.levels)
+    assert seen_operable  # not vacuous
 
 
 def test_the_same_candles_always_give_the_same_observation() -> None:

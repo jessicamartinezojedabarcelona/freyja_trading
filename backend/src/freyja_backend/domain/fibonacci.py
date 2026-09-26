@@ -12,7 +12,7 @@ decimals prices are stored with. The parameters are versioned; changing any chan
 """
 
 import enum
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, localcontext
@@ -139,10 +139,12 @@ class Impulse:
         return abs(self.end.price - self.start.price)
 
     @property
-    def known_at(self) -> datetime:
-        """The instant the Fibonacci starts to exist: the confirmation of pivot B (the close of the
-        k-th candle after it). A's was earlier. The publication latency of the provider is not added
-        here: it applies when candles are read (`observed_at`)."""
+    def pivot_confirmed_market_time(self) -> datetime:
+        """When pivot B is confirmed **in market time**: the close of the k-th candle after it (A's
+        was earlier). It is the earliest the Fibonacci can exist. It is *not* when Freyja knew: that
+        is when Freyja **received** that finished candle, which is later (by the latency of the
+        provider, or by a delay), and is a fact about the data, not about the impulse: see
+        `observe`."""
         assert self.end.confirmed_at is not None  # checked when the impulse is built
         return self.end.confirmed_at
 
@@ -248,14 +250,32 @@ def closed_beyond(direction: ImpulseDirection, level: Decimal, candle: Candle) -
     return candle.close > level
 
 
+class Availability(enum.StrEnum):
+    """Whether a fact could have been used at the time, given when Freyja really knew the
+    Fibonacci."""
+
+    # Its candle opened before the Fibonacci was known (in market time, or in real time once the
+    # confirming candle was received): an observation about the past, never operable history.
+    RETROSPECTIVE = "RETROSPECTIVE"
+    # Its candle opened when Freyja already knew the Fibonacci.
+    OPERABLE = "OPERABLE"
+    # Its candle opened after the market-time confirmation, but the receipt of the confirming
+    # candle is not known, so it cannot be claimed that Freyja knew: fail-closed.
+    UNPROVEN = "UNPROVEN"
+
+
 @dataclass(frozen=True, slots=True)
 class LevelEvent:
-    """When a fact happened. `retrospective` is true if its candle opened before the Fibonacci was
-    known: it is then an observation about the past, never an operable historical signal."""
+    """When a fact happened and whether it could have been acted on. Only `OPERABLE` may be used as
+    if it had been seen at the time."""
 
     candle_open_time: datetime
     candle_close_time: datetime
-    retrospective: bool
+    availability: Availability
+
+    @property
+    def retrospective(self) -> bool:
+        return self.availability is Availability.RETROSPECTIVE
 
 
 @dataclass(frozen=True, slots=True)
@@ -273,6 +293,12 @@ class FibonacciObservation:
 
     impulse: Impulse
     observed_at: datetime
+    # Both times, kept apart: the confirmation in market time, when Freyja received the finished
+    # candle that confirmed B (None if its receipt is not known), and the instant from which the
+    # Fibonacci was really known: the later of the two (None if the receipt is not known).
+    pivot_confirmed_market_time: datetime
+    pivot_received_at: datetime | None
+    known_at: datetime | None
     candles_observed: int
     levels: tuple[LevelObservation, ...]
     # How far the price retraced, as a fraction of D (0 if it did not): by wicks and by closes.
@@ -287,34 +313,73 @@ def observe(
     closed: Sequence[Candle],
     *,
     observed_at: datetime,
+    received_at: Mapping[datetime, datetime] | None = None,
     params: FibonacciParams = DEFAULT_FIBONACCI_PARAMS,
 ) -> FibonacciObservation:
-    """The facts about the price against the levels, from the closed candles after B's and closed
-    by `observed_at`. Asking before `known_at` is a wrong request: the Fibonacci does not exist
-    yet. Candles that close later are ignored, so the answer at an instant never depends on the
-    future."""
+    """The facts about the price against the levels, from the closed candles after B's, closed by
+    `observed_at` and, if `received_at` is given, already received by then.
+
+    `received_at` maps the open time of a candle to the instant Freyja **really received** it as
+    a finished candle. Without it, only the market time is known and nothing after the
+    confirmation can be proven operable (`UNPROVEN`); with it, the Fibonacci is known from the
+    later of the confirmation and the receipt of the confirming candle, and a candle that opened
+    before that is `RETROSPECTIVE` even if it opened after the market-time confirmation. A candle
+    missing from a given `received_at` is not read: without a receipt it cannot be said to have
+    been received.
+    Asking before the Fibonacci is known is a wrong request. Candles that close (or arrive) later
+    are ignored, so the answer at an instant never depends on the future."""
     _require_utc(observed_at, "observed_at")
-    if observed_at < impulse.known_at:
+    market = impulse.pivot_confirmed_market_time
+    if observed_at < market:
         raise InvalidFibonacciRequestError("the Fibonacci is not known yet at observed_at")
+
+    # The candle that confirmed B is the one that closes at that instant.
+    pivot_received: datetime | None = None
+    confirming = next((c for c in closed if c.close_time == market), None)
+    if received_at is not None and confirming is not None and confirming.open_time in received_at:
+        pivot_received = received_at[confirming.open_time]
+        _require_utc(pivot_received, "received_at")
+        if pivot_received < confirming.close_time:
+            raise InvalidFibonacciRequestError(
+                "a finished candle cannot be received before it closes"
+            )
+    known_at = None if pivot_received is None else max(market, pivot_received)
+    if known_at is not None and observed_at < known_at:
+        raise InvalidFibonacciRequestError("the Fibonacci is not known yet at observed_at")
+
+    def arrived(candle: Candle) -> bool:
+        if candle.close_time > observed_at:
+            return False
+        if received_at is None:
+            return True
+        return candle.open_time in received_at and received_at[candle.open_time] <= observed_at
+
     seen = sorted(
-        (c for c in closed if c.open_time > impulse.end.open_time and c.close_time <= observed_at),
+        (c for c in closed if c.open_time > impulse.end.open_time and arrived(c)),
         key=lambda c: c.open_time,
     )
     levels = retracement_levels(impulse, params)
-    known_at = impulse.known_at
     direction = impulse.direction
+
+    def availability(candle: Candle) -> Availability:
+        if candle.open_time < market:
+            return Availability.RETROSPECTIVE
+        if known_at is None:
+            return Availability.UNPROVEN
+        if candle.open_time < known_at:
+            return Availability.RETROSPECTIVE
+        return Availability.OPERABLE
 
     def first(
         found: Sequence[Candle],
     ) -> tuple[LevelEvent | None, LevelEvent | None]:
-        anyone = next(iter(found), None)
-        operable = next((c for c in found if c.open_time >= known_at), None)
-
         def event(candle: Candle | None) -> LevelEvent | None:
             if candle is None:
                 return None
-            return LevelEvent(candle.open_time, candle.close_time, candle.open_time < known_at)
+            return LevelEvent(candle.open_time, candle.close_time, availability(candle))
 
+        anyone = next(iter(found), None)
+        operable = next((c for c in found if availability(c) is Availability.OPERABLE), None)
         return event(anyone), event(operable)
 
     observations = []
@@ -338,7 +403,16 @@ def observe(
         last_close = seen[-1].close
         nearest = _fraction(min(abs(last_close - level.price) for level in levels), distance)
     return FibonacciObservation(
-        impulse, observed_at, len(seen), tuple(observations), by_wicks, by_closes, nearest
+        impulse,
+        observed_at,
+        market,
+        pivot_received,
+        known_at,
+        len(seen),
+        tuple(observations),
+        by_wicks,
+        by_closes,
+        nearest,
     )
 
 
