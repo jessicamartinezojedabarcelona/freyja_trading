@@ -166,6 +166,42 @@ def test_a_double_top_is_seen_forming_then_valid_then_broken_out_of() -> None:
     assert breakout.candle_close_time <= figure.last_evaluated_at
 
 
+def test_a_return_to_the_neckline_after_the_breakout_is_recorded_as_a_retest() -> None:
+    """Decision of 2026-09-26, for every figure: the return to the broken line is evidence and
+    changes nothing about the breakout. The neckline is the low of the trough (117.5); after the
+    fall the price comes back to 117, whose wick touches it while its close stays below."""
+    plain = the_one(instances_of(DoubleTopDetector(), DOUBLE_TOP, tail_to=104), compatible=True)
+    assert "RETEST" not in {e.code for e in plain.latest.evidence}  # never came back
+
+    figure = the_one(
+        instances_of(DoubleTopDetector(), [*UP, 118, "130.5", 105, 117, 100], tail_to=99),
+        compatible=True,
+    )
+    assert figure.state is S.CONFIRMED_DOWN
+    retest = facts_of(figure, "RETEST")
+    assert retest["held"] is True and retest["candles_after_confirmation"] >= 1
+    assert states(figure).count(S.CONFIRMED_DOWN) == 2  # the retest is a new fact, so a new entry
+    assert figure.latest.breakout == plain.latest.breakout  # and the breakout is what it was
+
+
+def test_the_volume_of_the_breakout_is_recorded_against_the_mean_of_the_figure() -> None:
+    candles = zigzag(DOUBLE_TOP, tail_to=104)
+    quiet = the_one(replay_detector(DoubleTopDetector(), context_for(candles), candles))
+    breakout = quiet.latest.breakout
+    assert breakout is not None
+    loud_candles = [
+        dataclasses.replace(
+            c, volume=Decimal(30 if c.open_time == breakout.candle_open_time else 10)
+        )
+        for c in candles
+    ]
+    loud = the_one(replay_detector(DoubleTopDetector(), context_for(loud_candles), loud_candles))
+    volume = facts_of(loud, "BREAKOUT_VOLUME")
+    assert volume["breakout_volume"] == Decimal(30) and volume["mean_volume"] == Decimal(10)
+    assert volume["ratio"] == Decimal(3)
+    assert states(loud) == states(quiet)  # it decides nothing
+
+
 def test_every_result_explains_its_pivots_levels_and_state() -> None:
     figure = the_one(instances_of(DoubleTopDetector(), DOUBLE_TOP, tail_to=104), compatible=True)
 
@@ -342,6 +378,7 @@ def judged(mids: Sequence[float], **params: Any) -> Any:
         neckline_at=lambda _candle: Decimal(100),
         height=Decimal(10),
         extreme_price=Decimal(106),
+        exceed_margin=Decimal("0.15"),
     )
 
 
@@ -350,6 +387,102 @@ def test_a_close_exactly_on_the_neckline_is_not_beyond_it_and_a_small_one_is_onl
     assert judged([105, 99.9]).state is S.BREAKOUT_PENDING_CONFIRMATION  # 0.1 < margin (1.0)
     assert judged([105, 99.0]).state is S.CONFIRMED_DOWN  # exactly the margin: confirmed
     assert judged([105, 98.9]).state is S.CONFIRMED_DOWN
+
+
+def test_a_figure_the_price_may_leave_either_way_has_no_extreme_it_must_not_exceed() -> None:
+    def judge_closes(mids: Sequence[float], **kwargs: Any) -> Any:
+        candles = [
+            candle_at(TF_START + TF.duration * n, Decimal(str(mid)), TF.duration)
+            for n, mid in enumerate(mids)
+        ]
+        return pattern_detection.judge(
+            candles,
+            side=Side.TOP,
+            params=DEFAULT_REVERSAL_PARAMS,
+            start_index=0,
+            breakout_from=1,
+            complete=True,
+            forming=False,
+            neckline_at=lambda _candle: Decimal(100),
+            height=Decimal(10),
+            **kwargs,
+        )
+
+    far_above = [105, 500]
+    with_extreme = judge_closes(
+        far_above, exceed_from=0, extreme_price=Decimal(106), exceed_margin=Decimal("0.15")
+    )
+    assert with_extreme.state is S.INVALIDATED  # a reversal figure: the price went the other way
+    without = judge_closes(far_above, exceed_from=None)
+    assert without.state is S.GEOMETRICALLY_VALID  # a channel: up there is just another side
+    with pytest.raises(InvalidDetectionRequestError, match="price and margin"):
+        judge_closes(far_above, exceed_from=0)
+
+
+def test_the_retest_is_looked_for_after_the_confirmation_not_in_the_confirming_candle() -> None:
+    def through(candles: Sequence[Candle]) -> Any:
+        return pattern_detection.judge(
+            candles,
+            side=Side.TOP,
+            params=DEFAULT_REVERSAL_PARAMS,
+            start_index=0,
+            exceed_from=None,
+            breakout_from=1,
+            complete=True,
+            forming=False,
+            neckline_at=lambda _candle: Decimal(100),
+            height=Decimal(10),
+        )
+
+    first = candle_at(TF_START, Decimal(105), TF.duration)
+    confirming = candle_at(TF_START + TF.duration, Decimal(98), TF.duration)  # 2 beyond: confirms
+    touching = dataclasses.replace(confirming, high=Decimal(101))  # ...with a wick back at 100
+    assert (
+        through([first, touching]).retest_index is None
+    )  # the wick is part of the breakout itself
+    later = candle_at(TF_START + TF.duration * 2, Decimal("99.6"), TF.duration)  # high 100.1
+    judgement = through([first, touching, later])
+    assert judgement.retest_index == 2 and judgement.retest_held is True
+
+
+def test_a_breakout_on_the_very_first_candle_of_the_figure_has_no_volume_to_compare() -> None:
+    candles = [candle_at(TF_START + TF.duration * n, Decimal(90), TF.duration) for n in range(3)]
+    judgement = pattern_detection.Judgement(
+        S.BREAKOUT_PENDING_CONFIRMATION, first_beyond_index=1, start_index=1
+    )
+    codes = {e.code for e in pattern_detection.breakout_evidence(judgement, candles)}
+    assert codes == {"BREAKOUT_SCAN"}
+
+
+def test_a_first_breakout_can_only_begin_before_the_figure_expires() -> None:
+    def judge_expiring(mids: Sequence[float]) -> Any:
+        candles = [
+            candle_at(TF_START + TF.duration * n, Decimal(str(mid)), TF.duration)
+            for n, mid in enumerate(mids)
+        ]
+        return pattern_detection.judge(
+            candles,
+            side=Side.TOP,
+            params=DEFAULT_REVERSAL_PARAMS,
+            start_index=0,
+            exceed_from=None,
+            breakout_from=1,
+            complete=True,
+            forming=False,
+            neckline_at=lambda _candle: Decimal(100),
+            height=Decimal(10),
+            expires_after=1,
+        )
+
+    ran_its_course = judge_expiring([105, 105, 105, 105])
+    assert ran_its_course.state is S.INVALIDATED
+    assert ran_its_course.invalidation_reasons == (InvalidationReason.TOO_LONG,)
+    assert judge_expiring([105, 105]).state is S.GEOMETRICALLY_VALID  # not yet past its last candle
+    # A close through the neckline that comes after the last candle allowed is not a breakout...
+    assert judge_expiring([105, 105, 105, 90]).state is S.INVALIDATED
+    # ...while one that began in time is followed to its end, however late it is confirmed.
+    begun_in_time = judge_expiring([105, 99.5, 98, 98])
+    assert begun_in_time.state is S.CONFIRMED_DOWN and begun_in_time.first_beyond_index == 1
 
 
 def test_a_wick_through_the_neckline_is_not_a_breakout() -> None:
@@ -368,6 +501,7 @@ def test_a_wick_through_the_neckline_is_not_a_breakout() -> None:
         neckline_at=lambda _candle: Decimal(100),
         height=Decimal(10),
         extreme_price=Decimal(106),
+        exceed_margin=Decimal("0.15"),
     )
     assert judgement is not None and judgement.state is S.GEOMETRICALLY_VALID
 

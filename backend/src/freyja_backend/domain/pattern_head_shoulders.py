@@ -155,6 +155,7 @@ class _HeadAndShouldersDetector(PatternDetector):
                 neckline_at=lambda candle: neckline(candle.close_time),
                 height=height,
                 extreme_price=head.price,
+                exceed_margin=params.exceed_margin,
             )
         if judgement is None:
             return None

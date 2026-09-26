@@ -24,6 +24,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
+from typing import Protocol
 
 from freyja_backend.domain.chart_pattern import (
     AnchorPivot,
@@ -194,6 +195,85 @@ class ReversalParams:
 DEFAULT_REVERSAL_PARAMS = ReversalParams()
 
 
+class BreakoutRules(Protocol):
+    """What `judge` needs to know to call a close a breakout, confirm it, fail it or let the
+    figure grow stale. The reversal and the continuation parameters both provide it."""
+
+    @property
+    def breakout_margin(self) -> Decimal: ...
+
+    @property
+    def failure_window_candles(self) -> int: ...
+
+    @property
+    def max_age_candles(self) -> int: ...
+
+
+# Bump on ANY change to a threshold or to how the parameters are read.
+CONTINUATION_PARAMETER_VERSION = "continuation-params-v1"
+
+
+@dataclass(frozen=True, slots=True)
+class ContinuationParams:
+    """Thresholds of the continuation and consolidation detectors (triangles, rectangle, flags,
+    pennants). Relative to the figure's own height, so the same values read the same on any
+    instrument and timeframe. Provisional and unvalidated: see PARAMS-VALIDATION-001."""
+
+    version: str = CONTINUATION_PARAMETER_VERSION
+    pivot_params: PivotParams = DEFAULT_PIVOT_PARAMS
+    min_history: int = MIN_HISTORY_CANDLES
+    # A figure must be at least this fraction of the price range of the `range_window_candles`
+    # candles that end at its first pivot: smaller wiggles are noise, not a figure.
+    min_height_fraction: Decimal = Decimal("0.25")
+    range_window_candles: int = 100
+    # Contacts of a boundary lie within this fraction of the figure's height of its line, and the
+    # closes between the first and the last contact stay inside the lines by the same tolerance.
+    contact_tolerance: Decimal = Decimal("0.15")
+    # A boundary is "flat" when it moves, from the first contact to the last, by at most this
+    # fraction of the height, and "sloping" when it moves by at least `slope_min` of it. Between
+    # the two the boundary is neither, and no triangle or rectangle is seen.
+    flat_tolerance: Decimal = Decimal("0.10")
+    slope_min: Decimal = Decimal("0.15")
+    # A channel spans at least this many candles from its first contact to its last.
+    min_channel_candles: int = 15
+    # A close beyond a boundary by at least this fraction of the height confirms the breakout;
+    # a smaller one leaves it pending.
+    breakout_margin: Decimal = Decimal("0.10")
+    # A close back inside within this many candles of the first close beyond makes it fail.
+    failure_window_candles: int = 10
+    # An unresolved figure older than this many candles (from its first pivot) is stale.
+    max_age_candles: int = 100
+
+    def __post_init__(self) -> None:
+        if not self.version.strip():
+            raise InvalidDetectionRequestError("the parameters must carry their version")
+        for name in (
+            "min_height_fraction",
+            "contact_tolerance",
+            "flat_tolerance",
+            "slope_min",
+            "breakout_margin",
+        ):
+            value = getattr(self, name)
+            if not isinstance(value, Decimal) or not (Decimal(0) < value < Decimal(1)):
+                raise InvalidDetectionRequestError(f"{name} must be a Decimal between 0 and 1")
+        for name in (
+            "range_window_candles",
+            "failure_window_candles",
+            "max_age_candles",
+            "min_history",
+            "min_channel_candles",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise InvalidDetectionRequestError(f"{name} must be an integer of at least 1")
+        if self.flat_tolerance >= self.slope_min:
+            raise InvalidDetectionRequestError("a boundary cannot be flat and sloping at once")
+
+
+DEFAULT_CONTINUATION_PARAMS = ContinuationParams()
+
+
 @dataclass(frozen=True, slots=True)
 class DetectionContext:
     """What a detector needs to know about the series it reads, at one instant."""
@@ -206,10 +286,12 @@ class DetectionContext:
     timeframe: Timeframe
     observed_at: datetime
     params: ReversalParams = DEFAULT_REVERSAL_PARAMS
+    continuation: ContinuationParams = DEFAULT_CONTINUATION_PARAMS
     publication_grace: timedelta = DEFAULT_PUBLICATION_GRACE
-    # Memory of prior-trend classifications, keyed by (side, first pivot). It only saves work:
-    # each entry is a pure function of the candles before that pivot, so it never changes an answer.
-    _prior_trends: dict[tuple[Side, datetime], TrendState] = field(
+    # Memory of prior-trend classifications, keyed by (pivot parameters, minimum history, first
+    # pivot). It only saves work: each entry is a pure function of the candles before that pivot, so
+    # it never changes an answer.
+    _prior_trends: dict[tuple[PivotParams, int, datetime], TrendState] = field(
         default_factory=dict, compare=False, repr=False
     )
 
@@ -262,11 +344,21 @@ class PatternDetector(abc.ABC):
     version: str
     side: Side
 
+    # The parameter set a detector reads, and its version (part of every figure's identity). The
+    # reversal detectors read `context.params`; the continuation ones override these three.
+    def parameter_version(self, context: DetectionContext) -> str:
+        return context.params.version
+
+    def pivot_params(self, context: DetectionContext) -> PivotParams:
+        return context.params.pivot_params
+
+    def min_history(self, context: DetectionContext) -> int:
+        return context.params.min_history
+
     def detect(self, context: DetectionContext, candles: Sequence[Candle]) -> DetectorResult:
         """The figures of this kind visible at `context.observed_at`, from the candles closed by
         then. Candles that close later, and the one in progress, are ignored. Bad data never
         raises: it yields no candidates and the reasons. Only a wrong request raises."""
-        params = context.params
         _require_utc(context.observed_at, "observed_at")  # a wrong request, not bad data
         try:
             closed = assess_candles(
@@ -287,7 +379,7 @@ class PatternDetector(abc.ABC):
             data_source=context.data_source,
             authorized_sources=context.authorized_sources,
             candles=candles,
-            min_history=params.min_history,
+            min_history=self.min_history(context),
             publication_grace=context.publication_grace,
         )
         as_of = closed[-1].close_time if closed else None
@@ -298,7 +390,7 @@ class PatternDetector(abc.ABC):
                 closed,
                 timeframe=context.timeframe,
                 observed_at=context.observed_at,
-                params=params.pivot_params,
+                params=self.pivot_params(context),
             ).confirmed
         )
         found = self.find(context, tuple(closed), swings)
@@ -316,7 +408,7 @@ class PatternDetector(abc.ABC):
         return PatternCandidate(
             self.pattern_type,
             self.version,
-            context.params.version,
+            self.parameter_version(context),
             context.instrument_id,
             context.data_source,
             context.timeframe,
@@ -362,13 +454,17 @@ def line_through(
     return price
 
 
-def prior_trend_evidence(
-    context: DetectionContext, closed: Sequence[Candle], side: Side, first: Pivot
-) -> PatternEvidence:
+def prior_trend_state(
+    context: DetectionContext,
+    closed: Sequence[Candle],
+    first: Pivot,
+    *,
+    pivot_params: PivotParams,
+    min_history: int,
+) -> TrendState:
     """The trend right before the figure began, by the POINT2 classifier, at the instant of its
-    first pivot. A figure whose prior trend is not the one it reverses is **observed**, with this
-    fact recorded, but cannot back a signal: it is never dropped here and never assumed."""
-    key = (side, first.open_time)
+    first pivot. It says nothing about what the figure needs: that is for the caller to record."""
+    key = (pivot_params, min_history, first.open_time)
     state = context._prior_trends.get(key)
     if state is None:
         state = classify_trend(
@@ -380,11 +476,27 @@ def prior_trend_evidence(
             data_source=context.data_source,
             authorized_sources=context.authorized_sources,
             candles=closed,
-            pivot_params=context.params.pivot_params,
-            min_history=context.params.min_history,
+            pivot_params=pivot_params,
+            min_history=min_history,
             publication_grace=context.publication_grace,
         ).state
         context._prior_trends[key] = state
+    return state
+
+
+def prior_trend_evidence(
+    context: DetectionContext, closed: Sequence[Candle], side: Side, first: Pivot
+) -> PatternEvidence:
+    """The trend right before the figure began, by the POINT2 classifier, at the instant of its
+    first pivot. A figure whose prior trend is not the one it reverses is **observed**, with this
+    fact recorded, but cannot back a signal: it is never dropped here and never assumed."""
+    state = prior_trend_state(
+        context,
+        closed,
+        first,
+        pivot_params=context.params.pivot_params,
+        min_history=context.params.min_history,
+    )
     compatible = state is side.required_prior_trend
     return evidence(
         "PRIOR_TREND",
@@ -404,21 +516,29 @@ class Judgement:
     # failure, kept as evidence of how the breakout unfolded.
     first_beyond_index: int | None = None
     resolved_index: int | None = None
+    # Candle of the figure's first pivot: where the volume before the breakout is measured from.
+    start_index: int | None = None
+    # Once the breakout is confirmed: the first later candle that came back to the broken line
+    # (a wick is enough), and whether its close was still beyond it. Only ever evidence.
+    retest_index: int | None = None
+    retest_held: bool | None = None
 
 
 def judge(
     closed: Sequence[Candle],
     *,
     side: Side,
-    params: ReversalParams,
+    params: BreakoutRules,
     start_index: int,
-    exceed_from: int,
+    exceed_from: int | None,
     breakout_from: int,
     complete: bool,
     forming: bool,
     neckline_at: Callable[[Candle], Decimal],
     height: Decimal,
-    extreme_price: Decimal,
+    extreme_price: Decimal | None = None,
+    exceed_margin: Decimal | None = None,
+    expires_after: int | None = None,
     boundary_role: BoundaryRole = BoundaryRole.NECKLINE,
 ) -> Judgement | None:
     """Where a figure stands, from the candles closed by the instant. None: it is not one (yet).
@@ -427,15 +547,24 @@ def judge(
     from `exceed_from`; the neckline is watched from `breakout_from`. All of it reads only closes:
     a wick through a level is not a breakout. Order matters: what happened first wins (a figure
     already broken out of is not later "invalidated" by what the price does afterwards).
+
+    `exceed_from` is None for a figure the price may leave in either direction (a channel): then
+    there is no extreme it must not close beyond. `expires_after` is the last candle in which a
+    first breakout can still happen (a converging figure ends at its apex); with none by then the
+    figure has run its course, though a breakout begun before it is still followed to its end.
     """
     last = len(closed) - 1
     signed = side.signed
     margin = params.breakout_margin * height
 
-    limit = signed(extreme_price) + params.exceed_margin * height
-    exceed = next(
-        (k for k in range(exceed_from, last + 1) if signed(closed[k].close) > limit), None
-    )
+    exceed = None
+    if exceed_from is not None:
+        if extreme_price is None or exceed_margin is None:
+            raise InvalidDetectionRequestError("an extreme to exceed needs its price and margin")
+        limit = signed(extreme_price) + exceed_margin * height
+        exceed = next(
+            (k for k in range(exceed_from, last + 1) if signed(closed[k].close) > limit), None
+        )
 
     def depth(candle: Candle) -> Decimal:
         """How far the close is beyond the neckline (negative: still inside)."""
@@ -447,11 +576,17 @@ def judge(
     def confirms(candle: Candle) -> bool:
         return depth(candle) >= margin  # at least the margin, as the contract says
 
+    def back_at_the_line(candle: Candle) -> bool:
+        """The candle reached the broken line again, if only with a wick."""
+        return signed(side.extreme_of(candle)) >= signed(neckline_at(candle))
+
     first = None
     if complete:
-        first = next((k for k in range(breakout_from, last + 1) if beyond(closed[k])), None)
+        until = last if expires_after is None else min(last, expires_after)
+        first = next((k for k in range(breakout_from, until + 1) if beyond(closed[k])), None)
 
-    stale = (last - start_index) > params.max_age_candles
+    expired = first is None and expires_after is not None and last > expires_after
+    stale = (last - start_index) > params.max_age_candles or expired
 
     if exceed is not None and (first is None or exceed < first):
         return Judgement(
@@ -475,13 +610,20 @@ def judge(
                 _breakout(closed[shown], side, was_confirmed, boundary_role),
                 first_beyond_index=first,
                 resolved_index=failed,
+                start_index=start_index,
             )
         if confirmed is not None:
+            retest = next(
+                (k for k in range(confirmed + 1, last + 1) if back_at_the_line(closed[k])), None
+            )
             return Judgement(
                 side.confirmed_state,
                 _breakout(closed[confirmed], side, True, boundary_role),
                 first_beyond_index=first,
                 resolved_index=confirmed,
+                start_index=start_index,
+                retest_index=retest,
+                retest_held=beyond(closed[retest]) if retest is not None else None,
             )
         if stale:
             return Judgement(
@@ -491,6 +633,7 @@ def judge(
             PatternState.BREAKOUT_PENDING_CONFIRMATION,
             _breakout(closed[first], side, False, boundary_role),
             first_beyond_index=first,
+            start_index=start_index,
         )
     if stale:
         return Judgement(
@@ -526,12 +669,47 @@ def breakout_evidence(
     }
     if judgement.resolved_index is not None:
         facts["candles_to_resolution"] = judgement.resolved_index - judgement.first_beyond_index
-    return (
+    items = [
         evidence(
             "BREAKOUT_SCAN",
             "how the price behaved after its first close beyond the neckline",
             **facts,
-        ),
+        )
+    ]
+    if judgement.retest_index is not None and judgement.resolved_index is not None:
+        items.append(
+            evidence(
+                "RETEST",
+                "after the breakout was confirmed the price came back to the broken line",
+                candles_after_confirmation=judgement.retest_index - judgement.resolved_index,
+                held=bool(judgement.retest_held),
+            )
+        )
+    volume = _volume_evidence(judgement, closed)
+    if volume is not None:
+        items.append(volume)
+    return tuple(items)
+
+
+_SIX = Decimal("0.000001")
+
+
+def _volume_evidence(judgement: Judgement, closed: Sequence[Candle]) -> PatternEvidence | None:
+    """The volume of the first candle that closed beyond the line against the mean volume of the
+    candles the figure took to form. Informational only: it confirms nothing (volume is not
+    comparable between sources, and some report ticks instead of units)."""
+    first, start = judgement.first_beyond_index, judgement.start_index
+    if first is None or start is None or first <= start:
+        return None
+    before = closed[start:first]
+    mean = sum((c.volume for c in before), start=Decimal(0)) / len(before)
+    facts: dict[str, Decimal] = {"breakout_volume": closed[first].volume, "mean_volume": mean}
+    if mean > 0:
+        facts["ratio"] = (closed[first].volume / mean).quantize(_SIX)
+    return evidence(
+        "BREAKOUT_VOLUME",
+        "volume of the first close beyond the line against the mean while the figure formed",
+        **facts,
     )
 
 
@@ -555,6 +733,9 @@ def _same_content(before: PatternEvaluation, after: PatternEvaluation) -> bool:
         and before.breakout == after.breakout
         and before.invalidation_reasons == after.invalidation_reasons
         and before.insufficient_data_reasons == after.insufficient_data_reasons
+        # A new kind of evidence (a retest, once it happens) is news; the numbers inside the
+        # evidence that already existed change with every candle and are not.
+        and {item.code for item in before.evidence} == {item.code for item in after.evidence}
     )
 
 
@@ -682,7 +863,7 @@ def replay_detector(
     ordered = sorted(
         (c for c in candles if c.close_time <= context.observed_at), key=lambda c: c.open_time
     )
-    start = max(0, context.params.min_history - 1) if from_index is None else from_index
+    start = max(0, detector.min_history(context) - 1) if from_index is None else from_index
     instances: tuple[PatternInstance, ...] = ()
     for index in range(start, len(ordered)):
         instant = ordered[index].close_time
