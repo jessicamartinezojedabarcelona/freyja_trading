@@ -73,24 +73,65 @@ descartado.
 - Dos personas podrían escoger extremos distintos a ojo; aquí la regla anterior los fija y **cómo se
   buscan los impulsos** (qué pares se consideran) se define en FIB-DETECT-001, no aquí.
 
-## 3. Cuándo existe un Fibonacci: el instante de conocimiento
+## 3. Cuándo existe un Fibonacci: dos tiempos que no se confunden
 
-Un pivote solo se puede conocer `k` velas después de formarse (`confirmed_at`: el cierre de la
-`k`-ésima vela posterior). **El Fibonacci de un impulso `A→B` empieza a existir en `known_at = confirmed_at(B)`** (el de `A` es
-anterior): el cierre de la `k`-ésima vela posterior a `B`. La latencia con la que el proveedor publica una
-vela no se suma a `known_at`: se aplica al **observar**, porque una vela solo se lee cuando ya se ha
-publicado (`observed_at`). Antes de ese instante **no hay Fibonacci que tocar**.
+Un pivote solo se puede conocer `k` velas después de formarse. Hay **dos instantes distintos** y la
+herramienta conserva **los dos**, siempre:
 
-**Consecuencias, que son parte del contrato:**
+| Tiempo | Qué es | De quién es |
+| ------ | ------ | ----------- |
+| `pivot_confirmed_market_time` | el cierre de la `k`-ésima vela posterior a `B`: cuándo se confirma el pivote **en el mercado** | del par de pivotes (el de `A` es anterior) |
+| `pivot_received_at` | el instante en que Freyja **recibió realmente** esa vela terminada | de los datos (cada vela guardada tiene su `received_at`) |
+| `known_at` | el **mayor** de los dos: desde aquí el Fibonacci existe **para Freyja** | de la observación; **sin conocer** si no se conoce la recepción |
 
-1. **Solo las velas que abren en `known_at` o después pueden registrar un toque de un Fibonacci
-   conocido.** Un toque ocurrido en una vela anterior, incluida la vela cuyo cierre confirma `B`, no lo
-   es: el nivel se calculó después.
-2. **Ese toque anterior no se pierde ni se disfraza: se registra como observación retrospectiva**
-   (`retrospective = true`). Es un hecho sobre el pasado, útil para estudiar, y **nunca una señal
-   histórica operable**: una prueba de estrategia no puede usarlo como si se hubiera visto entonces.
-3. Si el precio ya retrocedió más allá de un nivel cuando el Fibonacci se conoce, ese nivel se registra
-   como **superado retrospectivamente**, no como tocado en directo.
+**Reglas, que son parte del contrato:**
+
+1. **No se atribuye a la apertura de una vela un conocimiento que en vivo todavía no habría llegado.**
+   Una vela es operable solo si **abrió en `known_at` o después**. Una vela que abrió después de la
+   confirmación de mercado pero **antes de que Freyja recibiera** la vela que la confirmó no es operable:
+   sus toques son retrospectivos, aunque abriera cuando el mercado ya había confirmado el pivote.
+2. **Tres estados**, que lleva cada hecho (`availability`), y solo el primero puede usarse como si se
+   hubiera visto entonces. **`OPERABLE` significa únicamente «el nivel era conocido desde la apertura de
+   esa vela»**: no afirma que existiera una entrada ejecutable, ni un precio al que operar, ni una
+   señal. Que se pudiera entrar, y cómo, lo decide cada `StrategySpec`:
+
+   | Estado | Cuándo |
+   | ------ | ------ |
+   | `OPERABLE` | su vela abrió en `known_at` o después: el **nivel ya era conocido desde la apertura de esa vela** |
+   | `RETROSPECTIVE` | su vela abrió antes de `known_at` (o antes de la confirmación de mercado): un hecho sobre el pasado, útil para estudiar y **nunca historia operable** |
+   | `UNPROVEN` | su vela abrió tras la confirmación de mercado, pero **no se conoce la recepción** de la vela que la confirmó: no se afirma ni se niega |
+
+3. **Qué recepción es la buena: la de la versión que cuenta.** `pivot_received_at` es el instante en
+   que Freyja recibió la vela confirmadora **con los valores que se usan para decidir**: la **primera
+   versión cerrada recibida** (ADR 0008, §6). No es la recepción de una versión provisional en curso ni
+   la de una revisión posterior del proveedor. En el almacén de velas esto se cumple por construcción:
+   una vela guardada **nunca se reescribe** (ni sus valores ni su `received_at`), y una diferencia posterior
+   se **señala como revisión sin aplicarse** (pruebas de integración de la sincronización de datos). Las
+   velas (`closed`) y sus recepciones (`received_at`) que se pasan a la herramienta tienen que ser **de la
+   misma lectura, «tal como era»**; una vela revisada después (`REVISED`) no cambia el impulso calculado
+   con la versión que contó, y su señalamiento lo hace la capa de datos (`MARKET-DATA-REVISIONS-001`,
+   pendiente), no esta herramienta.
+4. **Sin registro de recepción, nada posterior a la confirmación se da por operable** (`UNPROVEN`,
+   fail-closed). En particular, las velas **rellenadas a posteriori** traen como `received_at` la hora del
+   relleno, no la de su llegada en vivo: no sirven para probar cuándo se supo algo. Una prueba histórica
+   que necesite operabilidad exige recepciones reales o una hipótesis de latencia declarada aparte
+   (fuera de esta herramienta: es de la prueba de la estrategia).
+5. **Datos recibidos con retraso.** Una vela que ya cerró pero que Freyja aún no había recibido en
+   `observed_at` **no se lee**. Pedir una observación antes de `known_at` es una petición equivocada. Una
+   vela terminada no puede recibirse antes de cerrar (dato incoherente: se rechaza). Una vela sin
+   recepción en el registro que se pasa **no se lee**.
+6. **Consecuencias de la confirmación de mercado**, que valen aunque no se conozca la recepción: un toque
+   ocurrido en una vela anterior a ella, incluida la vela cuyo cierre confirma `B`, **no es un toque de un
+   Fibonacci conocido**: el nivel se calculó después. **No se pierde ni se disfraza**: se registra como
+   observación retrospectiva. Y si el precio ya retrocedió más allá de un nivel cuando el Fibonacci se
+   conoce, ese nivel se registra como **superado retrospectivamente**, no como tocado en directo.
+
+**Ejemplo con retraso** (velas de 5m, `B` en la vela de las 10:00): las tres velas posteriores abren a las
+10:05, 10:10 y 10:15; la tercera cierra a las 10:20:00, así que `pivot_confirmed_market_time` es 10:20:00.
+Si Freyja la recibió a las 10:22:30, `known_at` es 10:22:30. La vela que abre a las 10:20 abrió cuando el
+mercado ya había confirmado el pivote pero Freyja aún no lo sabía: es **retrospectiva**. La primera vela
+**operable** es la que abre a las 10:25. Con la recepción sin retraso (10:20:00), la de las 10:20 sería la
+primera operable.
 
 ## 4. Fórmulas
 
@@ -126,23 +167,56 @@ precios `p` se sustituyen por `K − p`, los niveles de uno son exactamente los 
 - **Un extremo nuevo aparecido antes de confirmarse `B` no cierra nada** (sección 2): `B` se sustituye
   como candidato.
 - **Un extremo nuevo aparecido cuando el Fibonacci ya existe** (`observed_at ≥ known_at`) **no reescribe
-  el pasado**. Se aplica la política versionada `fibonacci-extension-policy-v1`:
-  1. La instancia anterior **se conserva íntegra**, con todo lo que registró hasta entonces.
-  2. Se anota en ella un **suceso de extensión** con el instante en que cierra la primera vela que
-     supera `B` (por mecha, no por cierre: es lo que dice la regla de la sección 2 sobre los extremos).
-  3. Desde ese instante **la instancia anterior no registra nada más**: lo que ocurra ya no es el
-     retroceso de ese impulso.
-  4. Si el nuevo extremo llega a ser un pivote confirmado, **nace otra instancia** con el mismo `A`, el
-     nuevo `B` y su propio `known_at`; solo si cumple la regla de extremos de la sección 2. Entre el
-     suceso de extensión y ese `known_at` **no hay ningún Fibonacci vigente**: no se usa el anterior ni
-     se adelanta el nuevo.
-  5. Nada se redibuja como si se hubiera sabido antes.
+  el pasado**. Se aplica la política versionada `fibonacci-extension-policy-v1`, con estos estados y
+  tiempos (para un impulso alcista; el bajista es el espejo):
+
+  | Estado | Empieza | Termina | Qué ocurre |
+  | ------ | ------- | ------- | ---------- |
+  | `CANDIDATE_B` | al cerrar la vela cuya mecha marca un extremo | al confirmarse como pivote, o al aparecer un extremo mayor (lo sustituye) | **no existe ninguna instancia**: nada se registra por él |
+  | `ACTIVE` | `known_at` de la instancia | en la extensión | la instancia observa velas y registra hechos |
+  | `EXTENDED` | al cerrar la primera vela `E` cuyo máximo supera `B` | nunca: es final | la instancia se conserva íntegra y **no registra nada más** |
+  | `NO_ACTIVE_FIBONACCI` | cuando Freyja recibe `E` | al nacer la nueva instancia, o al abandonarse el candidato | intervalo **sin Fibonacci vigente** |
+
+  **Tiempos de la extensión**, todos guardados y ninguno reescrito después:
+
+  - `coverage_end` = la **apertura** de `E`: la instancia anterior no observa `E` ni las siguientes (no
+    se sabe si los mínimos de `E` fueron anteriores o posteriores a su nuevo máximo).
+  - `extension_market_time` = el **cierre** de `E`, cuando el mercado ya ha superado `B`.
+  - `extension_received_at` = la **recepción** de `E` por Freyja: desde aquí, y no antes, Freyja sabe que
+    la instancia anterior terminó.
+  - **Intervalo de incertidumbre `[coverage_end, extension_received_at)`**: en ese lapso la instancia
+    anterior seguía figurando vigente para Freyja aunque el mercado ya la había superado. Queda
+    registrado y visible; no se corrige a posteriori.
+
+  **Mientras el nuevo extremo es candidato** (`CANDIDATE_B`): no hay ninguna instancia activa; la anterior
+  ya terminó y la nueva aún no existe. Los toques de las velas de ese intervalo **no se registran en
+  ninguna**: ni en la anterior (su cobertura terminó) ni en la nueva (no existe). Si antes de confirmarse
+  aparece un extremo aún mayor, el candidato se sustituye y el intervalo **sigue abierto**.
+
+  **Cuándo nace la nueva instancia**: en el `known_at` de la nueva (el mayor de la confirmación de mercado
+  y la recepción de la vela que confirma el nuevo `B'`), con el mismo `A`, el nuevo `B'` y **sus dos
+  tiempos propios**, y solo si `A` y `B'` cumplen la regla de extremos de la sección 2. Las velas entre el
+  cierre del extremo `B'` y ese `known_at` son **retrospectivas** para la nueva. Si el precio hace un
+  mínimo por debajo de `A` (por mecha) antes de confirmarse `B'`, el par ya no cumple la regla: el
+  candidato se **abandona** y no nace ninguna instancia.
+
+  **Registro que solo se añade**, sin borrar ni editar: `EXTENSION_DETECTED` (con `coverage_end`,
+  `extension_market_time` y `extension_received_at`), `GAP_OPENED` (con el instante real de inicio) y
+  `GAP_CLOSED` con su motivo (`NEW_INSTANCE` o `CANDIDATE_ABANDONED`) y su instante. Un intervalo aún
+  abierto se ve como abierto; cuando se cierra se **añade** el cierre, no se reescribe la apertura.
+
+  1. La instancia anterior **se conserva íntegra**, con todo lo que registró hasta `coverage_end`.
+  2. Desde `coverage_end` **no registra nada más**.
+  3. Entre `extension_received_at` y el `known_at` de la nueva **no hay ningún Fibonacci vigente**: no se
+     usa el anterior ni se adelanta el nuevo.
+  4. Nada se redibuja como si se hubiera sabido antes.
 
 ## 6. Qué registra sobre el precio (hechos, no decisiones)
 
 **Velas observadas:** las velas cerradas **posteriores a la vela de `B`** y con `close_time ≤
 observed_at`. (La vela de `B` no se observa: en ella se formó el extremo.) Pedir una observación en un
-instante anterior a `known_at` es una petición equivocada: el Fibonacci aún no existe.
+instante anterior a `known_at` (o, sin recepción, a `pivot_confirmed_market_time`) es una petición
+equivocada: el Fibonacci aún no existe.
 
 **Definiciones, exactas y solo sobre OHLC:**
 
@@ -164,9 +238,9 @@ instante anterior a `known_at` es una petición equivocada: el Fibonacci aún no
 **Para cada nivel** de `fibonacci-levels-v1`, por separado, con su vela y su instante:
 
 - el **primer toque** (de cualquier vela observada) y el **primer toque operable** (el de la primera
-  vela que **abre en `known_at` o después**);
+  vela `OPERABLE`: la que **abre en `known_at` o después**, sección 3);
 - el **primer cierre más allá** y el **primer cierre más allá operable**, con la misma distinción;
-- cada hecho lleva la marca `retrospective` (sección 3), verdadera si su vela abrió antes de `known_at`.
+- cada hecho lleva su `availability` (`OPERABLE`, `RETROSPECTIVE` o `UNPROVEN`, sección 3).
 
 **Para el conjunto:** el **máximo retroceso** alcanzado como fracción de `D`, por mechas y por cierres
 (0 si el precio no retrocedió), y la **distancia** al nivel más cercano en fracción de `D`.
@@ -241,9 +315,12 @@ identidad de las instancias. Razonados, sin validar, a registrar en PARAMS-VALID
 1. **Espejo exacto**: cada nivel alcista es el bajista al revés, para cada nivel y cada temporalidad.
 2. **Todas las temporalidades**: los mismos resultados para la misma forma de precios en 1m, 5m, 15m,
    1h y 4h; ninguna regla depende de la temporalidad.
-3. **Instantes exactos de disponibilidad**: `known_at` es el cierre de la `k`-ésima vela posterior a `B`;
-   una vela que abre **en** `known_at` es operable; la que abre un instante antes (la que cierra en
-   `known_at`) es retrospectiva; observar antes de `known_at` es una petición equivocada.
+3. **Instantes exactos de disponibilidad, en los dos tiempos**: `pivot_confirmed_market_time` es el cierre
+   de la `k`-ésima vela posterior a `B`; una vela que abre **en** `known_at` es operable; la que abre un
+   instante antes (por ejemplo la que cierra en `known_at`) es retrospectiva; observar antes de `known_at`
+   es una petición equivocada. **Con un dato recibido con retraso**: `known_at` es el de la recepción y
+   no el del mercado, las velas que abrieron entre los dos son retrospectivas, y una vela cerrada pero aún
+   no recibida no se lee. Sin registro de recepción, nada posterior a la confirmación es `OPERABLE`.
 4. **Sin _look-ahead_**: el resultado en un instante es el mismo con las velas cerradas hasta ese
    instante que con toda la serie.
 5. **Toque y cierre más allá exactos**: `low ≤ L ≤ high` con los dos extremos, `close < L` / `close > L`
@@ -287,5 +364,8 @@ Registradas para poder corregirlas; ninguna es de producto.
 - **La primera `StrategySpec`** espera el ejemplo real de Jessica: zona, confirmación, entrada, retraso
   máximo, horizonte, invalidación y tipo de contrato quedan sin fijar. Las variantes `A_CLOSE_1M`,
   `A_INTRABAR_1M` y `B_5M` son ejemplos, no estrategias aprobadas.
-- **FIB-DETECT-001**: cómo se buscan los impulsos y cómo se aplica la política de extensión en el tiempo.
+- **FIB-DETECT-001**, limitada a **búsqueda de impulsos y ciclo de vida** (estados y tiempos de la
+  sección 5): qué pares se consideran impulsos y cómo se aplica la política de extensión en el tiempo.
+  **No** incluye confirmación de rechazo, entrada, vencimiento ni ninguna regla de estrategia: esperan el
+  ejemplo real de Jessica.
 - **Valores a validar con datos reales**: `min_impulse_fraction`, `range_window_candles`, `k`.
