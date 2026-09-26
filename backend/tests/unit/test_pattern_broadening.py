@@ -7,6 +7,7 @@ its high at 137.5 and a swing "at 106" its low at 105.5.
 """
 
 import ast
+import dataclasses
 from collections.abc import Sequence
 from datetime import timedelta
 from decimal import Decimal
@@ -42,7 +43,7 @@ from freyja_backend.domain.pattern_flag import (
     BullPennantDetector,
 )
 from freyja_backend.domain.pattern_wedge import FallingWedgeDetector, RisingWedgeDetector
-from tests.unit.test_market_trend import T0, UP, random_walk, zigzag
+from tests.unit.test_market_trend import RANGE, T0, UP, random_walk, zigzag
 from tests.unit.test_pattern_channel import (
     SYMMETRICAL,
     context_for,
@@ -193,6 +194,24 @@ def test_a_broadening_formation_is_none_of_the_other_figures() -> None:
         )
 
 
+def test_a_widening_figure_that_slopes_one_way_is_not_the_classic_megaphone() -> None:
+    """Both boundaries rising, the ceiling faster: the lines diverge, but the floor does not fall.
+    That is a sloping expansion, another geometry; this detector is the classic megaphone only."""
+    sloping = [*UP, 120, 135, 122, 142, 124, 150]
+    assert history(DETECTOR, zigzag(sloping)) == ()
+    assert history(DETECTOR, zigzag(mirror(sloping))) == ()
+
+
+def test_one_huge_candle_is_not_a_broadening_formation() -> None:
+    """A jump in volatility is not two boundaries that back a succession of swings."""
+    candles = zigzag(RANGE)
+    spiked = [
+        dataclasses.replace(c, high=D("200")) if i == len(candles) - 30 else c
+        for i, c in enumerate(candles)
+    ]
+    assert history(DETECTOR, spiked) == ()
+
+
 def test_it_needs_five_swings_and_the_rest_of_the_family_four() -> None:
     four = [*UP, 116, 133, 106]  # two highs, two lows, moving apart: a figure of four swings
     assert history(DETECTOR, zigzag(four)) == ()
@@ -252,6 +271,8 @@ def channel(
         ("-3", "3", False),  # converging: a symmetrical triangle
         ("6", "6", False),  # both rising: a wedge or a channel
         ("-6", "-6", False),
+        ("10", "3", False),  # both rising, apart: a sloping widening figure, not the megaphone
+        ("-3", "-10", False),  # both falling, apart: the same, downwards
     ],
 )
 def test_the_ceiling_must_rise_and_the_floor_fall_by_the_minimum(

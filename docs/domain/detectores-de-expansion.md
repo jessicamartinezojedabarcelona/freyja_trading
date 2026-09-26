@@ -63,6 +63,13 @@ Con eso, las cuñas quedan separadas del resto de la familia por la geometría y
 
 ## 4. La formación expansiva
 
+**Alcance: solo el megáfono clásico** (techo creciente y suelo decreciente). Las variantes expansivas
+**inclinadas**, con las dos fronteras moviéndose en el mismo sentido y separándose (por ejemplo, las
+dos suben y la superior más deprisa), son otra geometría y **no** las cubre este detector: no
+cumplen «la inferior baja». Si se quisieran, serían un detector aparte con su propio contrato. Una
+vela aislada muy grande, o un aumento de la volatilidad, tampoco es la figura: hacen falta cinco
+swings ordenados que respalden las dos fronteras.
+
 Es el mismo canal con las fronteras **al revés que el triángulo simétrico**: el precio oscila entre
 una frontera superior que **sube** (máximos cada vez más altos) y una inferior que **baja** (mínimos
 cada vez más bajos), y las dos se separan.
@@ -103,6 +110,20 @@ que exista la figura (no hay `FORMING`), se vigilan **las dos fronteras**, el pr
 de cualquiera de ellas es la ruptura y da la dirección (`CONFIRMED_UP` por la superior,
 `CONFIRMED_DOWN` por la inferior), la ruptura que fracasó no se deshace, y no existe la invalidación
 por cerrar contra el sesgo.
+
+**Cuatro cosas que se conservan por separado**, cada una en su sitio del registro y ninguna
+deducida de otra:
+
+| Qué | Dónde queda | Quién la decide |
+| --- | ----------- | --------------- |
+| El **tipo** de figura (`RISING_WEDGE`, `FALLING_WEDGE`) | `pattern_type`, fijo | la geometría; nunca se renombra por lo que ocurra después |
+| La **tendencia anterior** | evidencia `PRIOR_TREND` (`state`) | el clasificador del punto 2, en el primer contacto |
+| El **sesgo tradicional** | `traditional_bias` | el catálogo: dato del tipo, no de la tendencia ni de la ruptura |
+| La **dirección real de la ruptura** | `breakout` y el estado (`CONFIRMED_UP` o `CONFIRMED_DOWN`) | el primer cierre más allá de una frontera, con el margen versionado |
+
+Por eso una cuña ascendente puede leerse como reversión (tras una subida, rompiendo hacia abajo) o
+como continuación (tras una bajada, rompiendo hacia abajo), y una que rompe contra su sesgo clásico
+queda registrada tal cual, sin cambiar su nombre ni su sesgo.
 
 **El sesgo tradicional no interviene.** La cuña ascendente es «bajista» y la descendente «alcista»
 según la tradición, pero eso es un dato del tipo de figura, no una regla del detector: si una cuña
