@@ -22,6 +22,7 @@ from freyja_backend.domain.fibonacci import (
     FibonacciParams,
     Impulse,
     ImpulseDirection,
+    ImpulseRejection,
     check_impulse,
 )
 from freyja_backend.domain.fibonacci_detection import (
@@ -163,6 +164,88 @@ def test_an_equal_extreme_is_not_beyond_b_so_a_double_top_does_not_cut_the_look_
     first, second = twice
     assert first.start == second.start  # same start: the equal extreme did not cut the look-back
     assert second.impulse_candles == first.impulse_candles + 20
+
+
+# The example of the contract (section 16): six candidate starts for one B.
+#   idx 10  L1 = 99.5   outside the window (B is at 120: the window reaches back to 20)
+#   idx 30  L2 = 95.5   in the window, but a wick of 150.5 (candle 40) lies beyond B = 130.5
+#   idx 50  L3 = 101.5  in the window, no wick beyond B, no lower low: the earliest that passes
+#   idx 70  L4 = 103.5  passes too, but is later
+#   idx 90  L5 = 105.5  passes too, but is later
+#   idx 110 L6 = 107.5  passes too, but is later
+CONTRACT_EXAMPLE: list[int | str] = [140, 100, 135, 96, 150, 102, 118, 104, 125, 106, 115, 108, 130]
+
+
+def test_the_contract_example_selects_the_earliest_candidate_that_passes() -> None:
+    candles = zigzag(CONTRACT_EXAMPLE)
+    swings = swing_points(
+        detect_pivots(candles, timeframe=Timeframe.M5, observed_at=candles[-1].close_time).confirmed
+    )
+    index = {c.open_time: i for i, c in enumerate(candles)}
+    end = next(s for s in swings if index[s.open_time] == 120)
+    assert end.price == D("130.5")
+    verdicts = {}
+    for start in (s for s in swings if s.kind.value == "LOW" and index[s.open_time] < 120):
+        in_window = index[start.open_time] >= 120 - DEFAULT_FIBONACCI_PARAMS.search_window_candles
+        check = check_impulse(candles, start, end)
+        verdicts[index[start.open_time]] = (start.price, in_window, check.rejection)
+    assert verdicts == {
+        10: (D("99.5"), False, ImpulseRejection.CANDLE_OUTSIDE_EXTREMES),
+        30: (D("95.5"), True, ImpulseRejection.CANDLE_OUTSIDE_EXTREMES),
+        50: (D("101.5"), True, None),
+        70: (D("103.5"), True, None),
+        90: (D("105.5"), True, None),
+        110: (D("107.5"), True, None),
+    }
+    found = search_impulses(series_for(candles), candles).impulses
+    (chosen,) = [i for i in found if i.end == end]
+    assert index[chosen.start.open_time] == 50 and chosen.start.price == D("101.5")
+    assert chosen.impulse_candles == 70 and chosen.size == D(29)
+
+
+def test_the_selection_uses_only_what_was_known_at_the_instant() -> None:
+    """B (candle 120) becomes a pivot with the close of candle 123, at the instant of candle 124's
+    open. Before that instant no impulse ends at B; from it, the start is always the low of 101.5,
+    whatever comes after (candles that close later are ignored, even wild ones)."""
+    candles = zigzag(CONTRACT_EXAMPLE)
+    duration = Timeframe.M5.duration
+    confirmed = T0 + duration * 124
+    chosen_at = {}
+    for c in candles:
+        at = c.close_time
+        upto = [k for k in candles if k.close_time <= at]
+        result = search_impulses(series_for(candles).at(at), upto)
+        ending = [
+            i
+            for i in result.impulses
+            if i.end.price == D("130.5") and i.end.open_time == T0 + duration * 120
+        ]
+        chosen_at[at] = ending[0].start.price if ending else None
+        assert search_impulses(series_for(candles).at(at), wild(candles, at)) == result
+    assert all(v is None for at, v in chosen_at.items() if at < confirmed)
+    assert chosen_at[confirmed] == D("101.5")
+    assert all(v == D("101.5") for at, v in chosen_at.items() if at >= confirmed)
+
+
+def test_the_hundred_candles_are_a_provisional_parameter_of_the_policy_not_a_law() -> None:
+    """The look-back is a parameter of `fibonacci-search-v1`, provisional and unvalidated: another
+    value gives another (valid) selection, and the policy names its version."""
+    assert DEFAULT_FIBONACCI_PARAMS.search_version == "fibonacci-search-v1"
+    assert DEFAULT_FIBONACCI_PARAMS.search_window_candles == 100
+    text = (REPO / "docs" / "domain" / "fibonacci-retroceso.md").read_text(encoding="utf-8")
+    assert (
+        "provisional" in text.split("## 16.")[1]
+        and "PARAMS-VALIDATION-001" in text.split("## 16.")[1]
+    )
+
+    def start_for(window: int) -> tuple[Decimal, int]:
+        found = search(CONTRACT_EXAMPLE, search_window_candles=window)
+        (leg,) = [i for i in found if i.end.price == D("130.5")]
+        return leg.start.price, leg.impulse_candles
+
+    assert start_for(100) == (D("101.5"), 70)
+    assert start_for(70) == (D("101.5"), 70)  # the window is inclusive: 70 back is allowed
+    assert start_for(69) == (D("103.5"), 50)  # 70 back no longer is: the next candidate
 
 
 def test_the_search_window_bounds_how_far_back_the_start_may_lie() -> None:
