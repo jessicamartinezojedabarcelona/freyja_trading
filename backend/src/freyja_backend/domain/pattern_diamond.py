@@ -35,6 +35,7 @@ from freyja_backend.domain.chart_pattern import (
     BoundaryRole,
     PatternEvaluation,
     PatternEvidence,
+    PatternState,
     PatternType,
     evidence,
 )
@@ -159,10 +160,15 @@ class DiamondDetector(PatternDetector):
             end = start + len(shape.window) - 1
             if end <= covered_until:
                 continue  # a piece of a diamond that began earlier: the same figure, not another
-            covered_until = end
             candidate = self._figure(context, closed, swings, shape)
-            if candidate is not None:
-                found.append(candidate)
+            if candidate is None:
+                continue
+            found.append(candidate)
+            if candidate.evaluation.state is not PatternState.INVALIDATED:
+                # Only a diamond that is still one covers the pieces inside it. One that ran its
+                # course (too old, or past its apex) is reported as such and hides nothing: a
+                # younger window that ends at the same swing may still be a figure of its own.
+                covered_until = end
         return found
 
     def _shape(

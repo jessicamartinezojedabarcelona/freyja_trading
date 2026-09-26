@@ -1165,3 +1165,69 @@ def test_only_a_confirmed_breakout_has_a_confirmation_time() -> None:
     assert "confirmation_close_time" not in fact(diamond_now(pending), "DIAMOND_TIMING")
     confirmed = zigzag(UP_OUT[0], **UP_OUT[1])
     assert "confirmation_close_time" in fact(diamond_now(confirmed), "DIAMOND_TIMING")
+
+
+# -- a diamond that ran its course does not hide the windows inside it -------------------------
+
+# Nine swings: the expansion has seven. The windows that begin one or two swings later end at the
+# same swing and are pieces of the first while it is a diamond; they are younger, though.
+BIG = [*UP, 122, 138, 112, 146, 102, 154, 111, 145]
+
+
+def big_series(age: int, leg: int = 24) -> list[Candle]:
+    """`BIG` with candles that stay inside its exit lines until the last one is `age` candles after
+    the first anchor of the whole figure."""
+    base = zigzag(BIG, tail=0, leg=leg)
+    whole = diamond_now(zigzag(BIG, leg=leg)).evaluation
+    upper, lower = whole.boundaries[-2], whole.boundaries[-1]
+    first = next(k for k, c in enumerate(base) if c.open_time == whole.anchors[0].open_time)
+    return [*base, *creeping(base, upper, lower, first + age - (len(base) - 1))]
+
+
+def test_a_diamond_already_too_old_when_it_is_known_hides_no_younger_window() -> None:
+    """Legs of 25: the whole figure is 200 candles old when its last swing is confirmed, so it is
+    never a figure. The window that begins one swing later ends at the same swing, is younger, and
+    is a diamond of its own: the first must not cover it."""
+    candles = zigzag(BIG, leg=25)
+    found = now(candles)
+    whole = next(c for c in found if len(c.evaluation.anchors) == 9)
+    assert whole.evaluation.state is S.INVALIDATED
+    assert whole.evaluation.invalidation_reasons == (InvalidationReason.TOO_LONG,)
+    younger = [c for c in found if c.evaluation.state is S.GEOMETRICALLY_VALID]
+    assert len(younger) == 1  # one, not one per starting swing
+    assert younger[0].evaluation.anchors[0].open_time > whole.evaluation.anchors[0].open_time
+    last, same = younger[0].evaluation.anchors[-1], whole.evaluation.anchors[-1]
+    assert (last.open_time, last.price) == (same.open_time, same.price)  # the same last swing
+    recorded = history(candles, at_close(candles))
+    assert len(recorded) == 1  # the whole figure was never one: only the younger window is recorded
+    assert recorded[0].latest.anchors == younger[0].evaluation.anchors
+
+
+def test_a_diamond_that_goes_stale_releases_the_windows_inside_it_and_is_never_duplicated() -> None:
+    alive = history(big_series(200), at_close(big_series(200)))
+    assert len(alive) == 1  # at 200 candles the whole figure is the only one
+    assert states(alive[0])[-1] is S.GEOMETRICALLY_VALID and len(alive[0].latest.anchors) == 9
+
+    stale_candles = big_series(201)
+    after = history(stale_candles, at_close(stale_candles))
+    assert len(after) == 2
+    whole = next(i for i in after if len(i.latest.anchors) == 9)
+    piece = next(i for i in after if len(i.latest.anchors) < 9)
+    assert whole.pattern_instance_id == alive[0].pattern_instance_id  # the same record, closed
+    assert states(whole)[-1] is S.INVALIDATED and whole.is_terminal
+    assert states(piece)[-1] is S.GEOMETRICALLY_VALID and not piece.is_terminal
+    assert piece.pattern_instance_id != whole.pattern_instance_id
+    assert piece.latest.anchors[0].open_time > whole.latest.anchors[0].open_time
+    assert sum(1 for i in after if not i.is_terminal) == 1  # never two alive at once
+
+
+def test_a_diamond_that_ended_at_its_apex_releases_nothing_because_its_windows_end_there_too() -> (
+    None
+):
+    """The exit lines of a window that ends at the same swing are the same lines: past the apex
+    they are all over, and no younger window is resurrected by it."""
+    upper, lower = exit_lines(BIG)
+    base = zigzag(BIG, tail=0)
+    candles = [*base, *creeping(base, upper, lower, 60)]
+    found = now(candles, at_close(candles))
+    assert found and all(c.evaluation.state is S.INVALIDATED for c in found)

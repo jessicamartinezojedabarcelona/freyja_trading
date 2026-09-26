@@ -537,7 +537,14 @@ Incorporadas a petición suya en esta revisión:
 - `phase_accepts` es la regla de una fase (pendientes y orden estricto de contactos) como función
   pura, probada con medidas escritas a mano.
 - La ventana más corta válida de cada primer ancla se busca por la posición de los vértices; una
-  figura que empieza dentro de otra y acaba en el mismo swing es un trozo de ella y no otra figura.
+  figura que empieza dentro de otra y acaba en el mismo swing es un trozo de ella y no otra figura,
+  **mientras la primera sea un diamante**. Un diamante que ya cumplió su ciclo (más de 200 velas, o
+  pasado el ápice) se informa como tal y **no cubre** las ventanas que contiene: una ventana más joven
+  que acaba en el mismo swing puede seguir siendo una figura propia, con su propia identidad. Nunca hay
+  dos vivas a la vez: mientras el diamante completo vive cubre a las demás, y cuando caduca por
+  edad las libera (si caducó por el ápice, las demás caducan con él, porque comparten las rectas de
+  salida). Si el diamante completo ya era demasiado viejo al conocerse, nunca fue figura y no esconde
+  nada.
 - Comprobación por mutación: 31 mutantes sobre el detector y los parámetros, todos detectados. Tres
   mutantes que se descartaron por equivalentes: exigir una expansión de tres swings (el canal ya rechaza
   menos de dos máximos y dos mínimos), aceptar como contacto un máximo igual al anterior (un cierre
