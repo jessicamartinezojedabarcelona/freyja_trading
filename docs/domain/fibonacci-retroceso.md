@@ -71,7 +71,7 @@ descartado.
   de `A` a la de `B`) queda registrado sin exigir un mínimo ni un máximo. Un impulso de 8 velas de 5m
   son 40 minutos.
 - Dos personas podrían escoger extremos distintos a ojo; aquí la regla anterior los fija y **cómo se
-  buscan los impulsos** (qué pares se consideran) se define en FIB-DETECT-001, no aquí.
+  buscan los impulsos** (qué pares se consideran) se define en la sección 16.
 
 ## 3. Cuándo existe un Fibonacci: dos tiempos que no se confunden
 
@@ -308,6 +308,8 @@ identidad de las instancias. Razonados, sin validar, a registrar en PARAMS-VALID
 | `levels` | `fibonacci-levels-v1` | 0,236; 0,382; 0,5; 0,618; 0,786 |
 | `min_impulse_fraction` | 0,25 | fracción mínima del rango reciente que debe medir el impulso |
 | `range_window_candles` | 100 | velas del rango de referencia que terminan en `A` |
+| `search_window_candles` | 100 | velas hacia atrás desde `B` dentro de las que puede estar `A` (sección 16) |
+| política de búsqueda | `fibonacci-search-v1` | el tramo dominante que termina en cada swing (sección 16) |
 | política de extensión | `fibonacci-extension-policy-v1` | sección 5 |
 
 ## 11. Pruebas que este contrato exige a quien lo implemente
@@ -369,3 +371,37 @@ Registradas para poder corregirlas; ninguna es de producto.
   **No** incluye confirmación de rechazo, entrada, vencimiento ni ninguna regla de estrategia: esperan el
   ejemplo real de Jessica.
 - **Valores a validar con datos reales**: `min_impulse_fraction`, `range_window_candles`, `k`.
+
+## 16. Búsqueda de impulsos (`fibonacci-search-v1`)
+
+**Qué pares de pivotes se consideran impulsos.** Es una decisión técnica de FIB-DETECT-001 (primera
+parte), documentada aquí para poder corregirla; no dice nada de zonas, confirmación, entrada ni
+vencimiento.
+
+**Política v1: el tramo dominante que termina en cada swing confirmado.**
+
+- Cada swing confirmado `B` (`swing_points`) da, como mucho, **un** impulso: un máximo, uno alcista; un
+  mínimo, uno bajista.
+- El inicio `A` es el **swing opuesto más antiguo**, a no más de `search_window_candles` velas de `B`,
+  con el que el par es un impulso según la sección 2 (sin mechas fuera de los extremos de la vela de `A`
+  a la de `B`, y con el tamaño suficiente). Es, por definición de esa regla, el mínimo más bajo (máximo
+  más alto, en el bajista) desde la última vez que el precio superó `B`.
+- **Nada anterior a la última vela que superó `B` por mecha** puede iniciar un impulso que acabe en `B`:
+  lo impide la regla de extremos de la sección 2, y es ella la que decide, no un atajo de la búsqueda.
+  **La igualdad no supera**: un máximo idéntico al de `B` (un doble techo exacto) no corta la búsqueda.
+- **La ventana acota lo que depende del origen de los datos**: `A` no puede estar más lejos de `B` que
+  `search_window_candles`, así que el resultado en `B` depende solo de las velas de su entorno (más las
+  `range_window_candles` anteriores a `A` para medir el tamaño), nunca de dónde empiece la historia que se
+  entregue.
+- **Datos no aptos no se juzgan**: como en las figuras chartistas, si el contexto observable de la serie
+  no es suficiente (hueco en la ventana, datos atrasados, fuente no autorizada, poca historia) no se
+  devuelve ningún impulso y se dice por qué. La historia mínima es `range_window_candles`.
+- **Solo velas cerradas y pivotes confirmados** en `observed_at`: el mismo resultado con las velas
+  cerradas hasta ese instante que con toda la serie.
+
+**Lo que esta política no hace**, y se podría añadir como otra política versionada: considerar las patas
+elementales entre swings consecutivos dentro de un tramo dominante (un rally con retrocesos intermedios da
+una sola pata larga por swing, no una por cada retroceso interno).
+
+**Ciclo de vida** (estados y tiempos de la sección 5, registros que solo se añaden, intervalos sin
+Fibonacci vigente): es la segunda parte de FIB-DETECT-001 y no se ha implementado aún.
