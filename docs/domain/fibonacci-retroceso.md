@@ -91,24 +91,36 @@ herramienta conserva **los dos**, siempre:
    confirmación de mercado pero **antes de que Freyja recibiera** la vela que la confirmó no es operable:
    sus toques son retrospectivos, aunque abriera cuando el mercado ya había confirmado el pivote.
 2. **Tres estados**, que lleva cada hecho (`availability`), y solo el primero puede usarse como si se
-   hubiera visto entonces:
+   hubiera visto entonces. **`OPERABLE` significa únicamente «el nivel era conocido desde la apertura de
+   esa vela»**: no afirma que existiera una entrada ejecutable, ni un precio al que operar, ni una
+   señal. Que se pudiera entrar, y cómo, lo decide cada `StrategySpec`:
 
    | Estado | Cuándo |
    | ------ | ------ |
-   | `OPERABLE` | su vela abrió en `known_at` o después |
+   | `OPERABLE` | su vela abrió en `known_at` o después: el **nivel ya era conocido desde la apertura de esa vela** |
    | `RETROSPECTIVE` | su vela abrió antes de `known_at` (o antes de la confirmación de mercado): un hecho sobre el pasado, útil para estudiar y **nunca historia operable** |
    | `UNPROVEN` | su vela abrió tras la confirmación de mercado, pero **no se conoce la recepción** de la vela que la confirmó: no se afirma ni se niega |
 
-3. **Sin registro de recepción, nada posterior a la confirmación se da por operable** (`UNPROVEN`,
+3. **Qué recepción es la buena: la de la versión que cuenta.** `pivot_received_at` es el instante en
+   que Freyja recibió la vela confirmadora **con los valores que se usan para decidir**: la **primera
+   versión cerrada recibida** (ADR 0008, §6). No es la recepción de una versión provisional en curso ni
+   la de una revisión posterior del proveedor. En el almacén de velas esto se cumple por construcción:
+   una vela guardada **nunca se reescribe** (ni sus valores ni su `received_at`), y una diferencia posterior
+   se **señala como revisión sin aplicarse** (pruebas de integración de la sincronización de datos). Las
+   velas (`closed`) y sus recepciones (`received_at`) que se pasan a la herramienta tienen que ser **de la
+   misma lectura, «tal como era»**; una vela revisada después (`REVISED`) no cambia el impulso calculado
+   con la versión que contó, y su señalamiento lo hace la capa de datos (`MARKET-DATA-REVISIONS-001`,
+   pendiente), no esta herramienta.
+4. **Sin registro de recepción, nada posterior a la confirmación se da por operable** (`UNPROVEN`,
    fail-closed). En particular, las velas **rellenadas a posteriori** traen como `received_at` la hora del
    relleno, no la de su llegada en vivo: no sirven para probar cuándo se supo algo. Una prueba histórica
    que necesite operabilidad exige recepciones reales o una hipótesis de latencia declarada aparte
    (fuera de esta herramienta: es de la prueba de la estrategia).
-4. **Datos recibidos con retraso.** Una vela que ya cerró pero que Freyja aún no había recibido en
+5. **Datos recibidos con retraso.** Una vela que ya cerró pero que Freyja aún no había recibido en
    `observed_at` **no se lee**. Pedir una observación antes de `known_at` es una petición equivocada. Una
    vela terminada no puede recibirse antes de cerrar (dato incoherente: se rechaza). Una vela sin
    recepción en el registro que se pasa **no se lee**.
-5. **Consecuencias de la confirmación de mercado**, que valen aunque no se conozca la recepción: un toque
+6. **Consecuencias de la confirmación de mercado**, que valen aunque no se conozca la recepción: un toque
    ocurrido en una vela anterior a ella, incluida la vela cuyo cierre confirma `B`, **no es un toque de un
    Fibonacci conocido**: el nivel se calculó después. **No se pierde ni se disfraza**: se registra como
    observación retrospectiva. Y si el precio ya retrocedió más allá de un nivel cuando el Fibonacci se

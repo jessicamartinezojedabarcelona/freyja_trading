@@ -257,7 +257,9 @@ class Availability(enum.StrEnum):
     # Its candle opened before the Fibonacci was known (in market time, or in real time once the
     # confirming candle was received): an observation about the past, never operable history.
     RETROSPECTIVE = "RETROSPECTIVE"
-    # Its candle opened when Freyja already knew the Fibonacci.
+    # Its candle opened when Freyja already knew the Fibonacci: the level was known from the opening
+    # of that candle. It says nothing more: not that an executable entry existed, nor at what
+    # price, nor that it was a signal (that is for each StrategySpec to decide).
     OPERABLE = "OPERABLE"
     # Its candle opened after the market-time confirmation, but the receipt of the confirming
     # candle is not known, so it cannot be claimed that Freyja knew: fail-closed.
@@ -320,12 +322,13 @@ def observe(
     `observed_at` and, if `received_at` is given, already received by then.
 
     `received_at` maps the open time of a candle to the instant Freyja **really received** it as
-    a finished candle. Without it, only the market time is known and nothing after the
-    confirmation can be proven operable (`UNPROVEN`); with it, the Fibonacci is known from the
-    later of the confirmation and the receipt of the confirming candle, and a candle that opened
-    before that is `RETROSPECTIVE` even if it opened after the market-time confirmation. A candle
-    missing from a given `received_at` is not read: without a receipt it cannot be said to have
-    been received.
+    a finished candle: the version whose values are in `closed` (the first closed version
+    received, the one that counts for decisions), never a provisional one or a later revision.
+    Without it, only the market time is known and nothing after the confirmation can be proven
+    operable (`UNPROVEN`); with it, the Fibonacci is known from the later of the confirmation and
+    the receipt of the confirming candle, and a candle that opened before that is `RETROSPECTIVE`
+    even if it opened after the market-time confirmation. A candle missing from a given
+    `received_at` is not read: without a receipt it cannot be said to have been received.
     Asking before the Fibonacci is known is a wrong request. Candles that close (or arrive) later
     are ignored, so the answer at an instant never depends on the future."""
     _require_utc(observed_at, "observed_at")
