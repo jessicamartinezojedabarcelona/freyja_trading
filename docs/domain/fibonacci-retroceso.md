@@ -1,6 +1,7 @@
 # Retroceso de Fibonacci: la herramienta bidireccional (v1, propuesta)
 
-- **Estado:** propuesto. Pendiente de la aprobación de Jessica antes de implementar nada.
+- **Estado:** enfoque aprobado por Jessica (2026-09-26); precisiones de esa aprobación incorporadas.
+  Ver la sección 15 para lo que sigue pendiente.
 - **Fecha:** 2026-09-26
 - **Tarea:** FIB-DOMAIN-001 (contrato; solo documento).
 - **Depende de:** [estructura-de-precio.md](estructura-de-precio.md) (pivotes confirmados y cuándo se
@@ -8,8 +9,8 @@
   inmutable con historial que solo se añade).
 - **Lo usarán:** FIB-CALC-001 (cálculo), FIB-DETECT-001 (detección) y, más adelante y por separado,
   cada `StrategySpec` que quiera usar los niveles. Este documento **no define ninguna estrategia**.
-- **Posición en la hoja de ruta:** por confirmar con Jessica (¿herramienta de localización dentro del
-  punto 5, o punto propio?). No cambia el contrato.
+- **Posición en la hoja de ruta:** herramienta de **localización del punto 5** (decisión de Jessica,
+  2026-09-26).
 
 ## 1. Qué es y qué no es
 
@@ -39,25 +40,46 @@ Un impulso es un par de **pivotes confirmados** (`pivots-v1`, `swing_points`), `
 | `A` | mínimo (`pivot_low`) | máximo (`pivot_high`) |
 | `B` | máximo (`pivot_high`) | mínimo (`pivot_low`) |
 | orden | `B` es posterior a `A` | `B` es posterior a `A` |
-| extremos | entre `A` y `B` ninguna vela tiene un mínimo por debajo del de `A` ni un máximo por encima del de `B` | entre `A` y `B` ninguna vela tiene un máximo por encima del de `A` ni un mínimo por debajo del de `B` |
+| «sin velas fuera de los extremos» | ninguna vela de `A` a `B` tiene un mínimo por debajo de `A` ni un máximo por encima de `B` | ninguna vela de `A` a `B` tiene un máximo por encima de `A` ni un mínimo por debajo de `B` |
+
+**Qué significa «sin velas fuera de los extremos»**, con precisión:
+
+- Se comprueba sobre **todas las velas cerradas desde la vela de `A` hasta la vela de `B`, ambas
+  incluidas**, y sobre sus **mechas** (el mínimo y el máximo de cada vela), nunca sobre los cierres.
+- Es **no estricta**: una vela cuyo mínimo (o máximo) es *igual* al precio del ancla no está fuera.
+- Por tanto el precio de `A` es el mínimo (el máximo, en el bajista) de todo ese tramo y el de `B` su
+  máximo (su mínimo). Los extremos son únicos y reproducibles.
+- Las velas **anteriores a `A`** y **posteriores a `B`** no cuentan para esta regla. Lo posterior a `B`
+  es lo que se observa (sección 6) y lo que puede extender el impulso (sección 5).
+- **Un par que no la cumple no es un impulso**, no un impulso «casi»: no se ajusta ni se recorta.
+
+**Un extremo nuevo antes de confirmarse `B` sustituye a `B` como candidato.** Mientras `B` no está
+confirmado no existe ningún Fibonacci: no hay instancia vigente que cerrar. Si antes de confirmarse
+aparece un extremo mayor (menor, en el bajista), `B` deja de ser un pivote —un pivote exige que las `k`
+velas siguientes no lo superen— y el nuevo extremo pasa a ser el candidato a `B`, con su propia
+confirmación y su propio instante de conocimiento. Nada se cierra ni se registra por el candidato
+descartado.
 
 - **Los extremos son los de las mechas** (el mínimo y el máximo de las velas de los pivotes), que es lo
   que ya guardan los pivotes. No se mezclan cierres.
 - **El tamaño se mide en relación con lo reciente, nunca en una cantidad fija**: `D = |B − A|` debe ser
-  al menos una fracción (`min_impulse_fraction`, provisional) del rango de precios de las
-  `range_window_candles` velas que terminan en `A`, como en las figuras chartistas. Un número fijo de
-  euros o de pips no vale para todos los activos.
-- **La duración se guarda, no se filtra**: el número de velas del impulso (`impulse_candles`) queda
-  registrado sin exigir un mínimo ni un máximo. Un impulso de 8 velas de 5m son 40 minutos.
+  al menos una fracción (`min_impulse_fraction`, provisional: 0,25 como en las figuras chartistas) del
+  rango de precios de las `range_window_candles` velas que terminan en `A`. Un número fijo de euros o de
+  pips no vale para todos los activos. El valor exacto **sí** cuenta: `D` igual a esa fracción es
+  válido, y por debajo no.
+- **La duración se guarda, no se filtra**: el número de velas del impulso (`impulse_candles`, de la vela
+  de `A` a la de `B`) queda registrado sin exigir un mínimo ni un máximo. Un impulso de 8 velas de 5m
+  son 40 minutos.
 - Dos personas podrían escoger extremos distintos a ojo; aquí la regla anterior los fija y **cómo se
   buscan los impulsos** (qué pares se consideran) se define en FIB-DETECT-001, no aquí.
 
 ## 3. Cuándo existe un Fibonacci: el instante de conocimiento
 
 Un pivote solo se puede conocer `k` velas después de formarse (`confirmed_at`: el cierre de la
-`k`-ésima vela posterior). **El Fibonacci de un impulso `A→B` empieza a existir en `known_at =
-confirmed_at(B)`** (el de `A` es anterior), más la latencia con la que el proveedor publica esa vela.
-Antes de ese instante **no hay Fibonacci que tocar**.
+`k`-ésima vela posterior). **El Fibonacci de un impulso `A→B` empieza a existir en `known_at = confirmed_at(B)`** (el de `A` es
+anterior): el cierre de la `k`-ésima vela posterior a `B`. La latencia con la que el proveedor publica una
+vela no se suma a `known_at`: se aplica al **observar**, porque una vela solo se lee cuando ya se ha
+publicado (`observed_at`). Antes de ese instante **no hay Fibonacci que tocar**.
 
 **Consecuencias, que son parte del contrato:**
 
@@ -99,28 +121,60 @@ precios `p` se sustituyen por `K − p`, los niveles de uno son exactamente los 
 - **Identidad:** serie, `A`, `B` (sus instantes y tipos), versión de la calculadora, de la convención y
   de los parámetros. Los mismos anclajes con las mismas versiones son la misma instancia.
 - **Los niveles no se recalculan ni se redibujan.** Un Fibonacci conocido es inmutable.
-- **Un extremo nuevo no reescribe el pasado.** Si el precio supera `B` antes de retroceder (un nuevo
-  máximo en un impulso alcista), el Fibonacci vigente se cierra como **superado por extensión** y, si el
-  nuevo extremo llega a ser un pivote confirmado, nace **otra instancia** con su propio `B` y su propio
-  `known_at`. Nada se reescribe como si se hubiera sabido antes.
-- El historial de la instancia **solo se añade** (toques, cierres más allá, máximo retroceso), como el de
-  una figura chartista.
+- **El historial de la instancia solo se añade** (toques, cierres más allá, máximo retroceso), como el
+  de una figura chartista.
+- **Un extremo nuevo aparecido antes de confirmarse `B` no cierra nada** (sección 2): `B` se sustituye
+  como candidato.
+- **Un extremo nuevo aparecido cuando el Fibonacci ya existe** (`observed_at ≥ known_at`) **no reescribe
+  el pasado**. Se aplica la política versionada `fibonacci-extension-policy-v1`:
+  1. La instancia anterior **se conserva íntegra**, con todo lo que registró hasta entonces.
+  2. Se anota en ella un **suceso de extensión** con el instante en que cierra la primera vela que
+     supera `B` (por mecha, no por cierre: es lo que dice la regla de la sección 2 sobre los extremos).
+  3. Desde ese instante **la instancia anterior no registra nada más**: lo que ocurra ya no es el
+     retroceso de ese impulso.
+  4. Si el nuevo extremo llega a ser un pivote confirmado, **nace otra instancia** con el mismo `A`, el
+     nuevo `B` y su propio `known_at`; solo si cumple la regla de extremos de la sección 2. Entre el
+     suceso de extensión y ese `known_at` **no hay ningún Fibonacci vigente**: no se usa el anterior ni
+     se adelanta el nuevo.
+  5. Nada se redibuja como si se hubiera sabido antes.
 
 ## 6. Qué registra sobre el precio (hechos, no decisiones)
 
-Para cada nivel de `fibonacci-levels-v1`, por separado, con su vela e instante y con la marca
-`retrospective`:
+**Velas observadas:** las velas cerradas **posteriores a la vela de `B`** y con `close_time ≤
+observed_at`. (La vela de `B` no se observa: en ella se formó el extremo.) Pedir una observación en un
+instante anterior a `known_at` es una petición equivocada: el Fibonacci aún no existe.
 
-- el **primer toque**: la mecha llega al nivel (alcista: el mínimo de la vela ≤ el nivel; bajista: el
-  máximo ≥ el nivel);
-- el **primer cierre más allá** del nivel;
-- y, para el conjunto: el **máximo retroceso** alcanzado (como fracción de `D`, por mechas y por
-  cierres) y la **distancia** al nivel más cercano en fracción de `D`.
+**Definiciones, exactas y solo sobre OHLC:**
 
-La herramienta **no aplica tolerancias ni zonas**: distingue solo «tocó», «cerró más allá» y «no
-llegó». Qué significa «entrar en una zona» (por ejemplo 50 %–61,8 %), con qué tolerancia, y cuál de esos
-hechos cuenta, lo decide cada `StrategySpec`. La zona 50 %–61,8 % es una **hipótesis de trabajo** de
-Jessica; 38,2 %, 50 % y 61,8 % se registran por separado y no se declara ninguno «más seguro».
+- **Toque de un nivel `L`**: una vela lo toca si **`low ≤ L ≤ high`** (los dos extremos incluidos). Es
+  un hecho sobre el rango de la vela y **nada más**: no dice en qué orden pasó el precio por sus
+  valores dentro de la vela, **ni a qué precio se habría podido ejecutar nada, ni que se pudiera
+  entrar ahí, ni que sea una señal**. Un toque no atribuye capacidad de entrada.
+- **Primer cierre más allá de `L`**, con dirección y nivel explícitos: la primera vela con
+  - **`close < L`** en un impulso **alcista** (el precio, retrocediendo hacia abajo, cierra por debajo
+    del nivel, del lado de `A`), o
+  - **`close > L`** en un impulso **bajista** (el precio, retrocediendo hacia arriba, cierra por encima
+    del nivel, del lado de `A`).
+
+  Las desigualdades son **estrictas**: un cierre igual al nivel no está más allá (y es un toque).
+- Que una vela toque `L` y otra cierre más allá son hechos **independientes**: una vela puede cruzar un
+  nivel entero sin cerrarlo por el otro lado, y un hueco entre velas puede dejar un nivel superado sin
+  que ninguna lo toque.
+
+**Para cada nivel** de `fibonacci-levels-v1`, por separado, con su vela y su instante:
+
+- el **primer toque** (de cualquier vela observada) y el **primer toque operable** (el de la primera
+  vela que **abre en `known_at` o después**);
+- el **primer cierre más allá** y el **primer cierre más allá operable**, con la misma distinción;
+- cada hecho lleva la marca `retrospective` (sección 3), verdadera si su vela abrió antes de `known_at`.
+
+**Para el conjunto:** el **máximo retroceso** alcanzado como fracción de `D`, por mechas y por cierres
+(0 si el precio no retrocedió), y la **distancia** al nivel más cercano en fracción de `D`.
+
+La herramienta **no aplica tolerancias ni zonas**. Qué significa «entrar en una zona» (por ejemplo
+50 %–61,8 %), con qué tolerancia, y cuál de estos hechos cuenta, lo decide cada `StrategySpec`. La zona
+50 %–61,8 % es una **hipótesis de trabajo** de Jessica; 38,2 %, 50 % y 61,8 % se registran por separado
+y no se declara ninguno «más seguro».
 
 ## 7. Datos que usa
 
@@ -168,30 +222,42 @@ correspondiente a su cierre; **pendiente**: el patrón exacto que confirma el re
 permitido). Ningún ejemplo con velas de este repositorio es una regla aprobada; Jessica dará un ejemplo
 real antes de definir una estrategia concreta.
 
-## 10. Parámetros provisionales (`fibonacci-params-v1`)
+## 10. Parámetros versionados (`fibonacci-params-v1`)
 
-Razonados, sin validar, para registrar en PARAMS-VALIDATION-001 cuando se implementen. Todos relativos.
+Todo lo siguiente es **parámetro con versión**: cambiar cualquiera cambia la versión y, con ella, la
+identidad de las instancias. Razonados, sin validar, a registrar en PARAMS-VALIDATION-001. Todos relativos.
 
-| Parámetro | Significado |
-| --------- | ----------- |
-| `min_impulse_fraction` | fracción mínima del rango reciente que debe medir el impulso (valor por fijar en FIB-DETECT-001) |
-| `range_window_candles` | velas del rango de referencia que terminan en `A` |
-| `pivot_params.k` | el de `pivots-v1` (3) |
+| Parámetro | Valor | Significado |
+| --------- | ----- | ----------- |
+| `pivot_params.k` | 3 | el de `pivots-v1`: velas a cada lado que confirman un pivote |
+| `convention` | `fibonacci-convention-v1` | extremos de mecha y escala lineal |
+| `levels` | `fibonacci-levels-v1` | 0,236; 0,382; 0,5; 0,618; 0,786 |
+| `min_impulse_fraction` | 0,25 | fracción mínima del rango reciente que debe medir el impulso |
+| `range_window_candles` | 100 | velas del rango de referencia que terminan en `A` |
+| política de extensión | `fibonacci-extension-policy-v1` | sección 5 |
 
 ## 11. Pruebas que este contrato exige a quien lo implemente
 
 1. **Espejo exacto**: cada nivel alcista es el bajista al revés, para cada nivel y cada temporalidad.
 2. **Todas las temporalidades**: los mismos resultados para la misma forma de precios en 1m, 5m, 15m,
    1h y 4h; ninguna regla depende de la temporalidad.
-3. **Sin _look-ahead_**: un toque anterior a `known_at` es siempre `retrospective`; el resultado en un
-   instante es el mismo con las velas cerradas hasta ese instante que con toda la serie.
-4. **Aritmética exacta**: `Decimal`, 12 decimales, sin `float`.
-5. **Identidad estable**, y un extremo nuevo crea otra instancia sin tocar la anterior.
-6. **Mutación**: cada comparación cambiada a propósito es detectada.
+3. **Instantes exactos de disponibilidad**: `known_at` es el cierre de la `k`-ésima vela posterior a `B`;
+   una vela que abre **en** `known_at` es operable; la que abre un instante antes (la que cierra en
+   `known_at`) es retrospectiva; observar antes de `known_at` es una petición equivocada.
+4. **Sin _look-ahead_**: el resultado en un instante es el mismo con las velas cerradas hasta ese
+   instante que con toda la serie.
+5. **Toque y cierre más allá exactos**: `low ≤ L ≤ high` con los dos extremos, `close < L` / `close > L`
+   estrictos, y ningún resultado depende del orden dentro de la vela ni atribuye entrada o señal.
+6. **Regla de extremos**: una vela fuera por una mecha invalida el impulso; una igual al ancla, no;
+   los cierres no cuentan.
+7. **Aritmética exacta**: `Decimal`, 12 decimales, sin `float`.
+8. **Identidad estable**; un extremo antes de confirmarse `B` no cierra nada; uno posterior conserva la
+   instancia anterior y crea la nueva según la política de la sección 5.
+9. **Mutación**: cada comparación cambiada a propósito es detectada.
 
 ## 12. Lo que este documento no decide
 
-Cómo se buscan los impulsos (FIB-DETECT-001), el valor de `min_impulse_fraction`, las extensiones, la
+Cómo se buscan los impulsos (FIB-DETECT-001), las extensiones de precio (niveles fuera del impulso), la
 escala logarítmica, cualquier zona con tolerancia, cualquier regla de confirmación, entrada, retraso
 máximo, vencimiento, horizonte, invalidación, stop u objetivo, y la eficacia de nada de esto.
 
@@ -210,8 +276,16 @@ Registradas para poder corregirlas; ninguna es de producto.
 
 1. Extremos de mecha y escala lineal en la v1, versionados, porque son los que ya guardan los pivotes.
 2. Solo retrocesos en la v1: las extensiones son otra medición.
-3. El instante de conocimiento es el de confirmación del pivote `B` más la latencia de publicación, para
-   que ningún toque anterior parezca operable.
+3. El instante de conocimiento es el de confirmación del pivote `B` (la latencia de publicación se aplica al
+   observar), para que ningún toque anterior parezca operable.
 4. La herramienta no aplica tolerancias: registrar hechos exactos deja la interpretación a la estrategia.
 5. Un impulso propio de la herramienta es un par de pivotes con extremos propios (sección 2), para que
    los anclajes sean únicos y reproducibles.
+
+## 15. Lo que sigue pendiente
+
+- **La primera `StrategySpec`** espera el ejemplo real de Jessica: zona, confirmación, entrada, retraso
+  máximo, horizonte, invalidación y tipo de contrato quedan sin fijar. Las variantes `A_CLOSE_1M`,
+  `A_INTRABAR_1M` y `B_5M` son ejemplos, no estrategias aprobadas.
+- **FIB-DETECT-001**: cómo se buscan los impulsos y cómo se aplica la política de extensión en el tiempo.
+- **Valores a validar con datos reales**: `min_impulse_fraction`, `range_window_candles`, `k`.
