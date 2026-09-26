@@ -20,7 +20,7 @@ validated (PARAMS-VALIDATION-001).
 import abc
 import enum
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -308,6 +308,84 @@ class ContinuationParams:
 
 DEFAULT_CONTINUATION_PARAMS = ContinuationParams()
 
+# Bump on ANY change to a threshold, to a structural rule of the diamond or to how they are read.
+DIAMOND_PARAMETER_VERSION = "diamond-params-v1"
+
+
+@dataclass(frozen=True, slots=True)
+class DiamondParams:
+    """Every number the diamond detector reads, and the version of the set (part of each
+    instance's identity, so an instance identifies the whole calculation that produced it). The
+    values are its own: a change in another figure's parameters never changes a diamond already
+    recorded. Fixed by the version and not configurable: six swings at least, and the two vertices
+    (the highest high and the lowest low) are consecutive swings. Provisional and unvalidated: see
+    PARAMS-VALIDATION-001 and section 10 of ``docs/domain/detectores-de-expansion.md``."""
+
+    version: str = DIAMOND_PARAMETER_VERSION
+    pivot_params: PivotParams = DEFAULT_PIVOT_PARAMS
+    min_history: int = MIN_HISTORY_CANDLES
+    # The widest width (top vertex minus bottom vertex) is at least this fraction of the price range
+    # of the `range_window_candles` candles that end at the first anchor.
+    min_height_fraction: Decimal = Decimal("0.25")
+    range_window_candles: int = 100
+    # Of the height of each phase: contacts within it of their line, and a boundary that moves at
+    # least `slope_min` of it (the expansion's upper one up, the lower one down; the contraction's
+    # the other way round).
+    contact_tolerance: Decimal = Decimal("0.15")
+    slope_min: Decimal = Decimal("0.15")
+    # Each phase spans at least this many candles from its first contact to its last.
+    min_channel_candles: int = 15
+    # Of the contraction's height: a close beyond a boundary by at least this confirms the
+    # breakout, a smaller one leaves it pending; a close back inside within `failure_window_candles`
+    # of the first close beyond makes it fail.
+    breakout_margin: Decimal = Decimal("0.10")
+    failure_window_candles: int = 10
+    # An unresolved diamond older than this many candles (from its first anchor) is stale: twice a
+    # triangle's, because it has two phases.
+    diamond_max_age_candles: int = 200
+
+    @property
+    def max_age_candles(self) -> int:
+        """What `judge` asks of its parameters (see `BreakoutRules`)."""
+        return self.diamond_max_age_candles
+
+    def __post_init__(self) -> None:
+        if not self.version.strip():
+            raise InvalidDetectionRequestError("the parameters must carry their version")
+        for name in ("min_height_fraction", "contact_tolerance", "slope_min", "breakout_margin"):
+            value = getattr(self, name)
+            if not isinstance(value, Decimal) or not (Decimal(0) < value < Decimal(1)):
+                raise InvalidDetectionRequestError(f"{name} must be a Decimal between 0 and 1")
+        for name in (
+            "range_window_candles",
+            "min_channel_candles",
+            "failure_window_candles",
+            "diamond_max_age_candles",
+            "min_history",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise InvalidDetectionRequestError(f"{name} must be an integer of at least 1")
+
+    def channel_params(self) -> "ContinuationParams":
+        """The same numbers in the form the two-boundary channel reads them."""
+        return ContinuationParams(
+            version=self.version,
+            pivot_params=self.pivot_params,
+            min_history=self.min_history,
+            min_height_fraction=self.min_height_fraction,
+            range_window_candles=self.range_window_candles,
+            contact_tolerance=self.contact_tolerance,
+            slope_min=self.slope_min,
+            min_channel_candles=self.min_channel_candles,
+            breakout_margin=self.breakout_margin,
+            failure_window_candles=self.failure_window_candles,
+            max_age_candles=self.diamond_max_age_candles,
+        )
+
+
+DEFAULT_DIAMOND_PARAMS = DiamondParams()
+
 
 @dataclass(frozen=True, slots=True)
 class DetectionContext:
@@ -322,7 +400,13 @@ class DetectionContext:
     observed_at: datetime
     params: ReversalParams = DEFAULT_REVERSAL_PARAMS
     continuation: ContinuationParams = DEFAULT_CONTINUATION_PARAMS
+    diamond: DiamondParams = DEFAULT_DIAMOND_PARAMS
     publication_grace: timedelta = DEFAULT_PUBLICATION_GRACE
+    # When Freyja really received each candle (its open time -> the instant), the first closed
+    # version, never rewritten. Only the detectors that tell what Freyja knew from what happened
+    # read it (the diamond); without it none of them can say a figure was known when a candle
+    # opened, and a candle that was not received by `observed_at` is not read.
+    received_at: Mapping[datetime, datetime] | None = field(default=None, compare=False, repr=False)
     # Memory of prior-trend classifications, keyed by (pivot parameters, minimum history, first
     # pivot). It only saves work: each entry is a pure function of the candles before that pivot, so
     # it never changes an answer.

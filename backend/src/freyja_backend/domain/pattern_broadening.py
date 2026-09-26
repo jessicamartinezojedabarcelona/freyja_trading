@@ -17,20 +17,16 @@ are watched and the first close beyond either one is the breakout, recorded with
 direction. The trend before it is kept as context.
 """
 
-from itertools import pairwise
-
 from freyja_backend.domain.chart_pattern import PatternType
-from freyja_backend.domain.market_structure import Pivot
-from freyja_backend.domain.pattern_channel import Channel, ChannelDetector, falling, rising
+from freyja_backend.domain.pattern_channel import (
+    Channel,
+    ChannelDetector,
+    falling,
+    rising,
+    strictly_higher,
+    strictly_lower,
+)
 from freyja_backend.domain.pattern_detection import ContinuationParams
-
-
-def strictly_higher(contacts: tuple[Pivot, ...]) -> bool:
-    return all(before.price < after.price for before, after in pairwise(contacts))
-
-
-def strictly_lower(contacts: tuple[Pivot, ...]) -> bool:
-    return all(before.price > after.price for before, after in pairwise(contacts))
 
 
 class BroadeningFormationDetector(ChannelDetector):

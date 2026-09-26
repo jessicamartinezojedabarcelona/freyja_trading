@@ -1,17 +1,17 @@
 # Detectores de cuñas y formaciones expansivas (v1)
 
 - **Estado:** en construcción por partes. Vigente hoy: la parte a (cuña ascendente y cuña
-  descendente) y la parte b (formación expansiva). La parte c (diamante) tiene aquí su contrato
-  **propuesto** (sección 10), en revisión de Jessica; no hay código todavía.
+  descendente), la parte b (formación expansiva) y la parte c (diamante, sección 10).
 - **Fecha:** 2026-09-26
-- **Tarea:** POINT3-EXPANSION-001 (5 de 7 del punto 3), partes a y b.
+- **Tarea:** POINT3-EXPANSION-001 (5 de 7 del punto 3), partes a, b y c.
 - **Depende de:** [detectores-de-continuacion.md](detectores-de-continuacion.md) (el canal de dos
   rectas y todo lo que comparte la familia: ruptura por cierre, evidencia de reprueba y de volumen,
   ápice), [detectores-de-reversion.md](detectores-de-reversion.md) (la fontanería común),
   [figuras-chartistas.md](figuras-chartistas.md) e [instancia-de-figura.md](instancia-de-figura.md).
 - **Código:** `backend/src/freyja_backend/domain/pattern_wedge.py` (cuñas),
-  `pattern_broadening.py` (formación expansiva) y el canal de `pattern_channel.py`. Dominio puro,
-  sin E/S. Pruebas en `backend/tests/unit/test_pattern_wedge.py` y `test_pattern_broadening.py`.
+  `pattern_broadening.py` (formación expansiva), `pattern_diamond.py` (diamante) y el canal de
+  `pattern_channel.py`. Dominio puro, sin E/S. Pruebas en `backend/tests/unit/test_pattern_wedge.py`,
+  `test_pattern_broadening.py` y `test_pattern_diamond.py`.
 
 Lo dicho en los documentos anteriores sobre **qué hace y qué no hace un detector** vale aquí sin
 cambios: función pura de lo que se sabía en un instante, sin patrones de velas ni indicadores, sin
@@ -157,9 +157,8 @@ La misma que la familia (sección 5 del documento de continuación): `CHANNEL` (
 
 ## 8. Lo que este documento no decide
 
-El diamante (parte c de POINT3-EXPANSION-001, sección 10, propuesto), cómo se integran varias
-figuras como evidencia de una hipótesis (POINT3-HYPOTHESIS-001), objetivos, entradas, vencimientos,
-señales y órdenes, y la persistencia de las instancias.
+Cómo se integran varias figuras como evidencia de una hipótesis (POINT3-HYPOTHESIS-001), objetivos,
+entradas, vencimientos, señales y órdenes, y la persistencia de las instancias.
 
 ## 9. Ejemplos: lo que pasa y lo que falla
 
@@ -189,13 +188,14 @@ figura, con los mínimos como primer contacto.
 | Cada máximo más alto que el anterior, cada mínimo más bajo | — | 100, 110, 120 y 90, 80 | 100, 100, 120 o 100, 99, 120; 90, 90 o 90, 91 |
 | Cinco swings como mínimo | — | tres máximos y dos mínimos (o al revés) | dos y dos |
 
-## 10. El diamante (parte c): contrato propuesto
+## 10. El diamante (parte c): contrato
 
-**Estado: contrato en revisión de Jessica** (segunda revisión). Nada de esta sección está
-implementado. Jessica aceptó para la v1 las cinco decisiones de la propuesta y la secuencia de seis
-swings, los vértices consecutivos, el límite de 200 velas y `diamond-params-v1` propio; y pidió
-corregir la regla temporal de las rupturas «en vivo» (10.4) y aclarar si un contacto nuevo cambia las
-fronteras (10.5). Cuando se apruebe el diff de este documento, el detector se escribe conforme a él.
+**Estado: contrato aprobado por Jessica e implementado** en `pattern_diamond.py` (detector),
+`pattern_detection.py` (`DiamondParams`, `DetectionContext.diamond` y `DetectionContext.received_at`) y
+`backend/tests/unit/test_pattern_diamond.py`. Jessica aceptó las cinco decisiones de la propuesta, la
+secuencia de seis swings, los vértices consecutivos, el límite de 200 velas y `diamond-params-v1` propio,
+y pidió corregir la regla temporal de las rupturas «en vivo» (10.4), aclarar si un contacto nuevo cambia
+las fronteras (10.5) y dar nombre propio a cada altura (10.7).
 
 ### 10.1 Qué es
 
@@ -525,3 +525,21 @@ Incorporadas a petición suya en esta revisión:
     conocimiento, conservando la anterior, y sería otra política.
 11. **Sin instantes de llegada, nunca `LIVE`** (10.4): aclaración de implementación, coherente con
     Fibonacci y con el fail-closed de la familia; no cambia ninguna regla aprobada.
+
+### 10.10 Notas de implementación
+
+- Los instantes de llegada entran por `DetectionContext.received_at` (hora de apertura de la vela →
+  instante en que Freyja la recibió). Con él, el detector lee solo las velas recibidas en el instante
+  evaluado; sin él no hay `known_at` y la procedencia nunca es `LIVE` (10.4).
+- `DiamondParams.channel_params()` da los mismos números en la forma que lee el canal; el diamante
+  reutiliza `fit_channel` para cada fase y `judge` para la ruptura, con `contraction_height` como
+  altura del margen.
+- `phase_accepts` es la regla de una fase (pendientes y orden estricto de contactos) como función
+  pura, probada con medidas escritas a mano.
+- La ventana más corta válida de cada primer ancla se busca por la posición de los vértices; una
+  figura que empieza dentro de otra y acaba en el mismo swing es un trozo de ella y no otra figura.
+- Comprobación por mutación: 31 mutantes sobre el detector y los parámetros, todos detectados. Tres
+  mutantes que se descartaron por equivalentes: exigir una expansión de tres swings (el canal ya rechaza
+  menos de dos máximos y dos mínimos), aceptar como contacto un máximo igual al anterior (un cierre
+  dentro de una recta que baja lo impide) y vigilar la ruptura desde el último contacto (su cierre
+  ya está dentro por construcción).
