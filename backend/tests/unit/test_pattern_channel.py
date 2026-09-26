@@ -651,6 +651,7 @@ def test_the_documented_parameters_are_exactly_the_default_ones() -> None:
         "max_flag_candles": Decimal(params.max_flag_candles),
         "parallel_tolerance": params.parallel_tolerance,
         "pennant_convergence_min": params.pennant_convergence_min,
+        "wedge_convergence_min": params.wedge_convergence_min,
     }
     assert documented == expected
     assert params.version == "continuation-params-v1"

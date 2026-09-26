@@ -238,9 +238,8 @@ class ChannelDetector(ContinuationDetector):
     """One detector = one figure of the two-boundary family. Subclasses say which slopes they
     accept and nothing else."""
 
-    def accepts(
-        self, upper_rise: Decimal, lower_rise: Decimal, height: Decimal, params: ContinuationParams
-    ) -> bool:
+    def accepts(self, fit: Channel, params: ContinuationParams) -> bool:
+        """Whether this channel, measured, is a figure of this kind."""
         raise NotImplementedError
 
     def find(
@@ -276,7 +275,7 @@ class ChannelDetector(ContinuationDetector):
             index,
             swings,
             position,
-            accepted=lambda fit: self.accepts(fit.upper_rise, fit.lower_rise, fit.height, params),
+            accepted=lambda fit: self.accepts(fit, params),
         )
 
     def _figure(
@@ -422,37 +421,35 @@ class RectangleDetector(ChannelDetector):
     pattern_type = PatternType.RECTANGLE
     version = "rectangle-detector-v1"
 
-    def accepts(
-        self, upper_rise: Decimal, lower_rise: Decimal, height: Decimal, params: ContinuationParams
-    ) -> bool:
-        return flat(upper_rise, height, params) and flat(lower_rise, height, params)
+    def accepts(self, fit: Channel, params: ContinuationParams) -> bool:
+        return flat(fit.upper_rise, fit.height, params) and flat(fit.lower_rise, fit.height, params)
 
 
 class AscendingTriangleDetector(ChannelDetector):
     pattern_type = PatternType.ASCENDING_TRIANGLE
     version = "ascending-triangle-detector-v1"
 
-    def accepts(
-        self, upper_rise: Decimal, lower_rise: Decimal, height: Decimal, params: ContinuationParams
-    ) -> bool:
-        return flat(upper_rise, height, params) and rising(lower_rise, height, params)
+    def accepts(self, fit: Channel, params: ContinuationParams) -> bool:
+        return flat(fit.upper_rise, fit.height, params) and rising(
+            fit.lower_rise, fit.height, params
+        )
 
 
 class DescendingTriangleDetector(ChannelDetector):
     pattern_type = PatternType.DESCENDING_TRIANGLE
     version = "descending-triangle-detector-v1"
 
-    def accepts(
-        self, upper_rise: Decimal, lower_rise: Decimal, height: Decimal, params: ContinuationParams
-    ) -> bool:
-        return falling(upper_rise, height, params) and flat(lower_rise, height, params)
+    def accepts(self, fit: Channel, params: ContinuationParams) -> bool:
+        return falling(fit.upper_rise, fit.height, params) and flat(
+            fit.lower_rise, fit.height, params
+        )
 
 
 class SymmetricalTriangleDetector(ChannelDetector):
     pattern_type = PatternType.SYMMETRICAL_TRIANGLE
     version = "symmetrical-triangle-detector-v1"
 
-    def accepts(
-        self, upper_rise: Decimal, lower_rise: Decimal, height: Decimal, params: ContinuationParams
-    ) -> bool:
-        return falling(upper_rise, height, params) and rising(lower_rise, height, params)
+    def accepts(self, fit: Channel, params: ContinuationParams) -> bool:
+        return falling(fit.upper_rise, fit.height, params) and rising(
+            fit.lower_rise, fit.height, params
+        )
