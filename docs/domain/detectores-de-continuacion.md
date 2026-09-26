@@ -1,17 +1,19 @@
 # Detectores de figuras de continuación y consolidación (v1)
 
-- **Estado:** vigente para triángulos y rectángulo. Banderas y banderines llegan en la segunda parte
-  de la tarea y se añadirán a este mismo documento.
+- **Estado:** vigente. Cubre los ocho detectores: triángulos ascendente, descendente y simétrico,
+  rectángulo, y banderas y banderines alcistas y bajistas.
 - **Fecha:** 2026-09-26
-- **Tarea:** POINT3-CONTINUATION-001 (4 de 7 del punto 3), parte 1 de 2.
+- **Tarea:** POINT3-CONTINUATION-001 (4 de 7 del punto 3), partes 1 y 2.
 - **Depende de:** [figuras-chartistas.md](figuras-chartistas.md) (qué es cada figura),
   [instancia-de-figura.md](instancia-de-figura.md) (cómo se representa),
   [detectores-de-reversion.md](detectores-de-reversion.md) (la fontanería común: qué es un
   detector, cómo se juzga una ruptura, cómo pasan las instancias de un instante al siguiente) y
   [estructura-de-precio.md](estructura-de-precio.md) (pivotes confirmados).
-- **Código:** `backend/src/freyja_backend/domain/pattern_channel.py` (los cuatro detectores) y, en
+- **Código:** `backend/src/freyja_backend/domain/pattern_channel.py` (triángulos y rectángulo, y el
+  canal de dos rectas que comparten), `pattern_flag.py` (banderas y banderines) y, en
   `pattern_detection.py`, lo compartido (`ContinuationParams`, `judge`, evidencias de reprueba y de
-  volumen). Dominio puro, sin E/S. Pruebas en `backend/tests/unit/test_pattern_channel.py`.
+  volumen). Dominio puro, sin E/S. Pruebas en `backend/tests/unit/test_pattern_channel.py` y
+  `test_pattern_flag.py`.
 
 Todo lo dicho en el documento de reversión sobre **qué hace y qué no hace un detector** vale aquí sin
 cambios: es una función pura de lo que se sabía en un instante, sin patrones de velas ni
@@ -58,6 +60,14 @@ y temporalidad.
 | `max_age_candles` | 100 | Una figura sin resolver más vieja que esto (desde su primer contacto) caduca. |
 | `min_history` | 100 | Velas que necesita el contexto observable para juzgar la serie. |
 | `pivot_params.k` | 3 | El de `pivots-v1`, el mismo que usa la tendencia. |
+| `mast_max_candles` | 12 | Solo banderas y banderines: el mástil abarca, de su inicio a su final, como mucho estas velas. Un mástil es brusco y corto. |
+| `mast_min_height_fraction` | 0,25 | Solo banderas y banderines: el mástil mide al menos esta fracción del rango reciente (las `range_window_candles` velas que terminan en su inicio). Un mástil destaca. |
+| `max_retrace` | 0,50 | Solo banderas y banderines: la pausa devuelve como mucho esta fracción del mástil. |
+| `flag_max_height_fraction` | 0,50 | Solo banderas y banderines: la altura de la pausa es, como mucho, esta fracción del mástil. |
+| `min_flag_candles` | 8 | Solo banderas y banderines: la pausa abarca, del final del mástil a su último contacto, al menos estas velas (cuatro contactos alternos necesitan unas ocho). |
+| `max_flag_candles` | 30 | Solo banderas y banderines: y como mucho estas. Una pausa más larga no es una bandera. |
+| `parallel_tolerance` | 0,20 | Solo banderas: las fronteras son casi paralelas si la altura de la pausa cambia, como mucho, esta fracción de sí misma. |
+| `pennant_convergence_min` | 0,30 | Solo banderines: las fronteras convergen si la altura de la pausa acaba en como mucho `1 - esto` de la que tenía al empezar. Entre `parallel_tolerance` y este valor no es ni bandera ni banderín. |
 
 Un conjunto de parámetros es **parte de la identidad** de cada figura: cambiar su versión da otra
 instancia, no reescribe la anterior.
@@ -102,6 +112,7 @@ del documento de reversión, con estas diferencias:
 - **Se vigilan las dos fronteras.** El primer cierre más allá de cualquiera de ellas es la ruptura
   y decide la dirección (`CONFIRMED_UP` por la superior, `CONFIRMED_DOWN` por la inferior). La
   ruptura que fracasó no se deshace por lo que pase después: `FAILED_BREAKOUT` es final.
+- **Banderas y banderines vigilan las dos fronteras igual**, con la dirección del mástil como expectativa tradicional: ver la sección 7.
 - **No hay «extremo que no se debe superar»**: el precio puede salir por cualquier lado, así que no
   existe la invalidación `CLOSED_THROUGH_AGAINST_BIAS`. Las únicas invalidaciones son `TOO_LONG` (por
   edad o por ápice) y las de instancias entre instantes (`GEOMETRY_BROKEN`, `SUPERSEDED`).
@@ -115,7 +126,9 @@ del documento de reversión, con estas diferencias:
 | Código | Cuándo | Qué contiene |
 | ------ | ------ | ------------ |
 | `CHANNEL` | siempre | Altura, separación de las rectas al final, cuánto se mueve cada una (`upper_rise`, `lower_rise`), contactos de cada lado, velas del canal, rango de referencia y las tolerancias usadas. |
-| `PRIOR_TREND` | siempre | `state`: la tendencia previa. Solo contexto. |
+| `PRIOR_TREND` | siempre | `state`: la tendencia previa. En triángulos y rectángulo, solo contexto. En banderas y banderines, además `required` (la tendencia que el mástil continúa) y `compatible`, medidas en el instante del inicio del mástil. |
+| `FLAGPOLE` | banderas y banderines | Dirección del mástil (`mast_direction`), su altura, sus velas, su proporción respecto al rango de referencia, cuánto devolvió la pausa (`retracement_share`), lo alta que es (`flag_height_share`), cuánto deriva contra el mástil (`drift_share`) y sus velas. |
+| `FLAG_VOLUME` | banderas y banderines | Volumen medio del mástil y de la pausa, y su cociente (`pause_to_mast`, ausente si el del mástil es cero). Solo informativo. |
 | `BREAKOUT_SCAN` | desde el primer cierre más allá | Velas desde ese cierre, si está resuelta y cuánto tardó. |
 | `RETEST` | ruptura **confirmada** y una vela posterior que vuelve a la recta rota (basta la mecha) | `candles_after_confirmation` y `held` (si esa vela cerró aún más allá). Es un hecho nuevo, por tanto una evaluación nueva en el historial. No confirma ni desconfirma nada. |
 | `BREAKOUT_VOLUME` | desde el primer cierre más allá | Volumen de esa vela, media de las velas que la figura tardó en formarse y su cociente (`ratio`, ausente si la media es cero). Solo informativo. |
@@ -137,7 +150,60 @@ como fracción de la altura (`flat_tolerance` y `slope_min`). Una cuña (ambas f
 en el mismo sentido) y una formación expansiva (fronteras que divergen) no son ninguna de las cuatro:
 pertenecen a POINT3-EXPANSION-001.
 
-## 7. Límites conocidos
+## 7. Banderas y banderines
+
+Una **bandera** o un **banderín** es un **mástil** (un movimiento brusco y corto) seguido de una
+pausa breve entre dos fronteras. Plantean una **hipótesis de continuación** en la dirección del
+mástil: alcista (mástil hacia arriba) o bajista (hacia abajo); la figura por sí sola no demuestra que
+esa continuación ocurra. Cada una de las cuatro (`BULL_FLAG`, `BEAR_FLAG`, `BULL_PENNANT`,
+`BEAR_PENNANT`) es un detector con su propia versión (`bull-flag-detector-v1`…); las alcistas y las
+bajistas son espejo, y la bandera y el banderín solo se diferencian en la forma de la pausa.
+
+- **Anclas:** el inicio del mástil (`MAST_START`), su final (`MAST_END`, que es a la vez el primer
+  contacto de una frontera) y al menos tres contactos más de la pausa, numerados por frontera después
+  de él (`LOWER_1`, `UPPER_2`, `LOWER_2`… en la alcista). Cinco anclas como mínimo; el inicio del
+  mástil es el primer ancla y da la identidad de la instancia. **Antes del cuarto contacto de la
+  pausa no hay figura.**
+- **La pausa** es el mismo canal de dos rectas de los triángulos (sección 3), que empieza en el final
+  del mástil y crece igual, con estas diferencias: su tamaño mínimo no se compara con el rango
+  reciente (lo que tiene que destacar es el mástil) y su duración se mide con `min_flag_candles` y
+  `max_flag_candles`; un canal más largo deja de ser una pausa y el crecimiento se detiene.
+- **Mástil:** de un mínimo de swing a un máximo de swing (al revés en la bajista), de como mucho
+  `mast_max_candles` velas, y de una altura de al menos `mast_min_height_fraction` del rango reciente.
+- **La pausa es pequeña y devuelve poco:** su altura, medida en el final del mástil, es como mucho
+  `flag_max_height_fraction` del mástil; el contacto que más se aleja del final del mástil, en contra,
+  no supera `max_retrace` del mástil; y su deriva (el movimiento medio de las dos rectas) no va a
+  favor del mástil más de `flat_tolerance` de él (casi plana). Una pausa que sigue subiendo tras un
+  mástil alcista no es una pausa. Cuánto puede ir en contra lo limita ya `max_retrace`, por los contactos.
+- **Bandera o banderín:** en la **bandera** las fronteras son casi paralelas (la altura de la pausa al
+  acabar difiere de la inicial, como mucho, `parallel_tolerance` de sí misma); en el **banderín**
+  convergen (la altura acaba en como mucho `1 - pennant_convergence_min` de la inicial) **desde los dos
+  lados: la superior baja y la inferior sube**. Dos fronteras que se estrechan pero se inclinan en el
+  mismo sentido son una cuña (POINT3-EXPANSION-001), no un banderín. Entre ambos umbrales no es
+  ninguna de las dos. Los umbrales están separados por construcción: los parámetros que los
+  solaparían se rechazan.
+- **Las dos fronteras se vigilan** y la ruptura es el primer cierre más allá de cualquiera de ellas,
+  con el mismo margen, ventana de fracaso y reglas de la sección 4. Que rompa hacia donde apunta el
+  mástil es lo que la tradición espera; que rompa **hacia el otro lado** es una ruptura contraria a esa
+  expectativa, que se **registra con su dirección real** (`CONFIRMED_DOWN` para un banderín alcista
+  que rompe por abajo, por ejemplo) y no se fuerza a continuación. La dirección del mástil queda en
+  la evidencia (`mast_direction` de `FLAGPOLE`), de modo que quien use la figura ve si la ruptura fue
+  con el mástil o contra él. Lo que ocurre primero gana; el retorno al interior es un hecho aparte
+  (`FAILED_BREAKOUT`, `RETEST`).
+- **Ápice:** en el banderín rige lo mismo que en los triángulos convergentes (sección 3).
+- **Tendencia previa:** la del clasificador del punto 2 en el instante del **inicio del mástil**.
+  Se registra con `required` (alcista para el mástil alcista) y `compatible`: un mástil que sale de la
+  tendencia contraria (una recuperación brusca dentro de una tendencia bajista) se observa igualmente,
+  con eso anotado; quien use la figura decide.
+- **Volumen (informativo, sin condición):** la descripción clásica espera actividad alta durante
+  el mástil, menor en la pausa y mayor al romper. Se guardan las tres observaciones: `FLAG_VOLUME`
+  (media del mástil, media de la pausa y su cociente) y `BREAKOUT_VOLUME`, que compara la vela que
+  rompe con la media de la **pausa** (desde el final del mástil), no del mástil, que suele ser más
+  ruidoso. Ninguna condiciona nada.
+- **La altura es la de la pausa**, no la del mástil: el margen de confirmación es `breakout_margin`
+  de la altura de la pausa. El objetivo proyectado con el mástil queda para la política de objetivos.
+
+## 8. Límites conocidos
 
 - Con solo dos contactos por frontera, una figura de bordes difusos puede leerse como más de una
   clase a la vez (por ejemplo, ascendente y rectángulo): son figuras distintas con su propia
@@ -147,15 +213,20 @@ pertenecen a POINT3-EXPANSION-001.
   Es un umbral provisional que se validará con datos reales.
 - El **ápice** se calcula con las rectas del último tamaño de la figura; si luego la figura crece, el
   ápice cambia con ella.
-- No hay estado `FORMING` para estas figuras: nada se afirma antes del cuarto contacto.
+- No hay estado `FORMING` para estas figuras: nada se afirma antes del cuarto contacto. (Una
+  candidata a bandera o banderín con el mástil ya identificado y la pausa aún sin medir podría
+  añadirse más adelante como estado previo; hoy no se afirma nada que no se pueda medir.)
+- Una pausa de más de `max_flag_candles` velas no se detecta como bandera (es otra cosa, o una
+  pausa demasiado larga para serlo), y un mástil de más de `mast_max_candles` velas (una subida por
+  etapas) tampoco. Son umbrales provisionales que se validarán con datos reales.
 
-## 8. Lo que este documento no decide
+## 9. Lo que este documento no decide
 
-Banderas y banderines (parte 2 de esta tarea), cuñas y formaciones expansivas (POINT3-EXPANSION-001),
+Cuñas y formaciones expansivas (POINT3-EXPANSION-001),
 cómo se integran varias figuras como evidencia de una hipótesis (POINT3-HYPOTHESIS-001), objetivos
 de precio, entradas, vencimientos, señales y órdenes, y la persistencia de las instancias.
 
-## 9. Decisiones técnicas tomadas al redactar
+## 10. Decisiones técnicas tomadas al redactar
 
 Registradas para poder corregirlas; ninguna es de producto.
 
@@ -168,3 +239,7 @@ Registradas para poder corregirlas; ninguna es de producto.
 4. `RETEST` y `BREAKOUT_VOLUME` se añaden a la fontanería común, no a cada detector, para que valgan
    igual para todas las figuras.
 5. Todos los valores de la sección 2 son provisionales y están en PARAMS-VALIDATION-001.
+6. En las banderas se mide la pausa contra el mástil y no contra el rango reciente, y se mira el
+   mástil contra el rango reciente: cada cosa se compara con lo que la hace destacar.
+7. Las banderas y los banderines no incluyen `FORMING`, igual que el resto de la familia, aunque el
+   mástil ya se conozca antes: nada se afirma hasta que la pausa se puede medir.

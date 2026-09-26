@@ -97,6 +97,9 @@ def fit_channel(
     closed: Sequence[Candle],
     index: dict[datetime, int],
     window: Sequence[Pivot],
+    *,
+    min_candles: int | None = None,
+    check_height: bool = True,
 ) -> Channel | None:
     """The two lines through the highs and through the lows of `window`, if what lies between them
     is a channel: the lines through the first and the last contact of each side, the contacts in
@@ -104,7 +107,9 @@ def fit_channel(
     last one **inside** both lines. (A close beyond a line is a breakout: the figure stops growing
     there, so a breakout is always found after its last contact and never inside it.)
 
-    It says nothing about the slopes: which figure this is, is up to the detector."""
+    It says nothing about the slopes: which figure this is, is up to the detector. `min_candles`
+    replaces the minimum span, and `check_height=False` skips the comparison with the recent range,
+    for figures (flags) whose size is judged against something else."""
     highs = tuple(p for p in window if p.kind is PivotKind.HIGH)
     lows = tuple(p for p in window if p.kind is PivotKind.LOW)
     if len(highs) < 2 or len(lows) < 2:
@@ -117,10 +122,11 @@ def fit_channel(
     if height <= 0 or gap_at_end <= 0:
         return None
     first_index, last_index = index[start], index[end]
-    if last_index - first_index < params.min_channel_candles:
+    minimum = params.min_channel_candles if min_candles is None else min_candles
+    if last_index - first_index < minimum:
         return None
     reference = reference_range(closed, first_index, params.range_window_candles)
-    if reference <= 0 or height < params.min_height_fraction * reference:
+    if reference <= 0 or (check_height and height < params.min_height_fraction * reference):
         return None
     tolerance = params.contact_tolerance * height
     if any(abs(p.price - upper(p.open_time)) > tolerance for p in highs[1:-1]):
@@ -175,9 +181,48 @@ def left_the_lines(channel: Channel, closed: Sequence[Candle], until: int) -> bo
     )
 
 
-class ChannelDetector(PatternDetector):
-    """One detector = one figure of the two-boundary family. Subclasses say which slopes they
-    accept and nothing else."""
+def grow_channel(
+    params: ContinuationParams,
+    closed: Sequence[Candle],
+    index: dict[datetime, int],
+    swings: Sequence[Pivot],
+    position: int,
+    *,
+    accepted: Callable[[Channel], bool],
+    min_candles: int | None = None,
+    check_height: bool = True,
+) -> Channel | None:
+    """The longest run of swings from `position` that is a figure of its kind (`accepted`) at every
+    size from the fourth swing on. The first size that fails ends the growth.
+
+    Growing moves the two lines (they run through the first and the last contact), so it may
+    only happen while the price has stayed inside the lines the figure had before: a close
+    beyond them is a breakout, already part of the story, and a new last contact must never
+    make it look as if it had not been one."""
+    channel: Channel | None = None
+    size = _MIN_SWINGS
+    while position + size <= len(swings):
+        fit = fit_channel(
+            params,
+            closed,
+            index,
+            swings[position : position + size],
+            min_candles=min_candles,
+            check_height=check_height,
+        )
+        if fit is None or not accepted(fit):
+            break
+        if channel is not None and left_the_lines(channel, closed, fit.last_index):
+            break
+        channel = fit
+        size += 1
+    return channel
+
+
+class ContinuationDetector(PatternDetector):
+    """What every continuation detector shares: it reads the continuation parameters, their
+    version is part of each figure's identity, and so are the pivot parameters and the history it
+    asks of the series."""
 
     def parameter_version(self, context: DetectionContext) -> str:
         return context.continuation.version
@@ -187,6 +232,11 @@ class ChannelDetector(PatternDetector):
 
     def min_history(self, context: DetectionContext) -> int:
         return context.continuation.min_history
+
+
+class ChannelDetector(ContinuationDetector):
+    """One detector = one figure of the two-boundary family. Subclasses say which slopes they
+    accept and nothing else."""
 
     def accepts(
         self, upper_rise: Decimal, lower_rise: Decimal, height: Decimal, params: ContinuationParams
@@ -220,24 +270,14 @@ class ChannelDetector(PatternDetector):
         swings: Sequence[Pivot],
         position: int,
     ) -> Channel | None:
-        """The longest run of swings from `position` that is a figure of this kind at every size
-        from the fourth swing on. The first size that fails ends the growth.
-
-        Growing moves the two lines (they run through the first and the last contact), so it may
-        only happen while the price has stayed inside the lines the figure had before: a close
-        beyond them is a breakout, already part of the story, and a new last contact must never
-        make it look as if it had not been one."""
-        channel: Channel | None = None
-        size = _MIN_SWINGS
-        while position + size <= len(swings):
-            fit = fit_channel(params, closed, index, swings[position : position + size])
-            if fit is None or not self.accepts(fit.upper_rise, fit.lower_rise, fit.height, params):
-                break
-            if channel is not None and left_the_lines(channel, closed, fit.last_index):
-                break
-            channel = fit
-            size += 1
-        return channel
+        return grow_channel(
+            params,
+            closed,
+            index,
+            swings,
+            position,
+            accepted=lambda fit: self.accepts(fit.upper_rise, fit.lower_rise, fit.height, params),
+        )
 
     def _figure(
         self, context: DetectionContext, closed: Sequence[Candle], channel: Channel
@@ -285,24 +325,6 @@ class ChannelDetector(PatternDetector):
             else:
                 lower_count += 1
                 anchors.append(anchor_of(pivot, f"LOWER_{lower_count}"))
-        boundaries = (
-            Boundary(
-                BoundaryRole.UPPER,
-                (
-                    BoundaryPoint(channel.highs[0].open_time, channel.highs[0].price),
-                    BoundaryPoint(channel.highs[-1].open_time, channel.highs[-1].price),
-                ),
-                tuple(p.open_time for p in channel.highs),
-            ),
-            Boundary(
-                BoundaryRole.LOWER,
-                (
-                    BoundaryPoint(channel.lows[0].open_time, channel.lows[0].price),
-                    BoundaryPoint(channel.lows[-1].open_time, channel.lows[-1].price),
-                ),
-                tuple(p.open_time for p in channel.lows),
-            ),
-        )
         items = (
             channel_evidence(channel, params),
             prior_trend_context(context, closed, channel.window[0]),
@@ -316,12 +338,34 @@ class ChannelDetector(PatternDetector):
                 candle_count=last - channel.first_index + 1,
                 state=judgement.state,
                 anchors=tuple(anchors),
-                boundaries=boundaries,
+                boundaries=boundaries_of(channel),
                 breakout=judgement.breakout,
                 invalidation_reasons=judgement.invalidation_reasons,
                 evidence=items,
             ),
         )
+
+
+def boundaries_of(channel: Channel) -> tuple[Boundary, Boundary]:
+    """The two lines of a channel as the model records them, with the anchors that touch each."""
+    return (
+        Boundary(
+            BoundaryRole.UPPER,
+            (
+                BoundaryPoint(channel.highs[0].open_time, channel.highs[0].price),
+                BoundaryPoint(channel.highs[-1].open_time, channel.highs[-1].price),
+            ),
+            tuple(p.open_time for p in channel.highs),
+        ),
+        Boundary(
+            BoundaryRole.LOWER,
+            (
+                BoundaryPoint(channel.lows[0].open_time, channel.lows[0].price),
+                BoundaryPoint(channel.lows[-1].open_time, channel.lows[-1].price),
+            ),
+            tuple(p.open_time for p in channel.lows),
+        ),
+    )
 
 
 def first_breakout(upward: Judgement, downward: Judgement) -> Judgement:

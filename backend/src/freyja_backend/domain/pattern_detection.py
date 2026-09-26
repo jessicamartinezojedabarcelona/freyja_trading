@@ -243,6 +243,23 @@ class ContinuationParams:
     failure_window_candles: int = 10
     # An unresolved figure older than this many candles (from its first pivot) is stale.
     max_age_candles: int = 100
+    # Flags and pennants only. The mast is at most this many candles long and at least this
+    # fraction of the recent range tall: a mast is sharp and short, and it stands out.
+    mast_max_candles: int = 12
+    mast_min_height_fraction: Decimal = Decimal("0.25")
+    # Flags and pennants only. The consolidation retraces at most this fraction of the mast, is at
+    # most this fraction of the mast tall, and drifts against the mast by at most that retracement
+    # (and with it by no more than `flat_tolerance` of the mast).
+    max_retrace: Decimal = Decimal("0.50")
+    flag_max_height_fraction: Decimal = Decimal("0.50")
+    # Flags and pennants only. The consolidation spans between these many candles, from the end of
+    # the mast to its last contact (four alternating contacts need at least about eight).
+    min_flag_candles: int = 8
+    max_flag_candles: int = 30
+    # A flag's boundaries stay parallel: its height changes by at most this fraction of itself.
+    parallel_tolerance: Decimal = Decimal("0.20")
+    # A pennant's boundaries converge: its height ends at most (1 - this) of what it began at.
+    pennant_convergence_min: Decimal = Decimal("0.30")
 
     def __post_init__(self) -> None:
         if not self.version.strip():
@@ -253,6 +270,11 @@ class ContinuationParams:
             "flat_tolerance",
             "slope_min",
             "breakout_margin",
+            "mast_min_height_fraction",
+            "max_retrace",
+            "flag_max_height_fraction",
+            "parallel_tolerance",
+            "pennant_convergence_min",
         ):
             value = getattr(self, name)
             if not isinstance(value, Decimal) or not (Decimal(0) < value < Decimal(1)):
@@ -263,12 +285,19 @@ class ContinuationParams:
             "max_age_candles",
             "min_history",
             "min_channel_candles",
+            "mast_max_candles",
+            "min_flag_candles",
+            "max_flag_candles",
         ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise InvalidDetectionRequestError(f"{name} must be an integer of at least 1")
         if self.flat_tolerance >= self.slope_min:
             raise InvalidDetectionRequestError("a boundary cannot be flat and sloping at once")
+        if self.min_flag_candles > self.max_flag_candles:
+            raise InvalidDetectionRequestError("a flag cannot be required longer than it may be")
+        if self.parallel_tolerance >= self.pennant_convergence_min:
+            raise InvalidDetectionRequestError("a flag cannot be parallel and converging at once")
 
 
 DEFAULT_CONTINUATION_PARAMS = ContinuationParams()
