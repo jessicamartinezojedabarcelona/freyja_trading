@@ -1,7 +1,8 @@
 # Detectores de cuñas y formaciones expansivas (v1)
 
 - **Estado:** en construcción por partes. Vigente hoy: la parte a (cuña ascendente y cuña
-  descendente) y la parte b (formación expansiva). Pendiente, en su propio cambio: el diamante (c).
+  descendente) y la parte b (formación expansiva). La parte c (diamante) tiene aquí su contrato
+  **propuesto** (sección 10), pendiente de aprobación; no hay código todavía.
 - **Fecha:** 2026-09-26
 - **Tarea:** POINT3-EXPANSION-001 (5 de 7 del punto 3), partes a y b.
 - **Depende de:** [detectores-de-continuacion.md](detectores-de-continuacion.md) (el canal de dos
@@ -156,7 +157,7 @@ La misma que la familia (sección 5 del documento de continuación): `CHANNEL` (
 
 ## 8. Lo que este documento no decide
 
-El diamante (parte c de POINT3-EXPANSION-001), cómo se integran varias
+El diamante (parte c de POINT3-EXPANSION-001, sección 10, propuesto), cómo se integran varias
 figuras como evidencia de una hipótesis (POINT3-HYPOTHESIS-001), objetivos, entradas, vencimientos,
 señales y órdenes, y la persistencia de las instancias.
 
@@ -187,3 +188,146 @@ figura, con los mínimos como primer contacto.
 | La superior sube al menos 0,15 de la altura (20) y la inferior baja otro tanto | `slope_min` = 0,15 | +3 y −3 (exactos) | +2,99 o −2,99 |
 | Cada máximo más alto que el anterior, cada mínimo más bajo | — | 100, 110, 120 y 90, 80 | 100, 100, 120 o 100, 99, 120; 90, 90 o 90, 91 |
 | Cinco swings como mínimo | — | tres máximos y dos mínimos (o al revés) | dos y dos |
+
+## 10. El diamante (parte c): contrato propuesto
+
+**Estado: propuesta pendiente de revisión de Jessica.** Nada de esta sección está implementado. Si se
+aprueba, el detector se escribe conforme a ella y estas líneas pasan a ser el contrato vigente.
+
+### 10.1 Qué es
+
+Dos fases conectadas: primero el precio **se expande** (máximos cada vez más altos y mínimos cada vez
+más bajos) y después **se contrae** (máximos cada vez más bajos y mínimos cada vez más altos). El
+punto más ancho queda en la transición. Un diamante es, pues, un megáfono seguido de un triángulo
+simétrico que comparten el punto más ancho.
+
+- Una formación expansiva que **nunca se contrae** sigue siendo una formación expansiva (sección 4).
+- Un triángulo que **solo se comprime** no es un diamante (no tiene fase de expansión).
+- Una cuña no lo es: en una cuña las dos fronteras van en el mismo sentido y no hay expansión.
+- «De techo» y «de suelo» **no son tipos**: el catálogo tiene un solo `DIAMOND` con sesgo
+  `CONTEXT_DEPENDENT`. Que aparezca tras una subida o tras una bajada es contexto (`PRIOR_TREND`), no
+  clasificación. También existen diamantes de continuación: el contexto no demuestra hacia dónde sale.
+
+### 10.2 Geometría y orden temporal de los pivotes
+
+Se trabaja con swings confirmados y alternados (máximo, mínimo, máximo…), de `s_0` a `s_n`:
+
+1. **Vértices.** El **máximo del diamante** (el más alto de sus máximos) y el **mínimo del diamante**
+   (el más bajo de sus mínimos) son **swings consecutivos**: esa es la transición. Ninguno puede ser
+   el primero ni el último de su tipo: cada uno tiene al menos un máximo (mínimo) antes y otro después.
+2. **Fase de expansión** (del primer swing hasta el más tardío de los dos vértices): los máximos son
+   **estrictamente crecientes** hasta el vértice superior y los mínimos **estrictamente decrecientes**
+   hasta el inferior. Es un canal de cuatro swings o más, con la frontera superior subiendo y la
+   inferior bajando al menos `slope_min` de su altura.
+3. **Fase de contracción** (desde el más temprano de los dos vértices hasta el último swing): los
+   máximos son estrictamente decrecientes y los mínimos estrictamente crecientes. Es un canal de
+   cuatro swings o más con la superior bajando y la inferior subiendo al menos `slope_min` de su
+   altura, o sea, convergente como un triángulo simétrico.
+4. **Las cuatro fronteras.** Superior de expansión (por el primer máximo y el vértice superior),
+   inferior de expansión, superior de contracción (por el vértice superior y el último máximo) e
+   inferior de contracción. Cada recta pasa por su primer y su último contacto, y los contactos
+   intermedios están a `contact_tolerance × altura` de ella como mucho (la misma regla que el canal).
+5. **El precio queda dentro.** Ningún cierre entre el primer y el último contacto queda más allá de
+   las fronteras de la fase en la que está (en la zona de solape, de las dos).
+6. **Mínimo: seis swings** (tres máximos y tres mínimos, dos por fase compartiendo los vértices), como
+   ya exige el catálogo (`min_anchor_pivots` = 6). Las dos fases no tienen por qué ser simétricas.
+
+Los anclajes se nombran `UPPER_1…`, `LOWER_1…` en orden cronológico; la transición se registra en la
+evidencia `DIAMOND_PHASES` (sección 10.5), no en los nombres.
+
+### 10.3 Estados: incompleto, formado y con ruptura
+
+| Momento | Qué se registra | Estado |
+| ------- | --------------- | ------ |
+| Solo hay expansión, o la contracción aún no tiene su primer máximo y mínimo confirmados | **Nada.** No hay diamante incompleto: nada se afirma que no se pueda medir. La fase de expansión, si cumple sus reglas, ya consta como `BROADENING_FORMATION`. | ninguno |
+| Los seis swings están confirmados y las dos fases cumplen sus reglas | **Diamante formado.** Aún sin ruptura. | `GEOMETRICALLY_VALID` |
+| Un cierre más allá de una frontera de salida, sin llegar al margen | Ruptura pendiente | `BREAKOUT_PENDING_CONFIRMATION` |
+| Cierre más allá con al menos `breakout_margin × altura` | **Ruptura confirmada** con su dirección real | `CONFIRMED_UP` o `CONFIRMED_DOWN` |
+| El precio vuelve dentro dentro de `failure_window_candles` | Ruptura fracasada, final | `FAILED_BREAKOUT` |
+| Sin ruptura y pasado el ápice, o por edad | Caducada | `INVALIDATED` (`TOO_LONG`) |
+
+- **No hay `FORMING`**, como en el resto de la familia. Un estado de candidato («la expansión acaba de
+  girar») es lo que resolvería POINT3-CANDIDATE-001; hasta entonces el diamante no existe antes de
+  poder medirse. *(Alternativa: un `FORMING` cuando la expansión está completa y aparece el primer
+  swing de contracción. Se desaconseja: afirmaría una figura que aún puede ser solo una expansión
+  con un retroceso.)*
+- **Salida.** Las fronteras de salida son las **dos de la contracción**: tras la transición las de
+  expansión quedan siempre por fuera de ellas, así que cerrar fuera de una de expansión implica haber
+  cerrado fuera de una de contracción. El primer cierre más allá de cualquiera de las dos es la
+  ruptura, con la regla de cierre y margen de toda la familia. **Se registra la dirección real**,
+  aunque contradiga el contexto de techo o de suelo.
+- **Ápice.** Las fronteras de contracción convergen: pasado el punto en que se cortan no puede empezar
+  una ruptura, y un diamante sin resolver antes de él caduca, como un triángulo.
+
+### 10.4 Pivotes conocidos tarde y look-ahead
+
+Un pivote solo se usa desde el cierre de su vela de confirmación (`confirmed_at`), como en todos los
+detectores. Consecuencias que se prueban:
+
+- Antes de que se confirme el último swing de la contracción no hay diamante; el instante exacto de
+  esa confirmación es el primero en que existe.
+- Si el precio ya había cerrado fuera de la frontera de salida mientras ese último swing se
+  confirmaba, el diamante nace **con esa ruptura ya conocida** (el estado avanza de golpe, como en el
+  resto de la familia): la ruptura no se ignora ni se retrasa.
+- **Un extremo nuevo deshace la contracción.** Si, antes de que exista una figura válida, aparece un
+  máximo por encima del vértice superior (o un mínimo por debajo del inferior), el vértice ya no es
+  el más alto (bajo): la figura no existe. Si ocurre **después** de formada, un extremo así exige un
+  cierre por fuera de la frontera de salida: es una ruptura, no una reescritura.
+- El resultado en cada instante depende solo de las velas cerradas hasta él (verificado por instante
+  y en paseos aleatorios, como en los otros detectores).
+
+### 10.5 Evidencia
+
+`DIAMOND_PHASES`: vértices (hora y precio de cada uno), anchura máxima (máximo menos mínimo del
+diamante), swings y velas de cada fase, movimiento de cada una de las cuatro fronteras, y
+`expansion_phase_is_broadening` (verdadero si la fase de expansión, por sí sola, cumple las reglas de
+`BROADENING_FORMATION`, o sea, tiene cinco swings o más). Además: `PRIOR_TREND` (solo contexto),
+`BREAKOUT_SCAN`, `RETEST` y `BREAKOUT_VOLUME`, que **no son requisitos** (decisiones 2 y 4 del
+documento de continuación).
+
+**¿Puede un tramo expansivo figurar como evidencia de un diamante posterior sin reescribir su
+detección histórica?** Sí, y por diseño: la formación expansiva que ya se detectó sigue siendo su
+propia instancia con su propio historial (solo se añade, nunca se reescribe), y el diamante que se
+forma más tarde recalcula su fase de expansión con las mismas reglas y lo indica en
+`expansion_phase_is_broadening`. No hay referencia cruzada entre detectores (cada uno es una unidad
+independiente); quien quiera unirlas (POINT3-HYPOTHESIS-001) lo hace por el primer ancla. Se prueba que
+la historia de la formación expansiva hasta el instante de la transición es idéntica con y sin el
+resto del diamante.
+
+### 10.6 Parámetros propuestos (provisionales, sin validar)
+
+Se reutilizan los del canal y solo se propone **uno nuevo**. Todos irán a PARAMS-VALIDATION-001.
+
+| Qué se decide | Parámetro | Valor | Nota |
+| ------------- | --------- | ----- | ---- |
+| Contactos intermedios | `contact_tolerance` | 0,15 (existente) | de la altura de la fase |
+| Pendiente mínima de cada frontera | `slope_min` | 0,15 (existente) | de la altura de la fase |
+| Tamaño | `min_height_fraction` | 0,25 (existente) | aplicado a la **anchura máxima** (máximo − mínimo del diamante) frente al rango de las `range_window_candles` velas previas al primer ancla; no a la altura inicial, que en una expansión es la más pequeña |
+| Duración mínima | `min_channel_candles` | 15 (existente) | **de cada fase**, por separado |
+| Transición | — | — | estructural: los dos vértices son swings consecutivos; sin parámetro |
+| Ruptura | `breakout_margin`, `failure_window_candles` | 0,10 · 10 (existentes) | de la altura de la fase de contracción |
+| Edad máxima | `diamond_max_age_candles` | **200 (nuevo)** | el diamante tiene dos fases: el doble de `max_age_candles` (100), contado desde el primer ancla |
+
+Provisionales por la misma razón que el resto: razonados, no medidos. Los umbrales se prueban en el
+valor exacto y a ambos lados.
+
+### 10.7 Pruebas que se escribirán
+
+Diamante formado tras subida y tras bajada (mismo detector, contexto distinto); ruptura por cada uno
+de los dos lados y ruptura contra el contexto; ruptura pendiente y fracasada; expansión sin
+contracción (nada); contracción sin expansión (nada); una cuña ascendente y una descendente que no
+se clasifican como diamante; pivotes conocidos tarde (instante exacto de nacimiento y ruptura ya
+ocurrida); un extremo nuevo que deshace la contracción antes de que exista figura válida; la
+formación expansiva anterior intacta; umbrales exactos; ápice; datos no aptos; sin look-ahead por
+instante y en paseos aleatorios; y mutación del código.
+
+### 10.8 Decisiones que se someten a revisión
+
+1. **No hay diamante incompleto ni `FORMING`** (10.3): la fase de expansión ya consta como formación
+   expansiva y el diamante empieza a existir cuando se puede medir.
+2. **Seis swings como mínimo**, con dos swings por frontera en cada fase compartiendo los vértices, y
+   sin exigir simetría entre fases.
+3. **Un solo parámetro nuevo**, `diamond_max_age_candles` = 200; el resto se reutiliza.
+4. **Salida por las fronteras de contracción**; dirección real registrada.
+5. **La expansión del diamante no exige cinco swings** (a diferencia de la formación expansiva
+   independiente); el dato `expansion_phase_is_broadening` deja constancia de cuándo sí los tiene.
