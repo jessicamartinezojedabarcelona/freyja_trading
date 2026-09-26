@@ -260,6 +260,9 @@ class ContinuationParams:
     parallel_tolerance: Decimal = Decimal("0.20")
     # A pennant's boundaries converge: its height ends at most (1 - this) of what it began at.
     pennant_convergence_min: Decimal = Decimal("0.30")
+    # Wedges only. Both boundaries slope the same way and close in: the height ends at most
+    # (1 - this) of what it began at. (Parallel boundaries are a channel, not a wedge.)
+    wedge_convergence_min: Decimal = Decimal("0.30")
 
     def __post_init__(self) -> None:
         if not self.version.strip():
@@ -275,6 +278,7 @@ class ContinuationParams:
             "flag_max_height_fraction",
             "parallel_tolerance",
             "pennant_convergence_min",
+            "wedge_convergence_min",
         ):
             value = getattr(self, name)
             if not isinstance(value, Decimal) or not (Decimal(0) < value < Decimal(1)):
@@ -298,6 +302,8 @@ class ContinuationParams:
             raise InvalidDetectionRequestError("a flag cannot be required longer than it may be")
         if self.parallel_tolerance >= self.pennant_convergence_min:
             raise InvalidDetectionRequestError("a flag cannot be parallel and converging at once")
+        if self.parallel_tolerance >= self.wedge_convergence_min:
+            raise InvalidDetectionRequestError("a wedge cannot be parallel and converging at once")
 
 
 DEFAULT_CONTINUATION_PARAMS = ContinuationParams()

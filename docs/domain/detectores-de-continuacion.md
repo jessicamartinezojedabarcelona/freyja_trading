@@ -68,6 +68,7 @@ y temporalidad.
 | `max_flag_candles` | 30 | Solo banderas y banderines: y como mucho estas. Una pausa más larga no es una bandera. |
 | `parallel_tolerance` | 0,20 | Solo banderas: las fronteras son casi paralelas si la altura de la pausa cambia, como mucho, esta fracción de sí misma. |
 | `pennant_convergence_min` | 0,30 | Solo banderines: las fronteras convergen si la altura de la pausa acaba en como mucho `1 - esto` de la que tenía al empezar. Entre `parallel_tolerance` y este valor no es ni bandera ni banderín. |
+| `wedge_convergence_min` | 0,30 | Solo cuñas (ver [detectores-de-expansion.md](detectores-de-expansion.md)): las fronteras convergen si la separación al último contacto es, como mucho, `1 - esto` de la altura inicial. |
 
 Un conjunto de parámetros es **parte de la identidad** de cada figura: cambiar su versión da otra
 instancia, no reescribe la anterior.
@@ -147,8 +148,8 @@ canal y la fontanería. Una figura de pendientes intermedias (ni planas ni incli
 
 «Plana», «sube» y «baja» se miden **sobre el movimiento de la recta del primer al último contacto**,
 como fracción de la altura (`flat_tolerance` y `slope_min`). Una cuña (ambas fronteras inclinadas
-en el mismo sentido) y una formación expansiva (fronteras que divergen) no son ninguna de las cuatro:
-pertenecen a POINT3-EXPANSION-001.
+en el mismo sentido y convergentes) y una formación expansiva (fronteras que divergen) no son ninguna
+de las cuatro: pertenecen a POINT3-EXPANSION-001 ([detectores-de-expansion.md](detectores-de-expansion.md)).
 
 ## 7. Banderas y banderines
 
@@ -224,7 +225,7 @@ bajistas son espejo, y la bandera y el banderín solo se diferencian en la forma
 
 ## 9. Lo que este documento no decide
 
-Cuñas y formaciones expansivas (POINT3-EXPANSION-001),
+Formaciones expansivas y diamante (POINT3-EXPANSION-001, partes b y c),
 cómo se integran varias figuras como evidencia de una hipótesis (POINT3-HYPOTHESIS-001), objetivos
 de precio, entradas, vencimientos, señales y órdenes, y la persistencia de las instancias.
 
