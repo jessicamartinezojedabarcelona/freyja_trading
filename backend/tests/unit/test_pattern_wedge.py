@@ -417,3 +417,50 @@ def test_the_wedges_only_read_the_domain_never_a_candlestick_pattern_or_an_indic
     assert not foreign, foreign
     forbidden = {"indicators", "candlestick", "market_indicators", "pattern_double"}
     assert not any(any(word in m for word in forbidden) for m in imported)
+
+
+# -- type, trend before, tradition and real breakout: four things kept apart ------------------
+
+AFTER_UPTREND = [*UP, 122, 133, 126, 136, 130, 138]
+AFTER_RANGE = [*UP, 121, 132, 125, 135, 129, 137]
+
+
+@pytest.mark.parametrize(
+    ("extremes", "way_out", "trend", "state"),
+    [
+        (AFTER_UPTREND, [120], "UPTREND", S.CONFIRMED_DOWN),  # what tradition expects, after a rise
+        (AFTER_UPTREND, [136, 150], "UPTREND", S.CONFIRMED_UP),  # against it: recorded as it was
+        (AFTER_RANGE, [118], "RANGE", S.CONFIRMED_DOWN),  # the same figure in another context
+    ],
+)
+def test_the_rising_wedge_keeps_type_prior_trend_bias_and_real_breakout_apart(
+    extremes: list[int | str], way_out: list[int], trend: str, state: PatternState
+) -> None:
+    figure = the_figure(RisingWedgeDetector(), [*extremes, *way_out], tail_to=way_out[-1])
+    assert figure.pattern_type is PatternType.RISING_WEDGE  # never renamed by what happens next
+    assert figure.traditional_bias is PatternBias.BEARISH  # a fact of the type, never of the trend
+    assert facts_of(figure, "PRIOR_TREND") == {"state": trend}  # context, only recorded
+    assert states(figure)[-1] is state  # what the price really did
+    assert figure.latest.breakout is not None
+    assert figure.latest.breakout.direction is (
+        BreakoutDirection.UP if state is S.CONFIRMED_UP else BreakoutDirection.DOWN
+    )
+
+
+def test_the_context_changes_the_record_and_nothing_else() -> None:
+    """The same wedge after a rise and after a range: the anchors and the breakout are the same
+    in shape; only the recorded context differs. The trend never decides whether it is a wedge."""
+    rise = the_figure(RisingWedgeDetector(), [*AFTER_UPTREND, 120], tail_to=120)
+    flat = the_figure(RisingWedgeDetector(), [*AFTER_RANGE, 118], tail_to=118)
+    assert labels(rise) == labels(flat)
+    assert states(rise)[-1] is states(flat)[-1]
+    assert facts_of(rise, "PRIOR_TREND") != facts_of(flat, "PRIOR_TREND")
+
+
+def test_a_falling_wedge_after_a_fall_can_break_down_and_says_so() -> None:
+    against = the_figure(FallingWedgeDetector(), mirror([*AFTER_UPTREND, 136, 150]), tail_to=150)
+    assert against.traditional_bias is PatternBias.BULLISH
+    assert facts_of(against, "PRIOR_TREND") == {"state": "DOWNTREND"}
+    assert states(against)[-1] is S.CONFIRMED_DOWN  # against tradition: recorded as it was
+    expected = the_figure(FallingWedgeDetector(), mirror([*AFTER_UPTREND, 120]), tail_to=180)
+    assert states(expected)[-1] is S.CONFIRMED_UP
