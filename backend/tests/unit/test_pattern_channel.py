@@ -33,6 +33,7 @@ from freyja_backend.domain.market_data import Candle
 from freyja_backend.domain.pattern_channel import (
     AscendingTriangleDetector,
     ChannelDetector,
+    ContinuationDetector,
     DescendingTriangleDetector,
     RectangleDetector,
     SymmetricalTriangleDetector,
@@ -100,7 +101,7 @@ def context_for(candles: Sequence[Candle], **params: Any) -> DetectionContext:
 
 
 def history(
-    detector: ChannelDetector, candles: Sequence[Candle], **params: Any
+    detector: ContinuationDetector, candles: Sequence[Candle], **params: Any
 ) -> tuple[PatternInstance, ...]:
     return replay_detector(detector, context_for(candles, **params), candles)
 
@@ -113,7 +114,7 @@ def figure_of(instances: Sequence[PatternInstance]) -> PatternInstance:
 
 
 def the_figure(
-    detector: ChannelDetector, extremes: Sequence[int | str], **series: Any
+    detector: ContinuationDetector, extremes: Sequence[int | str], **series: Any
 ) -> PatternInstance:
     return figure_of(history(detector, zigzag(extremes, **series)))
 
@@ -642,8 +643,16 @@ def test_the_documented_parameters_are_exactly_the_default_ones() -> None:
         "max_age_candles": Decimal(params.max_age_candles),
         "min_history": Decimal(params.min_history),
         "pivot_params.k": Decimal(params.pivot_params.k),
+        "mast_max_candles": Decimal(params.mast_max_candles),
+        "mast_min_height_fraction": params.mast_min_height_fraction,
+        "max_retrace": params.max_retrace,
+        "flag_max_height_fraction": params.flag_max_height_fraction,
+        "min_flag_candles": Decimal(params.min_flag_candles),
+        "max_flag_candles": Decimal(params.max_flag_candles),
+        "parallel_tolerance": params.parallel_tolerance,
+        "pennant_convergence_min": params.pennant_convergence_min,
     }
-    assert {k: v for k, v in documented.items() if k in expected} == expected
+    assert documented == expected
     assert params.version == "continuation-params-v1"
 
 
