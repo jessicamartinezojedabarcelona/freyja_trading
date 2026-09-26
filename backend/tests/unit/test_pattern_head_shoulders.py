@@ -96,6 +96,7 @@ def judged_against(neckline_at: Any, closes: list[int | str]) -> Any:
         neckline_at=neckline_at,
         height=Decimal(10),
         extreme_price=Decimal(106),
+        exceed_margin=Decimal("0.15"),
     )
 
 

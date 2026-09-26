@@ -270,6 +270,7 @@ class _RoundingDetector(PatternDetector):
             neckline_at=lambda _candle: left.price,
             height=height,
             extreme_price=apex.price,
+            exceed_margin=params.exceed_margin,
             boundary_role=BoundaryRole.BASE,
         )
         if judgement is None:

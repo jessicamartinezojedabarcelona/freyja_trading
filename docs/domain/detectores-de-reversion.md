@@ -82,6 +82,18 @@ Como el pivote se confirma `k` velas tarde, la ruptura puede ser ya un hecho cua
 hace conocible: entonces nace directamente en el estado que le corresponde (sin pasar por uno
 anterior al real). Detrás, los estados solo avanzan (ver el modelo).
 
+**Evidencia común de la ruptura** (decisión de Jessica, 2026-09-26; vale para todos los detectores
+de figuras, también los de continuación): además de `BREAKOUT_SCAN`, un detector registra
+
+- `RETEST`: con la ruptura **confirmada**, la primera vela posterior que vuelve a la recta rota (basta
+  la mecha), cuántas velas después de la confirmación (`candles_after_confirmation`) y si esa vela
+  cerró aún más allá (`held`). Es un hecho posterior y solo evidencia: no confirma ni desconfirma la
+  ruptura, que se decidió por el cierre. Como es un hecho nuevo, añade una evaluación al historial de
+  la instancia (el resto de la evidencia, que cambia con cada vela, no lo hace).
+- `BREAKOUT_VOLUME`: el volumen de la primera vela que cierra más allá, la media de las velas que la
+  figura tardó en formarse y su cociente. Solo informativo: el volumen no es comparable entre
+  fuentes y no es requisito de ninguna confirmación.
+
 ## 4. Instancias entre instantes
 
 - **Identidad:** tipo, serie, primer pivote, detector y parámetros. La misma figura hallada de
@@ -207,7 +219,8 @@ exacta, es que los cierres la siguen.
 
 ## 9. Lo que este documento no decide
 
-Las figuras de continuación y de expansión (POINT3-CONTINUATION-001 y EXPANSION-001), cómo se
+Las figuras de continuación (ver [detectores-de-continuacion.md](detectores-de-continuacion.md)) y
+de expansión (POINT3-EXPANSION-001), cómo se
 integran varias figuras como evidencia de una hipótesis (POINT3-HYPOTHESIS-001), objetivos, entradas,
 señales y órdenes, y la persistencia de las instancias.
 

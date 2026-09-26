@@ -131,6 +131,7 @@ class _DoubleDetector(PatternDetector):
                 neckline_at=lambda _candle: neckline_level,
                 height=height,
                 extreme_price=extreme_price,
+                exceed_margin=params.exceed_margin,
             )
         if judgement is None:
             return None
