@@ -191,16 +191,18 @@ def grow_channel(
     accepted: Callable[[Channel], bool],
     min_candles: int | None = None,
     check_height: bool = True,
+    min_swings: int = _MIN_SWINGS,
 ) -> Channel | None:
     """The longest run of swings from `position` that is a figure of its kind (`accepted`) at every
-    size from the fourth swing on. The first size that fails ends the growth.
+    size from `min_swings` (the fourth swing, by default) on. The first size that fails ends the
+    growth.
 
     Growing moves the two lines (they run through the first and the last contact), so it may
     only happen while the price has stayed inside the lines the figure had before: a close
     beyond them is a breakout, already part of the story, and a new last contact must never
     make it look as if it had not been one."""
     channel: Channel | None = None
-    size = _MIN_SWINGS
+    size = min_swings
     while position + size <= len(swings):
         fit = fit_channel(
             params,
@@ -238,6 +240,9 @@ class ChannelDetector(ContinuationDetector):
     """One detector = one figure of the two-boundary family. Subclasses say which slopes they
     accept and nothing else."""
 
+    # Swings the figure needs before it exists: two highs and two lows, unless the figure says more.
+    min_swings: int = _MIN_SWINGS
+
     def accepts(self, fit: Channel, params: ContinuationParams) -> bool:
         """Whether this channel, measured, is a figure of this kind."""
         raise NotImplementedError
@@ -248,7 +253,7 @@ class ChannelDetector(ContinuationDetector):
         index = index_by_open_time(closed)
         found: list[PatternCandidate] = []
         covered_until = -1  # position of the last swing of the longest figure found so far
-        for position in range(len(swings) - _MIN_SWINGS + 1):
+        for position in range(len(swings) - self.min_swings + 1):
             channel = self._grown(context.continuation, closed, index, swings, position)
             if channel is None:
                 continue
@@ -276,6 +281,7 @@ class ChannelDetector(ContinuationDetector):
             swings,
             position,
             accepted=lambda fit: self.accepts(fit, params),
+            min_swings=self.min_swings,
         )
 
     def _figure(
