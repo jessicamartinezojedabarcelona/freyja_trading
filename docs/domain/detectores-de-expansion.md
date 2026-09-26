@@ -191,10 +191,11 @@ figura, con los mínimos como primer contacto.
 
 ## 10. El diamante (parte c): contrato propuesto
 
-**Estado: contrato en revisión de Jessica.** Nada de esta sección está implementado. Jessica aceptó
-para la v1 las cinco decisiones de la sección 10.9 y pidió precisar los pivotes tardíos, el extremo
-nuevo tras formarse, el orden de los seis pivotes, el recuento de las 200 velas y la consecutividad de
-los vértices. Cuando se apruebe el diff de este documento, el detector se escribe conforme a él.
+**Estado: contrato en revisión de Jessica** (segunda revisión). Nada de esta sección está
+implementado. Jessica aceptó para la v1 las cinco decisiones de la propuesta y la secuencia de seis
+swings, los vértices consecutivos, el límite de 200 velas y `diamond-params-v1` propio; y pidió
+corregir la regla temporal de las rupturas «en vivo» (10.4) y aclarar si un contacto nuevo cambia las
+fronteras (10.5). Cuando se apruebe el diff de este documento, el detector se escribe conforme a él.
 
 ### 10.1 Qué es
 
@@ -233,10 +234,14 @@ Condiciones, en ambos casos, sobre los precios de los pivotes:
   inferior sube, cada una al menos `slope_min` de la altura de su fase. Los cierres entre el primer
   y el último contacto quedan dentro de las fronteras de la fase en la que están (en el solape,
   de las dos).
-- Un diamante mayor tiene más swings en una fase o en las dos (`s0 … sn`): entonces los vértices son
-  los dos swings consecutivos `sk` y `sk+1` que son el máximo y el mínimo de todo el diamante, y con
-  ellos las fases se leen igual: máximos estrictamente crecientes y mínimos estrictamente decrecientes
-  hasta el vértice de su lado, y al revés a partir de él.
+- Si la expansión tiene más swings (`s0 … sn`, con `n` mayor que 5), los vértices son los dos swings
+  consecutivos `sk` y `sk+1` que son el máximo y el mínimo de todo el diamante, y las fases se leen
+  igual: máximos estrictamente crecientes y mínimos estrictamente decrecientes hasta el vértice de su
+  lado, y al revés a partir de él. En la contracción no hay más swings que los dos primeros
+  posteriores a los vértices (`sk+2` y `sk+3`).
+- **La geometría se congela al completarse.** Para cada primer ancla, el diamante es su **ventana más
+  corta válida**: en cuanto la contracción tiene sus dos swings, las fronteras quedan fijadas. Los
+  swings posteriores no la alargan ni la redibujan (10.5): son hechos de la instancia, no anclajes.
 
 Los anclajes se nombran `UPPER_1…`, `LOWER_1…` en orden cronológico; los vértices y la transición se
 registran en la evidencia `DIAMOND_PHASES` (10.6), no en los nombres.
@@ -276,70 +281,89 @@ distintos, no uno. Cambiar esa regla sería otra versión (`diamond-params-v2`),
 - **Ápice.** Las fronteras de contracción convergen: pasado el punto en que se cortan no puede empezar
   una ruptura (la última vela en la que aún puede empezar es la última que cierra antes del ápice).
 
-### 10.4 Pivotes conocidos tarde: tres tiempos y una etiqueta
+### 10.4 Pivotes conocidos tarde: tres tiempos y tres procedencias
 
-Para cada figura y cada ruptura se guardan **tres instantes distintos**, en UTC:
+Para cada figura y cada ruptura se guardan instantes **distintos**, en UTC, y nunca se mezclan:
 
 | Instante | Qué es | De dónde sale |
 | -------- | ------ | ------------- |
-| **De mercado** | Cuándo ocurrió: el cierre de la vela (de la ruptura, de la confirmación, del pivote) | `close_time` de la vela |
+| **De mercado** | Cuándo ocurrió: la apertura y el cierre de la vela (de la ruptura, de la confirmación con margen, de cada pivote) | `open_time` y `close_time` de la vela |
 | **De llegada** | Cuándo Freyja recibió esa vela: la primera versión cerrada recibida, sin reescribirse nunca (ADR 0008 §6) | `received_at` de la vela |
-| **De conocimiento de la figura** (`known_at`) | Cuándo Freyja pudo reconocer el diamante: el **último** de los instantes de llegada de las velas que confirman sus seis pivotes (cada pivote se confirma con el cierre de la k-ésima vela posterior) | máximo de las llegadas |
+| **De formación en el mercado** (`market_formed_at`) | Cuándo el diamante existía ya en el mercado: el cierre de la vela que confirma el último de sus seis pivotes | máximo de los `confirmed_at` de los seis pivotes |
+| **De conocimiento** (`known_at`) | Cuándo Freyja pudo reconocerlo: el **último** instante de llegada de **todas** las velas de las que depende, desde la del primer ancla hasta la que confirma el último pivote (los cierres entre contactos también deciden que la figura es válida) | máximo de las llegadas, aunque lleguen desordenadas |
 
-Todos van en la evidencia `DIAMOND_TIMING`, con las horas de mercado y de llegada de la vela de
-ruptura (y de la de confirmación con margen, si la hay).
+Siempre `market_formed_at <= known_at`. Todos van en la evidencia `DIAMOND_TIMING`, con la apertura, el
+cierre de mercado y la llegada de la vela de ruptura (y de la de confirmación con margen, si la hay).
 
-**Regla de la etiqueta `retrospective`.** Una ruptura es **retrospectiva** si su vela de ruptura (la
-del primer cierre más allá) **llegó a Freyja en `known_at` o antes**. Es una comparación estricta y
-conservadora: si la vela llegó a la vez que se conoció la figura, Freyja no tenía todavía el diamante
-cuando la recibió, y se considera retrospectiva.
+**Regla temporal de la procedencia.** Lo que decide si una ruptura pudo ser detectada en vivo no es
+cuándo se **recibió** la vela, sino cuándo **abrió**: Freyja solo puede haber esperado la salida de un
+diamante que ya conocía cuando esa vela empezó. Es la misma cautela que se aplicó a los toques de
+Fibonacci. Para la vela del **primer cierre más allá** de una frontera de salida:
 
-- Retrospectiva quiere decir: Freyja **puede describir** ese diamante y esa salida, con su estado y su
-  dirección (`CONFIRMED_UP` o `CONFIRMED_DOWN` si el cierre alcanzó el margen), pero **no la presenta
-  como detectada en vivo en aquella vela**, y **nunca** es una confirmación histórica operable: una
-  estrategia o un backtest no pueden entrar por ella. La etiqueta forma parte del registro y no cambia
+| Procedencia (`provenance`) | Condición sobre esa vela | Qué significa |
+| -------------------------- | ------------------------ | ------------- |
+| `LIVE` | abre en `known_at` o después (`open_time >= known_at`); su cierre se recibe, necesariamente, después | Freyja ya conocía el diamante cuando la vela abrió: **detección en vivo**, la única que puede ser base operable |
+| `AFTER_MARKET_FORMATION` (intermedia) | abre en `market_formed_at` o después, pero **antes** de `known_at` | El diamante ya existía en el mercado, pero Freyja aún no había recibido los datos que lo crean. Se describe, **no es operable** |
+| `RETROSPECTIVE` | abre **antes** de `market_formed_at` | El diamante todavía no existía cuando la vela abrió. Se describe, **no es operable** |
+
+- Que la vela **llegue tarde** no la hace en vivo: si abrió antes de `known_at`, es
+  `AFTER_MARKET_FORMATION` o `RETROSPECTIVE` aunque se reciba después. Ejemplo: el diamante se conoce a
+  las 10:05; una vela de 5 minutos que abrió a las 09:58 y cerró a las 10:03 llega a las 10:06. Freyja
+  puede reconstruir lo ocurrido, pero no pudo detectar a las 10:03 la ruptura de un diamante que aún
+  no existía: es `RETROSPECTIVE` (si el diamante se formó en el mercado a las 10:05) o, si ya se había
+  formado en el mercado pero Freyja no lo conocía aún, `AFTER_MARKET_FORMATION`. En ningún caso `LIVE`.
+- El límite es inclusivo hacia la detección en vivo: una vela que abre exactamente en `known_at` es
+  `LIVE`; un instante antes, no.
+- Solo `LIVE` puede ser una confirmación histórica operable. Las otras dos conservan estado y dirección
+  (`CONFIRMED_UP`, `CONFIRMED_DOWN`, pendiente o fracasada) como descripción retrospectiva, nunca
+  presentada como detectada en vivo en aquella vela. La procedencia forma parte del registro y no cambia
   después.
-- Una ruptura cuya vela llegó **después** de `known_at` es en vivo, aunque el mercado la hubiera
-  cerrado antes: el retraso de los datos queda visible en los dos instantes.
-- La retrospectividad la fija el primer cierre más allá: si la ruptura empezó antes de conocerse la
-  figura, lo es aunque el margen se alcance más tarde.
-- **El diamante nace con el estado que ya tenía**, no pasa por `GEOMETRICALLY_VALID` para simular un
-  nacimiento en vivo: su primera evaluación lleva la ruptura y `retrospective` verdadero.
+- La procedencia la fija la vela del **primer cierre más allá**: si la ruptura empezó antes de
+  conocerse la figura, no es `LIVE` aunque el margen se alcance más tarde.
+- **El diamante nace con el estado que ya tenía**: no pasa por `GEOMETRICALLY_VALID` para simular un
+  nacimiento en vivo. Su primera evaluación lleva la ruptura y su procedencia.
 
-**Si la figura se conoce cuando ya pasó su ápice.** Se mira qué ocurrió antes del ápice:
+**Si la figura se conoce cuando ya pasó su ápice.** Se mira qué ocurrió antes del ápice, con la misma
+regla temporal:
 
-1. Hubo un **primer cierre más allá antes del ápice**: el diamante nace con su ruptura (retrospectiva,
-   como arriba) y sigue las reglas de siempre (pendiente, confirmada o fracasada).
+1. Hubo un **primer cierre más allá antes del ápice**: el diamante nace con su ruptura y sigue las
+   reglas de siempre (pendiente, confirmada o fracasada). Esa vela abrió antes del ápice y, por tanto,
+   antes de `known_at` (que es posterior al ápice): su procedencia es `AFTER_MARKET_FORMATION` o
+   `RETROSPECTIVE`, **nunca `LIVE`**.
 2. **No** hubo ninguno: ya no es posible una ruptura futura, así que no puede ser `GEOMETRICALLY_VALID`.
    El detector lo devuelve como `INVALIDATED` (`TOO_LONG`) y, como en el resto de la familia, **una
-   figura que nace ya invalidada nunca fue una figura: no se registra como instancia**. La
-   evidencia `DIAMOND_TIMING` (en el resultado del detector) dice que el ápice ya había pasado.
+   figura que nace ya invalidada nunca fue una figura: no se registra como instancia**. La evidencia
+   `DIAMOND_TIMING` del resultado del detector dice que el ápice ya había pasado.
 
 Lo mismo con la edad (10.7): un diamante que se conoce con más de 200 velas de edad no es una figura.
 
 Otros efectos del tiempo, que se prueban:
 
-- Antes de que se confirme y reciba el último swing no hay diamante; el instante exacto de esa
-  confirmación es el primero en que existe.
+- Antes de que se confirme y reciba lo último de lo que depende no hay diamante; el instante exacto de
+  `known_at` es el primero en que existe.
+- Con recepciones **desordenadas** (una vela anterior que llega después de una posterior), `known_at` es
+  el máximo de las llegadas, y la procedencia se calcula con él, no con el orden del calendario.
 - El resultado en cada instante depende solo de las velas cerradas y recibidas hasta él (verificado
   por instante y en paseos aleatorios, como en los otros detectores).
 
 ### 10.5 Un extremo nuevo después de formarse: geometría y estado por separado
 
-La **geometría de una instancia ya registrada no se redibuja**. Sus anclajes y sus cuatro fronteras
-quedan como se registraron en cada evaluación; una evaluación nueva puede añadir un anclaje (10.5.3),
-nunca cambiar los anteriores. La regla de ruptura no cambia: **cierre fuera de la frontera más el
-margen**; una mecha no rompe nada.
+**La geometría de una instancia registrada está congelada** desde que se completa (10.2): sus seis (o más)
+anclajes y sus cuatro fronteras son las mismas en todas las evaluaciones, y **son las únicas con las
+que se juzgan los cierres futuros**. Ningún hecho posterior añade un anclaje ni mueve una frontera. Lo
+que llega después se guarda como **evidencia**, no como geometría. Si alguna versión futura quisiera
+que un contacto nuevo moviera una frontera, tendría que guardar una **nueva versión de la geometría con
+su propio instante de conocimiento** y conservar la anterior, y sería otra política (`diamond-params-v2`).
 
-Casos, cada uno con lo que pasa con el **hecho**, con la **geometría** y con el **estado**:
+La regla de ruptura no cambia: **cierre fuera de la frontera más el margen**; una mecha no rompe nada.
 
 | Qué ocurre | Se conserva el hecho | La geometría | El estado |
 | ---------- | -------------------- | ------------ | --------- |
-| **Mecha fuera de una frontera de salida y el cierre vuelve dentro** (10.5.1) | Sí: evidencia `WICK_PENETRATIONS` | **No se invalida ni se redibuja**: penetración tolerada, sin límite de profundidad | **No cambia**; en particular no es `CONFIRMED_UP` ni `CONFIRMED_DOWN` |
+| **Mecha fuera de una frontera de salida y el cierre vuelve dentro** (10.5.1) | Sí: evidencia `WICK_PENETRATIONS` | **Ni se invalida ni se redibuja**: penetración tolerada, sin límite de profundidad | **No cambia**; en particular no es `CONFIRMED_UP` ni `CONFIRMED_DOWN` |
 | **Cierre fuera de la frontera sin llegar al margen** | Sí: es la ruptura pendiente | Sin cambio | `BREAKOUT_PENDING_CONFIRMATION`; si vuelve dentro a tiempo, `FAILED_BREAKOUT` |
 | **Cierre fuera con margen** | Sí: es la ruptura | Sin cambio | `CONFIRMED_UP` o `CONFIRMED_DOWN` |
 | **Un swing nuevo por encima del vértice superior o por debajo del inferior**, sin cierre fuera de las fronteras (10.5.2) | Sí: en `WICK_PENETRATIONS` | La instancia **no cambia** (ese swing no entra en ella) | No cambia |
-| **Un swing nuevo dentro de las fronteras y a `contact_tolerance × altura` de una de contracción** (10.5.3) | Sí | **Se añade como anclaje** en una evaluación nueva, con las rectas resultantes registradas allí; las evaluaciones anteriores conservan las suyas | No cambia |
+| **Un swing nuevo que sigue la contracción**, dentro de las fronteras y a `contact_tolerance × altura` de una de ellas (10.5.3) | Sí: evidencia `ADDITIONAL_CONTACTS` | **Sin cambio**: no es un anclaje y **no modifica las fronteras** con las que se evalúan los cierres siguientes | No cambia |
 
 **10.5.1 Penetración por mecha.** Cuando una vela tiene su máximo por encima de la frontera superior
 de salida (o su mínimo por debajo de la inferior) y **cierra dentro**, la evidencia `WICK_PENETRATIONS`
@@ -353,14 +377,13 @@ por encima del vértice superior (o por debajo del inferior) sin que ningún cie
 fronteras. Ese swing **no forma parte** de la instancia registrada y **no la invalida** (los cierres
 siguen dentro): queda como hecho en `WICK_PENETRATIONS`. Puede, en cambio, formar **otra candidata**: una
 ventana con otro primer ancla se evalúa con estas mismas reglas, es otra instancia con otra
-identidad y no reescribe la anterior. La instancia registrada sigue su vida con sus anclajes.
+identidad y no reescribe la anterior.
 
 **10.5.3 Un contacto más.** Un swing nuevo que sigue la contracción (máximo más bajo que el anterior,
-mínimo más alto) y queda a `contact_tolerance × altura` de la frontera de contracción **y** con todos
-los cierres desde el último contacto dentro de las fronteras vigentes, es un contacto más. Es la única
-manera en que una instancia registrada gana un anclaje; como en el canal, las rectas pasan por el primer y
-el último contacto, así que las de esa fase pasan a ser las nuevas **en la evaluación nueva**, y se
-guardan ambas versiones. Un swing que no cumple estas condiciones no cambia nada (10.5.1 o 10.5.2).
+mínimo más alto) y queda a `contact_tolerance × altura` de una frontera de contracción, con todos los
+cierres desde el último contacto dentro de las fronteras, es un **contacto adicional**: `ADDITIONAL_CONTACTS`
+guarda su hora, su precio y a qué frontera se acerca. Es evidencia. **No es un anclaje de la frontera ni
+la modifica**: las evaluaciones posteriores juzgan los cierres con las mismas rectas de siempre.
 
 ### 10.6 Evidencia
 
@@ -368,8 +391,9 @@ guardan ambas versiones. Un swing que no cumple estas condiciones no cambia nada
   diamante), swings y velas de cada fase, movimiento de cada una de las cuatro fronteras, y
   `expansion_phase_is_broadening` (verdadero si la fase de expansión, por sí sola, cumple las reglas de
   `BROADENING_FORMATION`, o sea, tiene cinco swings o más).
-- `DIAMOND_TIMING`: los tres instantes de 10.4 y `retrospective`.
+- `DIAMOND_TIMING`: los instantes de 10.4 (mercado, llegada, `market_formed_at`, `known_at`) y `provenance` (`LIVE`, `AFTER_MARKET_FORMATION` o `RETROSPECTIVE`).
 - `WICK_PENETRATIONS`: 10.5.1 y 10.5.2 (solo si ha ocurrido).
+- `ADDITIONAL_CONTACTS`: 10.5.3 (solo si ha ocurrido).
 - `PRIOR_TREND` (solo contexto), `BREAKOUT_SCAN`, `RETEST` y `BREAKOUT_VOLUME`, que **no son
   requisitos** (decisiones 2 y 4 del documento de continuación).
 
@@ -419,15 +443,23 @@ han cortado. Es un valor provisional que se validará con datos reales.
   contexto; ruptura pendiente y fracasada; expansión sin contracción (nada); contracción sin expansión
   (nada); una cuña ascendente y una descendente que no se clasifican como diamante; la formación
   expansiva anterior intacta; **la forma desfasada de 10.2 (excluida)**; comparaciones estrictas.
-- **Tiempo:** el instante exacto de nacimiento; ruptura anterior a `known_at` (retrospectiva), ruptura
-  con llegada **igual** a `known_at` (retrospectiva) y ruptura posterior (en vivo), con velas que
-  llegan tarde; ruptura con margen alcanzado después (retrospectiva por su primer cierre); figura
-  conocida **después del ápice**, con ruptura anterior (nace con ella) y sin ella (no se registra,
-  nunca `GEOMETRICALLY_VALID`); figura conocida con más de 200 velas.
-- **Extremos nuevos:** mecha fuera con cierre dentro (ni `CONFIRMED_*` ni cambio de geometría, hecho
-  registrado); swing por encima del vértice sin cierre fuera (la instancia no cambia; posible otra
-  candidata); contacto más que añade un anclaje sin tocar las evaluaciones anteriores; un extremo que
-  deshace la contracción **antes** de que exista figura válida (no hay figura).
+- **Tiempo y procedencia:** el instante exacto de `known_at`; el ejemplo de 10.4 (vela que cierra antes
+  de conocerse la figura y llega después: nunca `LIVE`); una vela que abre **exactamente** en
+  `known_at` (`LIVE`) y otra un instante antes (no); una vela que abre entre `market_formed_at` y
+  `known_at` (`AFTER_MARKET_FORMATION`) y otra antes de `market_formed_at` (`RETROSPECTIVE`); una vela
+  `LIVE` que llega **tarde** (sigue siendo `LIVE`, con su retraso visible); **recepciones desordenadas**
+  (una vela anterior que llega después de una posterior mueve `known_at` y la procedencia sigue a
+  `known_at`, no al calendario); ruptura con margen alcanzado después (procedencia por su primer
+  cierre); ninguna ruptura retrospectiva se etiqueta `LIVE`.
+- **Ápice:** figura conocida **después del ápice**, con ruptura anterior (nace con ella, nunca `LIVE`) y
+  sin ella (no se registra, nunca `GEOMETRICALLY_VALID`), y con recepciones desordenadas que retrasan
+  `known_at` más allá del ápice; figura conocida con más de 200 velas.
+- **Extremos nuevos y geometría congelada:** mecha fuera con cierre dentro (ni `CONFIRMED_*` ni cambio
+  de geometría, hecho registrado); swing por encima del vértice sin cierre fuera (la instancia no
+  cambia; posible otra candidata); contacto adicional (queda como evidencia y **las fronteras de las
+  evaluaciones posteriores son idénticas a las anteriores**); un extremo que deshace la contracción
+  **antes** de que exista figura válida (no hay figura); todas las evaluaciones de una instancia
+  comparten sus anclajes y sus rectas.
 - **Edad:** 199, 200 y 201 velas (viva, viva, caducada).
 - **Generales:** umbrales exactos en su valor y a ambos lados; datos no aptos; sin look-ahead por
   instante y en paseos aleatorios; y mutación del código.
@@ -438,18 +470,23 @@ Aceptadas por Jessica para la v1 al revisar la propuesta:
 
 1. **No hay diamante incompleto ni `FORMING`.**
 2. **Seis swings como mínimo**, sin exigir simetría entre las fases.
-3. **`diamond_max_age_candles` = 200**, valor provisional.
+3. **`diamond_max_age_candles` = 200**, valor provisional, con límite inclusivo.
 4. **Se vigilan las dos fronteras de contracción** y se registra la dirección real.
 5. **La fase de expansión del diamante puede tener menos swings que la formación expansiva
    independiente** (`expansion_phase_is_broadening` deja constancia).
+6. **La secuencia de seis swings, los vértices consecutivos y `diamond-params-v1` propio**, como
+   política provisional versionada (10.2 y 10.7).
+7. **Las penetraciones por mecha se conservan y no son rupturas confirmadas** (10.5).
 
 Incorporadas a petición suya en esta revisión:
 
-6. **Tres instantes** (mercado, llegada y conocimiento de la figura) y la etiqueta `retrospective`
-   (10.4). Una ruptura anterior al conocimiento de la figura nunca es una confirmación operable.
-7. **Una figura conocida tras su ápice** solo nace si hubo ruptura antes de él; si no, no se registra
-   (10.4).
-8. **Una mecha no rompe nada, y la geometría registrada no se redibuja** (10.5): hecho conservado,
-   penetración tolerada, estado sin cambios.
-9. **Los vértices son consecutivos** como elección restrictiva de `diamond-params-v1` (10.2).
-10. **`diamond-params-v1` reúne todos los valores que usa el diamante**, con identidad propia (10.7).
+8. **Procedencia por la apertura de la vela** (10.4): `LIVE` solo si la vela del primer cierre más allá
+   **abre** cuando Freyja ya conocía el diamante (`open_time >= known_at`); la recepción tardía no la
+   hace en vivo. Procedencia intermedia `AFTER_MARKET_FORMATION`, no operable; y `RETROSPECTIVE`. Se
+   guardan por separado el cierre de mercado y la recepción.
+9. **Figura conocida tras su ápice** (10.4): nace solo si hubo ruptura antes de él, y entonces nunca es
+   `LIVE`; si no, no se registra.
+10. **La geometría registrada está congelada** (10.2 y 10.5): un contacto adicional es evidencia
+    (`ADDITIONAL_CONTACTS`), no un anclaje, y no modifica las fronteras de las evaluaciones posteriores.
+    Un cambio de frontera exigiría una nueva versión de la geometría con su propio instante de
+    conocimiento, conservando la anterior, y sería otra política.
