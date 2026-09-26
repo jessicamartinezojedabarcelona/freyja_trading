@@ -29,6 +29,7 @@ from freyja_backend.domain.market_structure import (
 FIBONACCI_PARAMETER_VERSION = "fibonacci-params-v1"
 FIBONACCI_LEVELS_VERSION = "fibonacci-levels-v1"
 FIBONACCI_CONVENTION_VERSION = "fibonacci-convention-v1"  # wick extremes, linear scale
+FIBONACCI_SEARCH_VERSION = "fibonacci-search-v1"  # the dominant leg ending at each swing (search)
 
 # Exact decimal constants: they are not recomputed from the sequence. (The 0.5 is not a Fibonacci
 # ratio; the trading tool includes it.)
@@ -64,9 +65,14 @@ class FibonacciParams:
     # that end at its start. Relative, so it reads the same on any instrument.
     min_impulse_fraction: Decimal = Decimal("0.25")
     range_window_candles: int = 100
+    # How impulses are searched for (`fibonacci_detection`): the version of the policy and how many
+    # candles back from B the start A may lie. Bounding it makes the result depend only on the
+    # candles around B, never on where the supplied history happens to begin.
+    search_version: str = FIBONACCI_SEARCH_VERSION
+    search_window_candles: int = 100
 
     def __post_init__(self) -> None:
-        for name in ("version", "levels_version", "convention_version"):
+        for name in ("version", "levels_version", "convention_version", "search_version"):
             if not getattr(self, name).strip():
                 raise InvalidFibonacciRequestError(f"{name} must be declared")
         if not self.ratios or any(
@@ -80,11 +86,10 @@ class FibonacciParams:
         fraction = self.min_impulse_fraction
         if not isinstance(fraction, Decimal) or not (Decimal(0) < fraction < Decimal(1)):
             raise InvalidFibonacciRequestError("min_impulse_fraction must be a Decimal in (0, 1)")
-        window = self.range_window_candles
-        if isinstance(window, bool) or not isinstance(window, int) or window < 1:
-            raise InvalidFibonacciRequestError(
-                "range_window_candles must be an integer of at least 1"
-            )
+        for name in ("range_window_candles", "search_window_candles"):
+            window = getattr(self, name)
+            if isinstance(window, bool) or not isinstance(window, int) or window < 1:
+                raise InvalidFibonacciRequestError(f"{name} must be an integer of at least 1")
 
 
 DEFAULT_FIBONACCI_PARAMS = FibonacciParams()

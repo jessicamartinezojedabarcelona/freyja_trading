@@ -818,6 +818,7 @@ def test_the_documented_parameters_and_levels_are_the_default_ones() -> None:
         {"min_impulse_fraction": 0.25},
         {"range_window_candles": 0},
         {"range_window_candles": True},
+        {"search_window_candles": 0},
         {"version": " "},
         {"levels_version": ""},
         {"convention_version": " "},
