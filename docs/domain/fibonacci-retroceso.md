@@ -195,11 +195,18 @@ precios `p` se sustituyen por `K − p`, los niveles de uno son exactamente los 
   aparece un extremo aún mayor, el candidato se sustituye y el intervalo **sigue abierto**.
 
   **Cuándo nace la nueva instancia**: en el `known_at` de la nueva (el mayor de la confirmación de mercado
-  y la recepción de la vela que confirma el nuevo `B'`), con el mismo `A`, el nuevo `B'` y **sus dos
-  tiempos propios**, y solo si `A` y `B'` cumplen la regla de extremos de la sección 2. Las velas entre el
+  y la recepción de la vela que confirma el nuevo `B'`), con el nuevo `B'` y **sus dos tiempos propios**,
+  y solo si su `A` y `B'` cumplen la regla de extremos de la sección 2. Su `A` es **el que elige la
+  política de búsqueda** (sección 16): el mismo que el de la instancia anterior si sigue dentro de la
+  ventana, otro si ya salió de ella. Cuando cambia, es otro Fibonacci con otra identidad, no el anterior
+  redibujado. Las velas entre el
   cierre del extremo `B'` y ese `known_at` son **retrospectivas** para la nueva. Si el precio hace un
-  mínimo por debajo de `A` (por mecha) antes de confirmarse `B'`, el par ya no cumple la regla: el
-  candidato se **abandona** y no nace ninguna instancia.
+  mínimo por debajo de `A` (por mecha) mientras el intervalo sigue abierto, el candidato se **abandona**
+  y el intervalo se cierra como `CANDIDATE_ABANDONED` (el retroceso ya superó el 100 %). **Eso no impide
+  que la búsqueda encuentre después un impulso válido**: si el mínimo llega *después* de `B'`, el par
+  `(A, B')` sigue cumpliendo la regla de extremos (que solo mira de `A` a `B'`), así que nace su
+  instancia por su cuenta, sin cerrar un intervalo que ya se cerró; todo lo que ocurrió antes de su
+  `known_at` es retrospectivo para ella.
 
   **Registro que solo se añade**, sin borrar ni editar: `EXTENSION_DETECTED` (con `coverage_end`,
   `extension_market_time` y `extension_received_at`), `GAP_OPENED` (con el instante real de inicio) y
@@ -367,9 +374,8 @@ Registradas para poder corregirlas; ninguna es de producto.
 - **La primera `StrategySpec`** espera el ejemplo real de Jessica: zona, confirmación, entrada, retraso
   máximo, horizonte, invalidación y tipo de contrato quedan sin fijar. Las variantes `A_CLOSE_1M`,
   `A_INTRABAR_1M` y `B_5M` son ejemplos, no estrategias aprobadas.
-- **FIB-DETECT-001**, limitada a **búsqueda de impulsos y ciclo de vida** (estados y tiempos de la
-  sección 5): qué pares se consideran impulsos y cómo se aplica la política de extensión en el tiempo.
-  **No** incluye confirmación de rechazo, entrada, vencimiento ni ninguna regla de estrategia: esperan el
+- **FIB-DETECT-001**, limitada a **búsqueda de impulsos y ciclo de vida**: hecha (secciones 16 y 17). **No**
+  incluye confirmación de rechazo, entrada, vencimiento ni ninguna regla de estrategia: esperan el
   ejemplo real de Jessica.
 - **Valores a validar con datos reales**: `min_impulse_fraction`, `range_window_candles`, `k`.
 
@@ -430,5 +436,47 @@ coexista con ella: considerar las patas
 elementales entre swings consecutivos dentro de un tramo dominante (un rally con retrocesos intermedios da
 una sola pata larga por swing, no una por cada retroceso interno).
 
-**Ciclo de vida** (estados y tiempos de la sección 5, registros que solo se añaden, intervalos sin
-Fibonacci vigente): es la segunda parte de FIB-DETECT-001 y no se ha implementado aún.
+**Ciclo de vida**: sección 17.
+
+## 17. Ciclo de vida implementado (`fibonacci-extension-policy-v1`)
+
+`replay_lifecycle` sigue una serie tal como llegó y mantiene, por instancia, un **registro que solo se
+añade**. Es una implementación de referencia (vuelve a buscar en cada instante): correcta y simple, no
+incremental.
+
+**Instantes.** Son aquellos en que Freyja aprendió algo: el cierre de cada vela o, si se dan las
+recepciones (`received_at`), esas recepciones. En cada instante solo se leen las velas **cerradas y
+recibidas** para entonces: nada depende de lo posterior, y los registros de un historial más corto son un
+prefijo de los de uno más largo. Si los datos no son aptos en un instante (hueco, historia corta, fuente no
+autorizada), **no se afirma nada** en él (fail-closed); lo que habría mostrado se registra cuando los datos
+vuelvan a ser aptos, con el instante posterior.
+
+**Instancia.** Un Fibonacci tal como se conoció: identidad (serie, dirección, `A`, `B` y las versiones de
+parámetros, niveles, convención y búsqueda), su impulso, `pivot_confirmed_market_time`,
+`pivot_received_at` y `known_at` (sección 3). Inmutable.
+
+**Registros** (`LifecycleRecord`), cada uno con `sequence`, `recorded_at` (el instante en que Freyja lo
+supo), `market_time` (cuándo ocurrió en el mercado) y `received_at` (cuándo recibió Freyja la vela que lo
+prueba; `None` si no se conoce):
+
+| Tipo | Cuándo | Campos propios |
+| ---- | ------ | -------------- |
+| `INSTANCE_BORN` | al conocerse el Fibonacci (pivote `B` confirmado y su vela confirmadora recibida) | `market_time` = confirmación de mercado |
+| `EXTENSION_DETECTED` | la primera vela (recibida) que supera `B` por mecha, estrictamente | `coverage_end` = apertura de esa vela; `market_time` = su cierre; `received_at` = su recepción |
+| `GAP_OPENED` | a la vez que la extensión | los mismos tiempos |
+| `GAP_CLOSED` | al cerrarse el intervalo | `closure` = `NEW_INSTANCE` (con `successor_id`) o `CANDIDATE_ABANDONED` |
+
+- **`NEW_INSTANCE`**: nace una instancia de la misma dirección cuyo `B'` está más allá del `B` anterior y no
+  es anterior a la vela que lo superó. Varias instancias antiguas pueden cerrarse con la misma sucesora.
+- **`CANDIDATE_ABANDONED`**: una vela (desde la que superó `B`) supera `A` por mecha mientras el intervalo
+  está abierto.
+- Un intervalo sin cerrar se ve como **abierto**; al cerrarse **se añade** el cierre, la apertura no se
+  reescribe. `Gap.uncertainty` devuelve `(coverage_end, extension_received_at)`: el lapso en que la
+  instancia anterior seguía figurando vigente para Freyja aunque el mercado ya la había superado.
+- **Estado de una instancia derivado de los registros**: `ACTIVE` mientras no haya `EXTENSION_DETECTED`;
+  `EXTENDED` después, y es final.
+- El candidato a `B'` (`CANDIDATE_B`) **no genera registro propio**: no existe instancia. Si antes de
+  confirmarse aparece un extremo mayor, el candidato se sustituye y nunca nace nada por el descartado.
+- Un máximo exactamente igual a `B` (un doble techo) **no supera** `B`: no extiende.
+
+**Lo que no hace**: ninguna regla de zona, confirmación de rechazo, entrada, vencimiento ni señal.
