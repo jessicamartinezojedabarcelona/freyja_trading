@@ -312,6 +312,12 @@ Fibonacci. Para la vela del **primer cierre más allá** de una frontera de sali
   puede reconstruir lo ocurrido, pero no pudo detectar a las 10:03 la ruptura de un diamante que aún
   no existía: es `RETROSPECTIVE` (si el diamante se formó en el mercado a las 10:05) o, si ya se había
   formado en el mercado pero Freyja no lo conocía aún, `AFTER_MARKET_FORMATION`. En ningún caso `LIVE`.
+- **Sin recepciones no se puede afirmar «en vivo».** Si el detector no recibe los instantes de llegada
+  de las velas, `known_at` no existe y la procedencia **nunca es `LIVE`**: queda `AFTER_MARKET_FORMATION`
+  si la vela abrió a partir de `market_formed_at` y `RETROSPECTIVE` si abrió antes. Es fail-closed y
+  coincide con lo hecho en los toques de Fibonacci. Con recepciones, una vela que aún no había llegado
+  en el instante evaluado no se lee (deja un hueco y los datos no son aptos) y una vela sin recepción
+  se trata como no recibida.
 - El límite es inclusivo hacia la detección en vivo: una vela que abre exactamente en `known_at` es
   `LIVE`; un instante antes, no.
 - Solo `LIVE` puede ser una confirmación histórica operable. Las otras dos conservan estado y dirección
@@ -368,8 +374,10 @@ La regla de ruptura no cambia: **cierre fuera de la frontera más el margen**; u
 **10.5.1 Penetración por mecha.** Cuando una vela tiene su máximo por encima de la frontera superior
 de salida (o su mínimo por debajo de la inferior) y **cierra dentro**, la evidencia `WICK_PENETRATIONS`
 registra: cuántas velas lo han hecho, la hora de mercado de la primera y de la última, y la mayor
-penetración como fracción de la altura de la contracción. Cambiar esa evidencia añade una evaluación
-al historial (es un hecho nuevo), pero no cambia el estado ni la geometría. No hay una profundidad a
+penetración como fracción de la `contraction_height`. Como en el resto de la familia, la **primera vez**
+que aparece esta evidencia se añade una evaluación al historial (es un hecho nuevo); sus cifras
+posteriores están en el resultado del detector en cada instante y se recogen en el historial cuando
+cambia otra cosa. No cambia el estado ni la geometría. No hay una profundidad a
 partir de la cual una mecha «cuente»: contar cierres es lo aprobado.
 
 **10.5.2 Un swing más allá de un vértice.** Una mecha larga puede convertirse en un swing confirmado
@@ -409,20 +417,45 @@ resto del diamante.
 ### 10.7 Parámetros: `diamond-params-v1` (provisionales, sin validar)
 
 `diamond-params-v1` es la versión del conjunto que usa el diamante y **es parte de la identidad** de
-cada instancia. Reúne, con sus valores propios, los números de la familia que usa (un cambio en
-`continuation-params-v1` no cambia un diamante ya registrado) y añade uno. Todos irán a
-PARAMS-VALIDATION-001.
+cada instancia: una instancia identifica por completo el cálculo que la produjo. Reúne, con sus valores
+propios, **todos** los números que el detector lee (un cambio en `continuation-params-v1` no cambia un
+diamante ya registrado) y añade uno. Todos irán a PARAMS-VALIDATION-001.
 
-| Qué se decide | Parámetro | Valor | Nota |
-| ------------- | --------- | ----- | ---- |
-| Contactos intermedios | `contact_tolerance` | 0,15 | de la altura de la fase |
-| Pendiente mínima de cada frontera | `slope_min` | 0,15 | de la altura de la fase |
-| Tamaño | `min_height_fraction` | 0,25 | aplicado a la **anchura máxima** (máximo − mínimo del diamante) frente al rango de las `range_window_candles` (100) velas previas al primer ancla; no a la altura inicial, que en una expansión es la más pequeña |
-| Duración mínima | `min_channel_candles` | 15 | **de cada fase**, por separado |
-| Ruptura | `breakout_margin`, `failure_window_candles` | 0,10 · 10 | de la altura de la fase de contracción |
-| Edad máxima | `diamond_max_age_candles` | **200 (nuevo)** | ver abajo |
-| Consecutividad de los vértices | — | — | **estructural, fijada por la versión** (10.2): otra regla sería `diamond-params-v2` |
-| Mínimo de swings | — | 6 | estructural (10.2) |
+| Parámetro | Valor | Qué decide | Se aplica a |
+| --------- | ----- | ---------- | ----------- |
+| `min_height_fraction` | 0,25 | Tamaño mínimo del diamante | la **anchura máxima** (`widest_width`) frente al rango de referencia |
+| `range_window_candles` | 100 | Cuántas velas forman el rango de referencia: las 100 que terminan en el primer ancla; se fija al empezar y no cambia | el rango de referencia (`reference_range`) |
+| `contact_tolerance` | 0,15 | Contactos intermedios de una frontera | la **altura de su fase** (`expansion_height` o `contraction_height`) |
+| `slope_min` | 0,15 | Pendiente mínima de cada frontera | la **altura de su fase** |
+| `min_channel_candles` | 15 | Duración mínima | **cada fase** por separado |
+| `breakout_margin` | 0,10 | Margen que confirma una ruptura | la **altura de la contracción** (`contraction_height`), nunca la anchura máxima |
+| `failure_window_candles` | 10 | Velas en las que volver dentro hace fracasar la ruptura | contadas desde el primer cierre más allá |
+| `diamond_max_age_candles` | **200 (nuevo)** | Edad máxima de una figura sin resolver | ver abajo |
+| Consecutividad de los vértices | — | **estructural, fijada por la versión** (10.2): otra regla sería `diamond-params-v2` | — |
+| Mínimo de swings | 6 | estructural (10.2) | — |
+
+**Tres medidas con nombre propio.** Son distintas a propósito y no se intercambian:
+
+| Nombre | Qué es | Para qué se usa |
+| ------ | ------ | --------------- |
+| `widest_width` (anchura máxima) | Precio del vértice superior menos precio del vértice inferior (los precios de los dos pivotes) | **Solo** el tamaño mínimo: `widest_width >= min_height_fraction × reference_range` |
+| `expansion_height` | Distancia vertical entre las dos rectas de expansión en el instante del primer ancla | Tolerancia de contactos y pendiente mínima **de la expansión** |
+| `contraction_height` | Distancia vertical entre las dos rectas de contracción en el instante del **primer** swing de la contracción (el vértice que llega antes). La recta que pasa por el otro vértice se prolonga hasta ese instante | Tolerancia de contactos y pendiente mínima **de la contracción**, y el margen: `breakout_margin × contraction_height` |
+
+`contraction_height` puede ser mayor o menor que `widest_width`, porque una de las rectas se
+prolonga hacia atrás desde el otro vértice. **Ejemplo numérico** (ordenación A, en velas y precios): el
+vértice superior es 140 en la vela 20, el inferior 100 en la 30, el tercer máximo 124 en la 40 y el
+tercer mínimo 110 en la 50.
+
+- `widest_width` = 140 − 100 = **40**. Con un rango de referencia de 150, el mínimo es 0,25 × 150 =
+  37,5: el diamante es lo bastante grande. Con 160 el mínimo es exactamente 40 (basta: «al menos»); con
+  161 no lo es.
+- La recta superior de contracción baja 0,8 por vela (de 140 en la 20 a 124 en la 40); la inferior sube
+  0,5 por vela (de 100 en la 30 a 110 en la 50) y, prolongada hasta la vela 20, vale 100 − 0,5 × 10 = 95.
+  Por tanto `contraction_height` = 140 − 95 = **45**.
+- El margen es 0,10 × 45 = **4,5**, no 0,10 × 40 = 4,0. En la vela 55 la recta superior vale
+  140 − 0,8 × 35 = 112: un cierre en 116,2 está más allá por 4,2, **no confirma** (hacen falta 4,5) y
+  queda como ruptura pendiente; aplicar por error el margen a la anchura máxima lo confirmaría.
 
 **Cómo se cuentan las 200 velas.** La **edad** de un diamante en un instante es la **diferencia de
 posición** entre la última vela cerrada y recibida hasta ese instante y la vela del **primer ancla**
@@ -490,3 +523,5 @@ Incorporadas a petición suya en esta revisión:
     (`ADDITIONAL_CONTACTS`), no un anclaje, y no modifica las fronteras de las evaluaciones posteriores.
     Un cambio de frontera exigiría una nueva versión de la geometría con su propio instante de
     conocimiento, conservando la anterior, y sería otra política.
+11. **Sin instantes de llegada, nunca `LIVE`** (10.4): aclaración de implementación, coherente con
+    Fibonacci y con el fail-closed de la familia; no cambia ninguna regla aprobada.
