@@ -213,9 +213,11 @@ bajistas son espejo, y la bandera y el banderín solo se diferencian en la forma
   Es un umbral provisional que se validará con datos reales.
 - El **ápice** se calcula con las rectas del último tamaño de la figura; si luego la figura crece, el
   ápice cambia con ella.
-- No hay estado `FORMING` para estas figuras: nada se afirma antes del cuarto contacto. (Una
-  candidata a bandera o banderín con el mástil ya identificado y la pausa aún sin medir podría
-  añadirse más adelante como estado previo; hoy no se afirma nada que no se pueda medir.)
+- **Pendiente: el estado candidato.** No hay estado `FORMING` para estas figuras: nada se afirma
+  antes del cuarto contacto de la pausa. Una **candidata** (mástil ya identificado, pausa aún sin
+  medir) sería útil para anticipar, pero exige decidir qué se registra cuando la pausa no se puede
+  medir todavía y cómo se evita que una candidata que no llega a figura ensucie el historial. Queda
+  como tarea aparte (propuesta: `POINT3-CANDIDATE-001`) y hoy no se afirma nada que no se pueda medir.
 - Una pausa de más de `max_flag_candles` velas no se detecta como bandera (es otra cosa, o una
   pausa demasiado larga para serlo), y un mástil de más de `mast_max_candles` velas (una subida por
   etapas) tampoco. Son umbrales provisionales que se validarán con datos reales.
@@ -243,3 +245,67 @@ Registradas para poder corregirlas; ninguna es de producto.
    mástil contra el rango reciente: cada cosa se compara con lo que la hace destacar.
 7. Las banderas y los banderines no incluyen `FORMING`, igual que el resto de la familia, aunque el
    mástil ya se conozca antes: nada se afirma hasta que la pausa se puede medir.
+
+## 11. Ejemplos: lo que pasa y lo que falla
+
+Cada línea es una prueba (`backend/tests/unit/test_pattern_continuation_thresholds.py`): el valor
+**exacto** del umbral, y un vecino a cada lado. Un umbral «inclusivo» acepta el valor exacto; uno
+«exclusivo», no. Todos los de esta tabla son inclusivos salvo donde se dice.
+
+### 11.1 Mástil brusco y corto
+
+| Regla | Parámetro | Pasa | Falla |
+| ----- | --------- | ---- | ----- |
+| Corto: como mucho 12 velas de inicio a final | `mast_max_candles` = 12 | 11 velas; **12 velas** (exacto) | 13 velas |
+| Brusco: al menos 1/4 del rango de las últimas 100 velas | `mast_min_height_fraction` = 0,25 | rango 28,0: mástil de 7,1; **de 7,0** (exacto, 0,25) | mástil de 6,9 |
+
+Ejemplo de mástil que **pasa** (alcista, diez velas, de un mínimo de 121,5 a un máximo de 150,5:
+altura 29,0, más que el rango de 26,9 de las 100 velas anteriores): los valores medios de las velas, desde la del mínimo,
+son 122; 124,8; 127,6; 130,4; 133,2; 136,0; 138,8; 141,6; 144,4; 147,2; 150,0. Con el mismo recorrido
+repartido en **13 velas** (un paso de 2,15 en lugar de 2,8) no pasa: es demasiado lento para ser un
+mástil. Y con la subida de 7,0 en 10 velas (mínimo 169,5 a máximo 176,5, rango 28,0) pasa justo;
+con 6,9, no.
+
+### 11.2 Pausa pequeña
+
+Medidas de una pausa tras un mástil de **100** (para la bandera bajista, las mismas medidas
+del revés):
+
+| Regla | Parámetro | Pasa | Falla |
+| ----- | --------- | ---- | ----- |
+| Poco alta: como mucho la mitad del mástil | `flag_max_height_fraction` = 0,50 | 49,99; **50** (exacto) | 50,01 |
+| Devuelve poco: el contacto que más se aleja del final del mástil, en contra, no pasa de la mitad | `max_retrace` = 0,50 | 49,99; **50** (exacto) | 50,01 |
+| No sigue con el mástil: su deriva a favor es como mucho una décima | `flat_tolerance` = 0,10 | −30 (en contra); 9,99; **10** (exacto) | 10,01 |
+| Breve: como mucho 30 velas, del final del mástil a su último contacto | `max_flag_candles` = 30 | 29; **30** (exacto) | 31 |
+| Bandera, paralela: la altura al final difiere de la inicial (20) como mucho una quinta parte | `parallel_tolerance` = 0,20 | 16 y 24 (exactos); entre ellos | 15,99 y 24,01 |
+| Banderín, convergente: la altura al final es como mucho 0,70 de la inicial (20) | `pennant_convergence_min` = 0,30 | 13,99; **14** (exacto) | 14,01 |
+| Banderín: el techo baja y el suelo sube | (sin parámetro: signos estrictos) | techo −0,01 y suelo +0,01 | techo 0 (plano) o suelo 0 (plano); los dos subiendo o los dos bajando (cuña) |
+
+Ejemplo de pausa que **pasa** (bandera alcista sobre el mástil de 29,0): contactos de la pausa a 150,5
+(final del mástil), 145,5, 149,0 y 144,5, en 30 velas; techo de 150,5 a 149,0 y suelo de 145,5 a 144,5,
+casi paralelos; 4,5 de alto (0,155 del mástil), devuelve 6,0 (0,207) y deriva −1,5 (−0,052). Ejemplos
+que **fallan**, con esa misma pausa: bajo `flag_max_height_fraction` = 0,15 (su altura es 0,155 del
+mástil; con 0,16 pasa); bajo `max_retrace` = 0,20 (devuelve 0,207; con 0,30 pasa); o con un techo que
+sube tan deprisa como el mástil (123, 126, 129 en las pruebas), que ya no es una pausa.
+
+### 11.3 Otro par de umbrales exactos
+
+- `contact_tolerance` = 0,15: un contacto intermedio a medio punto de la recta, con una altura de 20,
+  está a 0,025 de la altura. Con la tolerancia en 0,025 **es** contacto (inclusivo); con 0,0249, no.
+- Un banderín cuya altura pasa de 10,5 a 7,35 (0,70 exacto) con `pennant_convergence_min` = 0,30 **es**
+  banderín; con 0,31, no.
+
+## 12. Tipo de figura, dirección del mástil y dirección real de la ruptura
+
+Son **tres hechos distintos**, guardados en sitios distintos, y ninguno se deduce de otro:
+
+| Qué | Dónde se guarda | Ejemplo: banderín alcista que rompe por abajo |
+| --- | --------------- | ---------------------------------------------- |
+| **Qué figura es** (y qué espera la tradición de ella) | `pattern_type` de la instancia y su `traditional_bias` en el catálogo | `BULL_PENNANT`, sesgo `BULLISH` |
+| **Hacia dónde apuntó el mástil** | ancla `MAST_START` (un mínimo si el mástil sube) y `mast_direction` en la evidencia `FLAGPOLE` | `UP` |
+| **Hacia dónde rompió de verdad el precio** | `breakout.direction` y `breakout.boundary` de la evaluación, y el estado (`CONFIRMED_UP` o `CONFIRMED_DOWN`) | `DOWN` por la frontera `LOWER`, estado `CONFIRMED_DOWN` |
+
+De ahí que una ruptura contraria a la expectativa se **registre tal cual**, sin renombrar la figura ni
+forzarla a continuación: quien consuma el resultado ve `BULL_PENNANT` con un mástil hacia arriba y una
+ruptura `DOWN`, y puede tratarla como lo que es (una ruptura contraria al mástil). Lo mismo vale para
+triángulos y rectángulo, cuyo sesgo tradicional también es distinto de la ruptura que ocurre.
