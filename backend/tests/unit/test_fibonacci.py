@@ -86,16 +86,28 @@ def impulse(
     *,
     at: datetime = T0,
     duration: timedelta = timedelta(minutes=5),
+    a_gap_candles: int = 20,
 ) -> Impulse:
-    """An impulse whose B pivot is the candle that opens at `at` (A came twenty candles before)."""
-    a_time = at - duration * 20
+    """An impulse whose B pivot is the candle that opens at `at` (A came `a_gap_candles` candles
+    before it, twenty by default)."""
+    a_time = at - duration * a_gap_candles
     return Impulse(
         direction,
         pivot(direction.start_kind, a_time, a, duration),
         pivot(direction.end_kind, at, b, duration),
-        20,
+        a_gap_candles,
         D(100),
     )
+
+
+def a_to_b_filler(a_time: datetime, b_time: datetime, duration: timedelta) -> list[Candle]:
+    """Filler candles from A's own candle to B's, both included, so that `known_at` can be proven:
+    their prices do not matter here, only that they exist and can be given a receipt."""
+    count = int((b_time - a_time) / duration) + 1
+    return [
+        candle(a_time + duration * i, duration, low="1", high="999999", close="500")
+        for i in range(count)
+    ]
 
 
 def delivered(
@@ -211,17 +223,21 @@ def test_a_touch_in_the_candle_that_confirms_b_is_retrospective_and_the_next_one
     timeframe: Timeframe, direction: ImpulseDirection
 ) -> None:
     d = timeframe.duration
+    # A confirms exactly when B's own candle opens, so the whole A-to-B stretch that `known_at`
+    # now depends on (2026-09-27 correction) is just those `K + 1` candles, `filler` below.
     fib = (
-        impulse(BULLISH, "100", "120", duration=d)
+        impulse(BULLISH, "100", "120", duration=d, a_gap_candles=K + 1)
         if direction is BULLISH
-        else impulse(BEARISH, "120", "100", duration=d)
+        else impulse(BEARISH, "120", "100", duration=d, a_gap_candles=K + 1)
     )
+    filler = a_to_b_filler(fib.start.open_time, fib.end.open_time, d)
     # The 50 % level is at 110 in both. The candle that closes at the confirmation reaches it; so
     # does the one that opens at it. Each candle reaches Freyja the moment it closes.
     confirming = candle(T0 + d * 3, d, low="109", high="111", close="110")
     first_operable = candle(T0 + d * 4, d, low="109.5", high="110.5", close="110")
     before = candle(T0 + d, d, low="115", high="116", close="115.5")
-    candles = [before, confirming, first_operable]
+    visible = [before, confirming, first_operable]
+    candles = [*filler, *visible]
     seen = observe(fib, candles, observed_at=T0 + d * 5, received_at=delivered(candles))
     assert seen.pivot_received_at == T0 + d * 4 and seen.known_at == T0 + d * 4
     half = next(x for x in seen.levels if x.level.ratio == D("0.5"))
@@ -231,8 +247,9 @@ def test_a_touch_in_the_candle_that_confirms_b_is_retrospective_and_the_next_one
     assert half.first_operable_touch.availability is Availability.OPERABLE
     assert half.first_operable_touch.candle_open_time == T0 + d * 4  # opens exactly when known
     # Without the operable candle, nothing operable was seen: only the retrospective touch.
+    only_past_candles = [*filler, *visible[:2]]
     only_past = observe(
-        fib, candles[:2], observed_at=T0 + d * 4, received_at=delivered(candles[:2])
+        fib, only_past_candles, observed_at=T0 + d * 4, received_at=delivered(only_past_candles)
     )
     half = next(x for x in only_past.levels if x.level.ratio == D("0.5"))
     assert half.first_touch is not None and half.first_operable_touch is None
@@ -246,7 +263,7 @@ def test_a_confirming_candle_received_late_moves_the_moment_the_fibonacci_was_re
     when it received it. The candles that opened before that were not opened knowing the Fibonacci,
     even if they opened after the market confirmation: their touches are retrospective."""
     d = timeframe.duration
-    fib = impulse(BULLISH, "100", "120", duration=d)
+    fib = impulse(BULLISH, "100", "120", duration=d, a_gap_candles=K + 1)
     late = d * 2 + timedelta(
         seconds=30
     )  # the confirming candle arrives two and a half candles late
@@ -256,7 +273,14 @@ def test_a_confirming_candle_received_late_moves_the_moment_the_fibonacci_was_re
     next_one = candle(T0 + d * 5, d, low="109.5", high="110.5", close="110")
     third = candle(T0 + d * 6, d, low="109.5", high="110.5", close="110")
     later = candle(T0 + d * 7, d, low="109.5", high="110.5", close="110")
-    candles = [confirming, at_market, next_one, third, later]
+    candles = [
+        *a_to_b_filler(fib.start.open_time, fib.end.open_time, d),
+        confirming,
+        at_market,
+        next_one,
+        third,
+        later,
+    ]
     receipts = delivered(candles)
     receipts[confirming.open_time] = confirming.close_time + late  # the only one that is late
     known = T0 + d * 4 + late  # = T0 + 6d + 30 s
@@ -280,6 +304,49 @@ def test_a_confirming_candle_received_late_moves_the_moment_the_fibonacci_was_re
     # candle that opened at T0+6d closes at T0+7d, which is still to come.
     at_known = observe(fib, candles, observed_at=known, received_at=receipts)
     assert at_known.candles_observed == 3
+
+
+def test_a_stretch_candle_received_out_of_order_also_delays_known_at() -> None:
+    """`known_at` depends on every candle from A's to B's, not only on B's own confirming candle
+    (2026-09-27 correction): a candle in between, received very late and out of calendar order
+    (after candles that open well after it), pushes `known_at` back just as a late B would."""
+    d = timedelta(minutes=5)
+    fib = impulse(BULLISH, "100", "120", duration=d, a_gap_candles=6)  # A opens at T0 - 6d
+    filler = a_to_b_filler(fib.start.open_time, fib.end.open_time, d)  # T0-6d .. T0, both included
+    confirming = candle(T0 + d * 3, d, low="112", high="113", close="112.5")
+    after = candle(T0 + d * 4, d, low="109.5", high="110.5", close="110")
+    candles = [*filler, confirming, after]
+    receipts = delivered(candles)
+    # A plain intermediate candle (neither A's, A's confirming, nor B's own): opens at T0 - 2d.
+    late_candle = next(c for c in filler if c.open_time == fib.start.open_time + d * 4)
+    out_of_order_arrival = T0 + d * 10  # arrives long after every other candle, out of order
+    receipts[late_candle.open_time] = out_of_order_arrival
+    seen = observe(fib, candles, observed_at=out_of_order_arrival, received_at=receipts)
+    assert seen.known_at == out_of_order_arrival  # the latest arrival wins, not the calendar order
+    with pytest.raises(InvalidFibonacciRequestError, match="not known yet"):
+        observe(
+            fib,
+            candles,
+            observed_at=out_of_order_arrival - timedelta(seconds=1),
+            received_at=receipts,
+        )
+
+
+def test_without_the_full_a_to_b_stretch_known_at_cannot_be_proven_even_if_b_was_received() -> None:
+    """The old rule only looked at B's own confirming candle; that alone is not enough: without the
+    rest of the stretch (or A's own confirming candle) in `closed`, `known_at` stays unproven,
+    fail-closed, even though B's confirming candle was received right away (2026-09-27 correction:
+    before it, this used to be enough to call the touch `OPERABLE`)."""
+    d = timedelta(minutes=5)
+    fib = impulse(BULLISH, "100", "120", duration=d, a_gap_candles=6)
+    confirming = candle(T0 + d * 3, d, low="112", high="113", close="112.5")
+    after = candle(T0 + d * 4, d, low="109.5", high="110.5", close="110")
+    candles = [confirming, after]  # only the B side: A's stretch is not supplied at all
+    seen = observe(fib, candles, observed_at=T0 + d * 5, received_at=delivered(candles))
+    assert seen.pivot_received_at == T0 + d * 4  # B alone was known
+    assert seen.known_at is None  # but the impulse's own known_at cannot be proven from this alone
+    half = next(x for x in seen.levels if x.level.ratio == D("0.5"))
+    assert half.first_operable_touch is None
 
 
 def test_without_the_receipt_nothing_after_the_confirmation_can_be_proven_operable() -> None:
