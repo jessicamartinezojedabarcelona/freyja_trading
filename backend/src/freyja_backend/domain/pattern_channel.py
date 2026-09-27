@@ -53,6 +53,7 @@ from freyja_backend.domain.pattern_detection import (
     line_through,
     prior_trend_state,
     reference_range,
+    timing_evidence,
 )
 
 _MIN_SWINGS = 4  # two highs and two lows
@@ -346,6 +347,9 @@ class ChannelDetector(ContinuationDetector):
             prior_trend_context(context, closed, channel.window[0]),
             *breakout_evidence(judgement, closed),
         )
+        timing = timing_evidence(context, closed, channel.window, judgement)
+        if timing is not None:
+            items = (*items, timing)
         return self.candidate(
             context,
             PatternEvaluation(

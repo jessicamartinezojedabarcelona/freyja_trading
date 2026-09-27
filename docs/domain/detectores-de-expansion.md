@@ -2,6 +2,9 @@
 
 - **Estado:** en construcción por partes. Vigente hoy: la parte a (cuña ascendente y cuña
   descendente), la parte b (formación expansiva) y la parte c (diamante, sección 10).
+  **Actualización (2026-09-27, `PATTERN-PROVENANCE-001`):** las partes a y b ya calculan
+  `BREAKOUT_TIMING` (procedencia `LIVE`/`AFTER_MARKET_FORMATION`/`RETROSPECTIVE`), igual que el
+  diamante desde el principio; ver sección 5 de `detectores-de-continuacion.md`.
 - **Fecha:** 2026-09-26
 - **Tarea:** POINT3-EXPANSION-001 (5 de 7 del punto 3), partes a, b y c.
 - **Depende de:** [detectores-de-continuacion.md](detectores-de-continuacion.md) (el canal de dos

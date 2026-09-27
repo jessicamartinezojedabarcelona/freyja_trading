@@ -133,6 +133,7 @@ del documento de reversión, con estas diferencias:
 | `BREAKOUT_SCAN` | desde el primer cierre más allá | Velas desde ese cierre, si está resuelta y cuánto tardó. |
 | `RETEST` | ruptura **confirmada** y una vela posterior que vuelve a la recta rota (basta la mecha) | `candles_after_confirmation` y `held` (si esa vela cerró aún más allá). Es un hecho nuevo, por tanto una evaluación nueva en el historial. No confirma ni desconfirma nada. |
 | `BREAKOUT_VOLUME` | desde el primer cierre más allá | Volumen de esa vela, media de las velas que la figura tardó en formarse y su cociente (`ratio`, ausente si la media es cero). Solo informativo. |
+| `BREAKOUT_TIMING` | desde el primer cierre más allá (añadido 2026-09-27, `PATTERN-PROVENANCE-001`) | `market_formed_at` (confirmación de mercado del último contacto), `receipts_available`, `known_at` (si hay recepciones para toda la ventana de contactos) y, con ruptura, `provenance` (`LIVE`/`AFTER_MARKET_FORMATION`/`RETROSPECTIVE`, sección 10.4 de `detectores-de-expansion.md`) y `breakout_received_at` (si se conoce). Mismo principio que `DIAMOND_TIMING`, sin las particularidades de solapamiento/ápice del diamante, que no existen aquí. Se aplica a las ocho figuras de este documento **y** a las cuñas y la formación expansiva (`detectores-de-expansion.md`, partes a y b): las tres comparten la misma infraestructura de canal (`ChannelDetector`) y de mástil (`MastDetector`). |
 
 ## 6. Cada figura
 
