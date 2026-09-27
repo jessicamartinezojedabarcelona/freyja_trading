@@ -35,6 +35,7 @@ from freyja_backend.domain.chart_pattern import (
 )
 from freyja_backend.domain.market_context import MissingDataReason
 from freyja_backend.domain.market_data import Candle
+from freyja_backend.domain.market_structure import Pivot, PivotKind, PivotStatus
 from freyja_backend.domain.pattern_broadening import BroadeningFormationDetector
 from freyja_backend.domain.pattern_channel import (
     AscendingTriangleDetector,
@@ -46,6 +47,7 @@ from freyja_backend.domain.pattern_detection import (
     DetectionContext,
     DiamondParams,
     InvalidDetectionRequestError,
+    Judgement,
     PatternCandidate,
     replay_detector,
 )
@@ -54,8 +56,11 @@ from freyja_backend.domain.pattern_diamond import (
     LIVE,
     RETROSPECTIVE,
     DiamondDetector,
+    DiamondShape,
+    covering_until,
     phase_accepts,
     provenance_of,
+    published_at_of,
 )
 from freyja_backend.domain.pattern_wedge import FallingWedgeDetector, RisingWedgeDetector
 from tests.unit.test_market_trend import DOWN, T0, TF, UP, candle_at, random_walk, zigzag
@@ -1231,3 +1236,249 @@ def test_a_diamond_that_ended_at_its_apex_releases_nothing_because_its_windows_e
     candles = [*base, *creeping(base, upper, lower, 60)]
     found = now(candles, at_close(candles))
     assert found and all(c.evaluation.state is S.INVALIDATED for c in found)
+
+
+# -- a window released by a larger diamond: what was offered and when --------------------------
+
+
+def held_series(creep_until: int, beyond: int) -> tuple[list[Candle], int]:
+    """`BIG` (legs of 24) with candles inside its exit lines until `creep_until` candles after the
+    first anchor of the whole figure, then `beyond` candles that close just beyond the upper line
+    (by 1: short of the margin, which is a tenth of the contraction height). Returns the candles
+    and the position of the first anchor."""
+    base = zigzag(BIG, tail=0, leg=24)
+    whole = diamond_now(zigzag(BIG, leg=24)).evaluation
+    upper, lower = whole.boundaries[-2], whole.boundaries[-1]
+    first = next(k for k, c in enumerate(base) if c.open_time == whole.anchors[0].open_time)
+    candles = [*base, *creeping(base, upper, lower, first + creep_until - (len(base) - 1))]
+    for _ in range(beyond):
+        opened = candles[-1].open_time + STEP
+        candles.append(candle_at(opened, line_at(upper.points, opened + STEP) + D(1), STEP))
+    return candles, first
+
+
+def timing_of(instance: PatternInstance) -> list[dict[str, Any]]:
+    return [
+        dict(next(e for e in evaluation.evidence if e.code == "DIAMOND_TIMING").facts)
+        for evaluation in instance.evaluations
+    ]
+
+
+def test_a_breakout_the_window_had_while_it_was_covered_is_retrospective_when_it_is_released() -> (
+    None
+):
+    """The whole diamond is 200 candles old and the price has closed just beyond its exit line
+    (short of the margin). The window inside it, younger, has the very same breakout, but it was
+    covered and not offered. When the whole diamond goes stale (201), the window is published:
+    a breakout that opened before that instant is retrospective for it, though its geometry was
+    known long before and the candle opened after that."""
+    candles, first = held_series(creep_until=198, beyond=6)  # the first close beyond is at age 199
+    assert candles[first + 199].close > candles[first + 198].close  # (it is a real breakout)
+    receipts = at_close(candles)
+
+    # Before the release (ages 199 and 200): the whole figure is offered, and only it.
+    for age in (199, 200):
+        sub = candles[: first + age + 1]
+        offered = now(sub, at_close(sub))
+        assert [len(c.evaluation.anchors) for c in offered] == [9]
+        assert offered[0].evaluation.state is S.BREAKOUT_PENDING_CONFIRMATION
+        assert fact(offered[0], "DIAMOND_TIMING")["provenance"] == LIVE  # it did know its geometry
+
+    # After it (201 on): the whole figure is closed and the window appears, retrospective.
+    recorded = history(candles, receipts)
+    whole = next(i for i in recorded if len(i.latest.anchors) == 9)
+    window = next(i for i in recorded if len(i.latest.anchors) < 9)
+    assert states(whole)[-1] is S.INVALIDATED and whole.is_terminal
+    released = candles[first + 201].close_time  # the candle that made the whole figure too old
+    assert window.evaluations[0].evaluated_at == released  # not offered one instant earlier
+    assert all(e.evaluated_at >= released for e in window.evaluations)
+    for timing in timing_of(window):
+        assert timing["provenance"] == RETROSPECTIVE
+        assert timing["held_by_overlap"] is True
+        assert timing["published_at"] == iso(released)  # when the policy let it be offered...
+        assert timing["known_at"] < timing["published_at"]  # ...long after the geometry
+        assert timing["breakout_open_time"] < timing["published_at"]  # and after the breakout
+    assert [t["provenance"] for t in timing_of(whole) if "provenance" in t] == [LIVE]
+    assert window.latest.breakout is not None and not window.latest.breakout.confirmed
+
+
+def test_a_breakout_after_the_release_is_live_for_the_window_that_was_held() -> None:
+    """The same window, but the price stays inside until it has been published and only then leaves:
+    the candle opened after Freyja knew the geometry and after the policy offered it."""
+    candles, first = held_series(creep_until=205, beyond=3)  # the first close beyond is at age 206
+    window = next(i for i in history(candles, at_close(candles)) if len(i.latest.anchors) < 9)
+    released = candles[first + 201].close_time
+    timing = timing_of(window)[-1]
+    assert timing["held_by_overlap"] is True and timing["published_at"] == iso(released)
+    assert timing["breakout_open_time"] >= timing["published_at"]
+    assert timing["provenance"] == LIVE
+
+
+def test_a_window_that_was_never_covered_is_published_when_its_geometry_is_known() -> None:
+    candles = zigzag(BASE)
+    timing = fact(diamond_now(candles, at_close(candles)), "DIAMOND_TIMING")
+    assert timing["held_by_overlap"] is False
+    assert timing["published_at"] == timing["known_at"]
+
+
+def test_the_instant_the_whole_figure_was_seen_going_stale_is_when_its_candle_arrived() -> None:
+    """The release is when Freyja saw the candle that made the whole figure too old: a candle that
+    arrives late releases the window late, and the breakout on the candle before it is still
+    retrospective for the window."""
+    candles, first = held_series(creep_until=198, beyond=6)
+    stale = candles[first + 201]
+    arrival = stale.close_time + STEP * 2
+    receipts = receipts_with(candles, {stale.open_time: arrival})
+    window = next(i for i in history(candles, receipts) if len(i.latest.anchors) < 9)
+    timing = timing_of(window)[-1]
+    assert timing["published_at"] == iso(arrival)
+    assert timing["provenance"] == RETROSPECTIVE
+    assert window.evaluations[0].evaluated_at >= arrival
+
+
+@pytest.mark.parametrize(
+    ("opened", "formed", "known", "published", "expected"),
+    [
+        (10, 5, 8, None, LIVE),  # not held: the rule of 10.4
+        (10, 5, 8, 12, RETROSPECTIVE),  # known at 8 and opened at 10, but offered only at 12
+        (12, 5, 8, 12, LIVE),  # opened exactly when it was offered
+        (13, 5, 8, 12, LIVE),
+        (11, 5, 8, 12, RETROSPECTIVE),  # one instant before
+        (6, 5, 8, 12, RETROSPECTIVE),  # not known and not offered: retrospective too
+        (13, 5, None, 12, AFTER_MARKET_FORMATION),  # without arrival times, never live
+        (11, 5, None, 12, RETROSPECTIVE),
+    ],
+)
+def test_the_provenance_of_a_window_held_by_the_overlap_policy(
+    opened: int, formed: int, known: int | None, published: int | None, expected: str
+) -> None:
+    def at(minutes: int | None) -> datetime | None:
+        return None if minutes is None else T0 + timedelta(minutes=minutes)
+
+    moment = provenance_of(at(opened), at(formed), at(known), at(published))  # type: ignore[arg-type]
+    assert moment == expected
+
+
+# -- the two pure rules the overlap policy is built on -----------------------------------------
+
+
+def test_covering_until_ignores_a_diamond_that_never_reached_this_window() -> None:
+    """`released` records diamonds by the position of their own last swing. One that ended
+    earlier (its last swing before this window's) is a different diamond and must not affect it."""
+    freed = T0 + timedelta(minutes=90)
+    assert covering_until([(5, freed)], end=10) is None  # 5 < 10: never covered this window
+    assert covering_until([(10, freed)], end=10) == freed  # exactly this window's last swing
+    assert covering_until([(15, freed)], end=10) == freed  # covered this window and more
+    assert covering_until([], end=10) is None
+
+
+def test_covering_until_of_two_overlapping_releases_is_the_latest() -> None:
+    """Two diamonds, nested, both once covered this window and have both since gone stale: it was
+    not free until the last of them let go, whichever is listed first."""
+    earlier, later = T0 + timedelta(minutes=90), T0 + timedelta(minutes=150)
+    assert covering_until([(12, earlier), (20, later)], end=10) == later
+    assert covering_until([(20, later), (12, earlier)], end=10) == later  # order does not matter
+
+
+@pytest.mark.parametrize(
+    ("known", "formed", "held", "expected"),
+    [
+        (10, 5, None, 10),  # never held: its own known_at
+        (10, 5, 10, 10),  # released exactly when it was already known: not a hold
+        (10, 5, 9, 10),  # released earlier still: not a hold either
+        (10, 5, 11, 11),  # released strictly later: held until then
+        (None, 5, None, None),  # no arrival times and never held: nothing to publish
+        (None, 5, 6, 6),  # no arrival times, but held past its own formation
+        (None, 5, 5, None),  # held exactly at formation: not a hold
+    ],
+)
+def test_published_at_of_only_moves_the_moment_when_strictly_held_later(
+    known: int | None, formed: int, held: int | None, expected: int | None
+) -> None:
+    def at(minutes: int | None) -> datetime | None:
+        return None if minutes is None else T0 + timedelta(minutes=minutes)
+
+    assert published_at_of(at(known), T0 + timedelta(minutes=formed), at(held)) == at(expected)
+
+
+# -- a release triggered by the apex, not by age -----------------------------------------------
+
+
+def synthetic_shape(
+    *, first_index: int, expires_after: int | None, formed_offset: int
+) -> DiamondShape:
+    """A diamond shape with just enough to drive `_released_at`: its expansion starts at
+    `first_index`, its exit boundary expires after `expires_after` (or never), and every pivot in
+    its window is confirmed `formed_offset` candles after `T0`."""
+    confirmed = T0 + STEP * formed_offset
+    window = tuple(
+        Pivot(
+            PivotKind.HIGH if i % 2 == 0 else PivotKind.LOW,
+            PivotStatus.CONFIRMED,
+            T0 + STEP * i,
+            D(100 + i),
+            confirmed,
+        )
+        for i in range(5)
+    )
+    expansion = dataclasses.replace(
+        channel(upper_rise="10", lower_rise="-10"), first_index=first_index, expires_after=None
+    )
+    contraction = dataclasses.replace(
+        channel(upper_rise="-10", lower_rise="10"), expires_after=expires_after
+    )
+    return DiamondShape(window, expansion, contraction, window[0], window[1], D(10), D(50))
+
+
+def test_released_at_uses_the_apex_when_it_comes_before_the_age_limit() -> None:
+    shape = synthetic_shape(first_index=0, expires_after=5, formed_offset=0)
+    candles = zigzag(BASE)[:20]
+    context = diamond_context(candles, None, diamond_max_age_candles=200)
+    judgement = Judgement(S.INVALIDATED, invalidation_reasons=(InvalidationReason.TOO_LONG,))
+    freed = DiamondDetector._released_at(context, candles, shape, judgement)
+    assert freed == candles[6].close_time  # the apex (5 + 1), not the age limit (0 + 200 + 1)
+
+
+def test_released_at_is_none_if_the_diamond_was_already_over_when_it_could_first_be_known() -> None:
+    """The exit expired at candle 2, but the pivots were only confirmed at candle 8: it was already
+    past its apex the first instant it could be known, so it never covered anything."""
+    shape = synthetic_shape(first_index=0, expires_after=2, formed_offset=8)
+    candles = zigzag(BASE)[:20]
+    context = diamond_context(candles, None, diamond_max_age_candles=200)
+    judgement = Judgement(S.INVALIDATED, invalidation_reasons=(InvalidationReason.TOO_LONG,))
+    assert DiamondDetector._released_at(context, candles, shape, judgement) is None
+
+
+def test_released_at_uses_the_age_limit_when_there_is_no_apex_or_it_comes_later() -> None:
+    shape = synthetic_shape(first_index=0, expires_after=None, formed_offset=0)
+    candles = zigzag(BASE)
+    context = diamond_context(candles, None, diamond_max_age_candles=5)
+    judgement = Judgement(S.INVALIDATED, invalidation_reasons=(InvalidationReason.TOO_LONG,))
+    freed = DiamondDetector._released_at(context, candles, shape, judgement)
+    assert freed == candles[6].close_time  # first_index(0) + max_age(5) + 1
+
+
+def test_released_at_is_none_when_it_went_stale_at_the_exact_instant_it_was_known() -> None:
+    """Freed and the window's own base coincide exactly: it was known and stale in the very same
+    instant, so it was never alive for even a moment, and nothing was released."""
+    shape = synthetic_shape(first_index=0, expires_after=5, formed_offset=7)  # stale is candle 6
+    candles = zigzag(BASE)[:20]
+    context = diamond_context(candles, None, diamond_max_age_candles=200)
+    judgement = Judgement(S.INVALIDATED, invalidation_reasons=(InvalidationReason.TOO_LONG,))
+    assert candles[6].close_time == T0 + STEP * 7  # exactly the pivots' own confirmed_at
+    assert DiamondDetector._released_at(context, candles, shape, judgement) is None
+
+
+def test_timing_never_offers_the_overlap_policys_hold_to_a_window_it_did_not_actually_hold() -> (
+    None
+):
+    """`held_until` came from some other diamond's release, but it is not later than this window's
+    own base: it was not really held, and the breakout must be judged by its own known_at and
+    market_formed_at, never by a `held_until` that turned out not to apply."""
+    shape = synthetic_shape(first_index=0, expires_after=None, formed_offset=10)
+    candles = zigzag(BASE)
+    context = diamond_context(candles, None)
+    judgement = Judgement(S.BREAKOUT_PENDING_CONFIRMATION, first_beyond_index=3)
+    timing = dict(DiamondDetector()._timing(context, candles, shape, judgement, T0).facts)
+    assert timing["held_by_overlap"] is False
+    assert timing["provenance"] == RETROSPECTIVE  # opened before market_formed_at, not held

@@ -545,8 +545,14 @@ Incorporadas a petición suya en esta revisión:
   edad las libera (si caducó por el ápice, las demás caducan con él, porque comparten las rectas de
   salida). Si el diamante completo ya era demasiado viejo al conocerse, nunca fue figura y no esconde
   nada.
-- Comprobación por mutación: 31 mutantes sobre el detector y los parámetros, todos detectados. Tres
-  mutantes que se descartaron por equivalentes: exigir una expansión de tres swings (el canal ya rechaza
-  menos de dos máximos y dos mínimos), aceptar como contacto un máximo igual al anterior (un cierre
-  dentro de una recta que baja lo impide) y vigilar la ruptura desde el último contacto (su cierre
-  ya está dentro por construcción).
+- **La ventana liberada conserva su propio `known_at`, separado del instante en que pudo publicarse.**
+  Mientras la ventana estuvo cubierta por el diamante mayor, Freyja no la ofrecía como instancia aunque
+  ya conociera su geometría (`known_at`). El instante en que deja de estar cubierta (`published_at`,
+  cuando el diamante mayor caduca) puede ser muy posterior a `known_at`. Una ruptura cuya vela abrió
+  **antes de `published_at`** es retrospectiva para esta instancia, aunque haya abierto después de
+  `known_at`: Freyja nunca la ofreció como figura en ese momento, así que no pudo detectarla en vivo.
+  Si la ventana nunca estuvo cubierta, `published_at` coincide con `known_at` y la regla de la sección
+  10.4 no cambia. Facts nuevos en `DIAMOND_TIMING`: `held_by_overlap` y `published_at`.
+- Comprobación por mutación: 31 mutantes sobre el detector y los parámetros, todos detectados, más 14
+  mutantes específicos de esta distinción (`covering_until`, `published_at_of`, la salvaguarda de
+  «nunca estuvo viva» en `_released_at` y su uso en `_timing`), también todos detectados.

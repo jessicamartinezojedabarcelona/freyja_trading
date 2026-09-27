@@ -89,15 +89,54 @@ class DiamondShape:
     reference: Decimal
 
 
-def provenance_of(opened: datetime, formed_at: datetime, known_at: datetime | None) -> str:
+def provenance_of(
+    opened: datetime,
+    formed_at: datetime,
+    known_at: datetime | None,
+    published_at: datetime | None = None,
+) -> str:
     """Whether a candle that opened at `opened` could have been the one that revealed the exit of
     a diamond, from what Freyja knew when it opened. Without `known_at` (no arrival times) it can
-    never be said to be live."""
+    never be said to be live.
+
+    `published_at` is given only when the overlap policy held the instance back after Freyja knew
+    its geometry (a larger diamond covered it): a breakout on a candle that opened before that was
+    not offered as a figure and is retrospective for this instance, whatever else was known."""
+    if published_at is not None:
+        if opened < published_at:
+            return RETROSPECTIVE
+        return LIVE if known_at is not None else AFTER_MARKET_FORMATION
     if known_at is not None and opened >= known_at:
         return LIVE
     if opened >= formed_at:
         return AFTER_MARKET_FORMATION
     return RETROSPECTIVE
+
+
+def covering_until(released: Sequence[tuple[int, datetime]], end: int) -> datetime | None:
+    """When the windows up to swing `end` were last covered by a diamond that has since gone
+    stale, or `None` if none of the released diamonds ever reached that far.
+
+    `released` holds, for each diamond `find` has already reported as no longer one, the position
+    of its last swing and the instant it stopped covering. A diamond whose own last swing is
+    *before* `end` never covered this window (they are unrelated, from different parts of the
+    series) and must not affect it; among the ones that did cover it, several can overlap (nested
+    diamonds that both went stale), and the window stays held until the **last** of them let go."""
+    covering = [freed for last, freed in released if last >= end]
+    return max(covering) if covering else None
+
+
+def published_at_of(
+    known_at: datetime | None, formed_at: datetime, held_until: datetime | None
+) -> datetime | None:
+    """When the overlap policy let this instance be offered: its own `known_at` (or `formed_at`
+    without arrival times), unless a diamond that covered it went stale strictly later — then the
+    window was not offered until that instant, whatever it already knew about its own geometry.
+    Equal to the window's own moment is not a hold: nothing was withheld."""
+    base = known_at if known_at is not None else formed_at
+    if held_until is not None and held_until > base:
+        return held_until
+    return known_at
 
 
 def phase_accepts(fit: Channel, params: ContinuationParams, *, expanding: bool) -> bool:
@@ -153,6 +192,9 @@ class DiamondDetector(PatternDetector):
         index = index_by_open_time(closed)
         found: list[PatternCandidate] = []
         covered_until = -1  # position of the last swing of the longest diamond found so far
+        # Diamonds that ran their course after having been one: the position of their last swing and
+        # the instant from which the windows inside them were no longer covered.
+        released: list[tuple[int, datetime]] = []
         for start in range(len(swings) - _MIN_SWINGS + 1):
             shape = self._shape(params, channel_params, closed, index, swings, start)
             if shape is None:
@@ -160,16 +202,46 @@ class DiamondDetector(PatternDetector):
             end = start + len(shape.window) - 1
             if end <= covered_until:
                 continue  # a piece of a diamond that began earlier: the same figure, not another
-            candidate = self._figure(context, closed, swings, shape)
-            if candidate is None:
+            held_until = covering_until(released, end)
+            figure = self._figure(context, closed, swings, shape, held_until)
+            if figure is None:
                 continue
+            candidate, judgement = figure
             found.append(candidate)
             if candidate.evaluation.state is not PatternState.INVALIDATED:
                 # Only a diamond that is still one covers the pieces inside it. One that ran its
                 # course (too old, or past its apex) is reported as such and hides nothing: a
                 # younger window that ends at the same swing may still be a figure of its own.
                 covered_until = end
+            else:
+                freed = self._released_at(context, closed, shape, judgement)
+                if freed is not None:
+                    released.append((end, freed))
         return found
+
+    @staticmethod
+    def _released_at(
+        context: DetectionContext,
+        closed: Sequence[Candle],
+        shape: DiamondShape,
+        judgement: Judgement,
+    ) -> datetime | None:
+        """The instant a diamond that is invalidated now stopped being one: when Freyja first saw
+        the candle that made it too old or carried it past its apex. None if it never was a figure
+        (it was already over when Freyja first knew it), and then it never covered anything."""
+        exit_ = shape.contraction
+        stale = shape.expansion.first_index + context.diamond.diamond_max_age_candles + 1
+        if judgement.first_beyond_index is None and exit_.expires_after is not None:
+            stale = min(stale, exit_.expires_after + 1)
+        if stale >= len(closed):
+            return None
+        freed = _seen_at(closed[stale], context.received_at)
+        formed_at = max(p.confirmed_at for p in shape.window if p.confirmed_at is not None)
+        known_at = _known_at(closed, context.received_at, shape, formed_at)
+        base = known_at if known_at is not None else formed_at
+        # If it was already stale by the time it could first be known, it was never alive: it never
+        # covered anything, and releasing it here would invent a "held" period that did not happen.
+        return freed if freed > base else None
 
     def _shape(
         self,
@@ -227,7 +299,8 @@ class DiamondDetector(PatternDetector):
         closed: Sequence[Candle],
         swings: Sequence[Pivot],
         shape: DiamondShape,
-    ) -> PatternCandidate | None:
+        held_until: datetime | None,
+    ) -> tuple[PatternCandidate, Judgement] | None:
         params = context.diamond
         exit_ = shape.contraction
         last = len(closed) - 1
@@ -274,13 +347,13 @@ class DiamondDetector(PatternDetector):
                 anchors.append(anchor_of(pivot, f"LOWER_{lower_count}"))
         items: list[PatternEvidence | None] = [
             self._phases(context, closed, shape),
-            self._timing(context, closed, shape, judgement),
+            self._timing(context, closed, shape, judgement, held_until),
             _prior_trend(context, closed, shape.window[0]),
             *breakout_evidence(judgement, closed),
             self._wicks(closed, swings, shape, judgement),
             self._additional_contacts(params, closed, swings, shape),
         ]
-        return self.candidate(
+        candidate = self.candidate(
             context,
             PatternEvaluation(
                 evaluated_at=context.observed_at,
@@ -294,6 +367,7 @@ class DiamondDetector(PatternDetector):
                 evidence=tuple(item for item in items if item is not None),
             ),
         )
+        return candidate, judgement
 
     def _phases(
         self, context: DetectionContext, closed: Sequence[Candle], shape: DiamondShape
@@ -339,25 +413,38 @@ class DiamondDetector(PatternDetector):
         closed: Sequence[Candle],
         shape: DiamondShape,
         judgement: Judgement,
+        held_until: datetime | None,
     ) -> PatternEvidence:
-        """What happened (market times), when Freyja got it (arrival times) and when Freyja could
-        first know the diamond, kept apart; and, with a breakout, where it stands (`provenance`)."""
+        """What happened (market times), when Freyja got it (arrival times), when Freyja could
+        first know the geometry (`known_at`) and when the overlap policy let the instance be
+        offered (`published_at`), kept apart; and, with a breakout, where it stands
+        (`provenance`). The two only differ for a window inside a larger diamond that was still
+        covering it: `published_at` is then the instant that one stopped being a diamond."""
         received = context.received_at
         formed_at = max(p.confirmed_at for p in shape.window if p.confirmed_at is not None)
         known_at = _known_at(closed, received, shape, formed_at)
+        published_at = published_at_of(known_at, formed_at, held_until)
+        held = held_until is not None and held_until > (
+            known_at if known_at is not None else formed_at
+        )
         facts: dict[str, str | bool] = {
             "apex_passed": shape.contraction.expires_after is not None,
+            "held_by_overlap": held,
             "market_formed_at": formed_at.isoformat(),
             "receipts_available": received is not None,
         }
         if known_at is not None:
             facts["known_at"] = known_at.isoformat()
+        if published_at is not None:
+            facts["published_at"] = published_at.isoformat()
         first = judgement.first_beyond_index
         if first is not None:
             candle = closed[first]
             facts["breakout_open_time"] = candle.open_time.isoformat()
             facts["breakout_close_time"] = candle.close_time.isoformat()
-            facts["provenance"] = provenance_of(candle.open_time, formed_at, known_at)
+            facts["provenance"] = provenance_of(
+                candle.open_time, formed_at, known_at, held_until if held else None
+            )
             arrival = None if received is None else received.get(candle.open_time)
             if arrival is not None:
                 facts["breakout_received_at"] = arrival.isoformat()
@@ -487,6 +574,12 @@ class DiamondDetector(PatternDetector):
             latest_contact_side="UPPER" if latest.kind is PivotKind.HIGH else "LOWER",
             latest_contact_time=latest.open_time.isoformat(),
         )
+
+
+def _seen_at(candle: Candle, received: Mapping[datetime, datetime] | None) -> datetime:
+    """The instant Freyja could act on a candle: when it closed, or when it arrived if later."""
+    arrival = None if received is None else received.get(candle.open_time)
+    return candle.close_time if arrival is None else max(candle.close_time, arrival)
 
 
 def _known_at(
