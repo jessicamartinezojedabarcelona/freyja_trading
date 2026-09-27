@@ -26,7 +26,7 @@ in the market but before Freyja had the data is ``AFTER_MARKET_FORMATION``, and 
 before it existed is ``RETROSPECTIVE``. Only ``LIVE`` can be the basis of anything operable.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -52,6 +52,13 @@ from freyja_backend.domain.pattern_channel import (
     strictly_lower,
 )
 from freyja_backend.domain.pattern_detection import (
+    AFTER_MARKET_FORMATION as AFTER_MARKET_FORMATION,  # re-exported: tests import it from here
+)
+from freyja_backend.domain.pattern_detection import LIVE as LIVE  # re-exported, same reason
+from freyja_backend.domain.pattern_detection import (
+    RETROSPECTIVE as RETROSPECTIVE,  # re-exported, same reason
+)
+from freyja_backend.domain.pattern_detection import (
     ContinuationParams,
     DetectionContext,
     DetectorResult,
@@ -64,16 +71,17 @@ from freyja_backend.domain.pattern_detection import (
     breakout_evidence,
     index_by_open_time,
     judge,
+    known_at_of,
     prior_trend_state,
     reference_range,
+    seen_at,
+)
+from freyja_backend.domain.pattern_detection import (
+    provenance_of as provenance_of,  # re-exported, same reason
 )
 
 _MIN_SWINGS = 6
 _SIX = Decimal("0.000001")
-
-LIVE = "LIVE"
-AFTER_MARKET_FORMATION = "AFTER_MARKET_FORMATION"
-RETROSPECTIVE = "RETROSPECTIVE"
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,30 +95,6 @@ class DiamondShape:
     bottom: Pivot
     widest_width: Decimal
     reference: Decimal
-
-
-def provenance_of(
-    opened: datetime,
-    formed_at: datetime,
-    known_at: datetime | None,
-    published_at: datetime | None = None,
-) -> str:
-    """Whether a candle that opened at `opened` could have been the one that revealed the exit of
-    a diamond, from what Freyja knew when it opened. Without `known_at` (no arrival times) it can
-    never be said to be live.
-
-    `published_at` is given only when the overlap policy held the instance back after Freyja knew
-    its geometry (a larger diamond covered it): a breakout on a candle that opened before that was
-    not offered as a figure and is retrospective for this instance, whatever else was known."""
-    if published_at is not None:
-        if opened < published_at:
-            return RETROSPECTIVE
-        return LIVE if known_at is not None else AFTER_MARKET_FORMATION
-    if known_at is not None and opened >= known_at:
-        return LIVE
-    if opened >= formed_at:
-        return AFTER_MARKET_FORMATION
-    return RETROSPECTIVE
 
 
 def covering_until(released: Sequence[tuple[int, datetime]], end: int) -> datetime | None:
@@ -235,9 +219,9 @@ class DiamondDetector(PatternDetector):
             stale = min(stale, exit_.expires_after + 1)
         if stale >= len(closed):
             return None
-        freed = _seen_at(closed[stale], context.received_at)
+        freed = seen_at(closed[stale], context.received_at)
         formed_at = max(p.confirmed_at for p in shape.window if p.confirmed_at is not None)
-        known_at = _known_at(closed, context.received_at, shape, formed_at)
+        known_at = known_at_of(closed, context.received_at, shape.window, formed_at)
         base = known_at if known_at is not None else formed_at
         # If it was already stale by the time it could first be known, it was never alive: it never
         # covered anything, and releasing it here would invent a "held" period that did not happen.
@@ -422,7 +406,7 @@ class DiamondDetector(PatternDetector):
         covering it: `published_at` is then the instant that one stopped being a diamond."""
         received = context.received_at
         formed_at = max(p.confirmed_at for p in shape.window if p.confirmed_at is not None)
-        known_at = _known_at(closed, received, shape, formed_at)
+        known_at = known_at_of(closed, received, shape.window, formed_at)
         published_at = published_at_of(known_at, formed_at, held_until)
         held = held_until is not None and held_until > (
             known_at if known_at is not None else formed_at
@@ -574,32 +558,6 @@ class DiamondDetector(PatternDetector):
             latest_contact_side="UPPER" if latest.kind is PivotKind.HIGH else "LOWER",
             latest_contact_time=latest.open_time.isoformat(),
         )
-
-
-def _seen_at(candle: Candle, received: Mapping[datetime, datetime] | None) -> datetime:
-    """The instant Freyja could act on a candle: when it closed, or when it arrived if later."""
-    arrival = None if received is None else received.get(candle.open_time)
-    return candle.close_time if arrival is None else max(candle.close_time, arrival)
-
-
-def _known_at(
-    closed: Sequence[Candle],
-    received: Mapping[datetime, datetime] | None,
-    shape: DiamondShape,
-    formed_at: datetime,
-) -> datetime | None:
-    """The last arrival among the candles the figure depends on: from the one of its first anchor to
-    the one that confirms its last pivot (the closes between contacts decide it is valid too)."""
-    if received is None:
-        return None
-    first = next(k for k, c in enumerate(closed) if c.open_time == shape.window[0].open_time)
-    confirming = next((k for k, c in enumerate(closed) if c.close_time == formed_at), None)
-    if confirming is None:
-        return None
-    arrivals = [received.get(c.open_time) for c in closed[first : confirming + 1]]
-    if any(arrival is None for arrival in arrivals):
-        return None
-    return max(arrival for arrival in arrivals if arrival is not None)
 
 
 def _prior_trend(

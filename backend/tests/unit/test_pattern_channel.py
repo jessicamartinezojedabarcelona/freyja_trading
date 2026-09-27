@@ -10,7 +10,8 @@ through the wicks of the swing points: a swing "at 130" has its high at 130.5 an
 import ast
 import dataclasses
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -87,7 +88,12 @@ def mirror(extremes: Sequence[int | str]) -> list[int | str]:
     return [str(Decimal(300) - Decimal(str(e))) for e in extremes]
 
 
-def context_for(candles: Sequence[Candle], **params: Any) -> DetectionContext:
+def context_for(
+    candles: Sequence[Candle],
+    *,
+    received_at: Mapping[datetime, datetime] | None = None,
+    **params: Any,
+) -> DetectionContext:
     return DetectionContext(
         instrument_id="instrument-1",
         instrument=BTC,
@@ -97,6 +103,7 @@ def context_for(candles: Sequence[Candle], **params: Any) -> DetectionContext:
         timeframe=TF,
         observed_at=candles[-1].close_time,
         continuation=ContinuationParams(**params) if params else DEFAULT_CONTINUATION_PARAMS,
+        received_at=received_at,
     )
 
 
@@ -239,6 +246,50 @@ def test_every_result_explains_its_lines_and_where_the_price_came_from() -> None
     assert channel["span_candles"] == 50  # from the first upper contact to the last lower one
     assert channel["flat_tolerance"] == Decimal("0.10") and channel["slope_min"] == Decimal("0.15")
     assert facts_of(figure, "PRIOR_TREND") == {"state": "UPTREND"}
+
+
+def test_a_breakout_reports_its_provenance_when_receipts_are_known() -> None:
+    """Same principle as the diamond's `DIAMOND_TIMING` (`detectores-de-expansion.md`, 10.4),
+    generalized to the rest of the family (PATTERN-PROVENANCE-001): with receipts, a confirmed
+    breakout says whether it could have been seen live."""
+    candles = zigzag([*ASCENDING, 136])
+    received_at = {c.open_time: c.close_time for c in candles}  # no delay: everything arrives live
+    context = context_for(candles, received_at=received_at)
+    figure = figure_of(replay_detector(AscendingTriangleDetector(), context, candles))
+    timing = facts_of(figure, "BREAKOUT_TIMING")
+    assert timing["receipts_available"] is True
+    assert timing["provenance"] == "LIVE"
+    assert "known_at" in timing and "market_formed_at" in timing
+
+
+def test_a_late_receipt_of_an_early_contact_still_delays_known_at() -> None:
+    """`known_at` is the latest arrival among every candle the figure depends on, not only the
+    breakout's own: an early contact received out of order, after candles that open much later,
+    pushes it back all the same (same property already proven for the diamond and for
+    Fibonacci)."""
+    candles = zigzag([*ASCENDING, 136])
+    received_at = {c.open_time: c.close_time for c in candles}
+    baseline = figure_of(
+        replay_detector(
+            AscendingTriangleDetector(), context_for(candles, received_at=received_at), candles
+        )
+    )
+    first_contact_time = baseline.latest.anchors[0].open_time  # the channel's own first contact
+    late_arrival = candles[-1].close_time + STEP * 10
+    received_at[first_contact_time] = late_arrival
+    context = context_for(candles, received_at=received_at)
+    figure = figure_of(replay_detector(AscendingTriangleDetector(), context, candles))
+    timing = facts_of(figure, "BREAKOUT_TIMING")
+    assert timing["known_at"] == late_arrival.isoformat()
+    assert timing["provenance"] != "LIVE"  # the breakout opened long before that late arrival
+
+
+def test_without_receipts_a_breakout_never_claims_to_have_been_seen_live() -> None:
+    figure = the_figure(AscendingTriangleDetector(), [*ASCENDING, 136])  # no received_at at all
+    timing = facts_of(figure, "BREAKOUT_TIMING")
+    assert timing["receipts_available"] is False
+    assert "known_at" not in timing
+    assert timing["provenance"] in ("AFTER_MARKET_FORMATION", "RETROSPECTIVE")
 
 
 def test_a_figure_that_is_not_one_of_the_four_is_none_of_them() -> None:

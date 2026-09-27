@@ -403,9 +403,10 @@ class DetectionContext:
     diamond: DiamondParams = DEFAULT_DIAMOND_PARAMS
     publication_grace: timedelta = DEFAULT_PUBLICATION_GRACE
     # When Freyja really received each candle (its open time -> the instant), the first closed
-    # version, never rewritten. Only the detectors that tell what Freyja knew from what happened
-    # read it (the diamond); without it none of them can say a figure was known when a candle
-    # opened, and a candle that was not received by `observed_at` is not read.
+    # version, never rewritten. Read by `timing_evidence` (and, before it existed, only by the
+    # diamond) to say whether a breakout's candle opened when the figure was already known
+    # (`LIVE`/`AFTER_MARKET_FORMATION`/`RETROSPECTIVE`, PATTERN-PROVENANCE-001); without it none of
+    # this can be said, and a candle that was not received by `observed_at` is not read.
     received_at: Mapping[datetime, datetime] | None = field(default=None, compare=False, repr=False)
     # Memory of prior-trend classifications, keyed by (pivot parameters, minimum history, first
     # pivot). It only saves work: each entry is a pure function of the candles before that pivot, so
@@ -828,6 +829,110 @@ def _volume_evidence(judgement: Judgement, closed: Sequence[Candle]) -> PatternE
     return evidence(
         "BREAKOUT_VOLUME",
         "volume of the first close beyond the line against the mean while the figure formed",
+        **facts,
+    )
+
+
+# -- provenance: what Freyja knew, kept apart from what happened (PATTERN-PROVENANCE-001) -------
+#
+# Introduced by the diamond (`pattern_diamond.py`, POINT3-EXPANSION-001); generalized here so any
+# detector with a window of confirmed anchors can report it the same way. `pattern_diamond.py`
+# imports these names back (it needs `published_at` too, for windows an overlapping diamond held
+# back, which no other figure has).
+
+LIVE = "LIVE"
+AFTER_MARKET_FORMATION = "AFTER_MARKET_FORMATION"
+RETROSPECTIVE = "RETROSPECTIVE"
+
+
+def provenance_of(
+    opened: datetime,
+    formed_at: datetime,
+    known_at: datetime | None,
+    published_at: datetime | None = None,
+) -> str:
+    """Whether a candle that opened at `opened` could have been the one that revealed a figure's
+    breakout, from what Freyja knew when it opened. Without `known_at` (no arrival times) it can
+    never be said to be live.
+
+    `published_at` is given only when an overlap policy held the instance back after Freyja knew
+    its geometry (only the diamond has this): a breakout on a candle that opened before that was
+    not offered as a figure and is retrospective for this instance, whatever else was known."""
+    if published_at is not None:
+        if opened < published_at:
+            return RETROSPECTIVE
+        return LIVE if known_at is not None else AFTER_MARKET_FORMATION
+    if known_at is not None and opened >= known_at:
+        return LIVE
+    if opened >= formed_at:
+        return AFTER_MARKET_FORMATION
+    return RETROSPECTIVE
+
+
+def seen_at(candle: Candle, received: Mapping[datetime, datetime] | None) -> datetime:
+    """The instant Freyja could act on a candle: when it closed, or when it arrived if later."""
+    arrival = None if received is None else received.get(candle.open_time)
+    return candle.close_time if arrival is None else max(candle.close_time, arrival)
+
+
+def known_at_of(
+    closed: Sequence[Candle],
+    received: Mapping[datetime, datetime] | None,
+    window: Sequence[Pivot],
+    formed_at: datetime,
+) -> datetime | None:
+    """The last arrival among the candles a figure's validity depends on: from the one of its
+    first anchor to the one that confirms its last pivot (the closes in between decide it is
+    valid too, so their arrival counts the same way). `None` if it cannot be proven: no arrival
+    times at all, the confirming candle is not in `closed`, or any candle in between has no
+    recorded arrival (fail-closed, same principle as the diamond's `known_at`)."""
+    if received is None:
+        return None
+    first = next((k for k, c in enumerate(closed) if c.open_time == window[0].open_time), None)
+    confirming = next((k for k, c in enumerate(closed) if c.close_time == formed_at), None)
+    if first is None or confirming is None:
+        return None
+    arrivals = [received.get(c.open_time) for c in closed[first : confirming + 1]]
+    if any(arrival is None for arrival in arrivals):
+        return None
+    return max(arrival for arrival in arrivals if arrival is not None)
+
+
+def timing_evidence(
+    context: DetectionContext,
+    closed: Sequence[Candle],
+    window: Sequence[Pivot],
+    judgement: Judgement,
+) -> PatternEvidence | None:
+    """Market time, arrival time and the moment the figure was known, kept apart, with a
+    breakout's provenance when it has one. Same principle as the diamond's own `DIAMOND_TIMING`
+    (`pattern_diamond.py`), without the diamond's apex/overlap specifics, which no other figure
+    has. `None` only if no anchor in `window` carries a confirmation yet (never for a figure
+    `judge` has already accepted as complete, since completing one always confirms its anchors)."""
+    confirmed = [p.confirmed_at for p in window if p.confirmed_at is not None]
+    if not confirmed:
+        return None
+    received = context.received_at
+    formed_at = max(confirmed)
+    known_at = known_at_of(closed, received, window, formed_at)
+    facts: dict[str, str | bool] = {
+        "market_formed_at": formed_at.isoformat(),
+        "receipts_available": received is not None,
+    }
+    if known_at is not None:
+        facts["known_at"] = known_at.isoformat()
+    first = judgement.first_beyond_index
+    if first is not None:
+        candle = closed[first]
+        facts["breakout_open_time"] = candle.open_time.isoformat()
+        facts["breakout_close_time"] = candle.close_time.isoformat()
+        facts["provenance"] = provenance_of(candle.open_time, formed_at, known_at)
+        arrival = None if received is None else received.get(candle.open_time)
+        if arrival is not None:
+            facts["breakout_received_at"] = arrival.isoformat()
+    return evidence(
+        "BREAKOUT_TIMING",
+        "market time, arrival time and the moment the figure was known, kept apart",
         **facts,
     )
 

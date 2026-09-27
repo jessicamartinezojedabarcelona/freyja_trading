@@ -97,6 +97,18 @@ def test_a_broadening_formation_is_valid_and_goes_the_way_the_price_breaks() -> 
     assert channel["height"] == D(10) and channel["gap_at_end"] == D(37)
 
 
+def test_a_breakout_reports_its_provenance_when_receipts_are_known() -> None:
+    """Same principle as the diamond's `DIAMOND_TIMING` (`detectores-de-expansion.md`, 10.4),
+    generalized to the rest of the family (PATTERN-PROVENANCE-001)."""
+    candles = zigzag([*BROADENING, 88], tail_to=85)
+    received_at = {c.open_time: c.close_time for c in candles}  # no delay: everything arrives live
+    figure = figure_of(history(DETECTOR, candles, received_at=received_at))
+    timing = facts_of(figure, "BREAKOUT_TIMING")
+    assert timing["receipts_available"] is True
+    assert timing["provenance"] == "LIVE"
+    assert "known_at" in timing and "market_formed_at" in timing
+
+
 def test_a_broadening_formation_can_break_upwards_and_the_tradition_says_nothing() -> None:
     up = the_figure(DETECTOR, [*BROADENING, 128, 150], tail_to=152)
     assert up.traditional_bias is PatternBias.CONTEXT_DEPENDENT  # no direction is expected

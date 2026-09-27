@@ -101,6 +101,18 @@ def test_a_bull_flag_is_a_mast_a_parallel_pause_and_a_breakout_upwards() -> None
     assert PatternRole.CONTINUATION in figure.traditional_roles
 
 
+def test_a_breakout_reports_its_provenance_when_receipts_are_known() -> None:
+    """Same principle as the diamond's `DIAMOND_TIMING` (`detectores-de-expansion.md`, 10.4),
+    generalized to the rest of the family (PATTERN-PROVENANCE-001)."""
+    candles = zigzag([*BULL_FLAG, 156])
+    received_at = {c.open_time: c.close_time for c in candles}  # no delay: everything arrives live
+    figure = figure_of(history(BullFlagDetector(), candles, received_at=received_at))
+    timing = facts_of(figure, "BREAKOUT_TIMING")
+    assert timing["receipts_available"] is True
+    assert timing["provenance"] == "LIVE"
+    assert "known_at" in timing and "market_formed_at" in timing
+
+
 def test_a_bear_flag_is_the_same_story_upside_down() -> None:
     figure = the_figure(BearFlagDetector(), mirror([*BULL_FLAG, 156]))
 

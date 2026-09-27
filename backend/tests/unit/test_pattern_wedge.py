@@ -118,6 +118,21 @@ def test_the_bias_of_a_wedge_is_not_its_breakout() -> None:
     assert falling_down.traditional_bias is PatternBias.BULLISH
 
 
+def test_a_breakout_reports_its_provenance_when_receipts_are_known() -> None:
+    """Same principle as the diamond's `DIAMOND_TIMING` (`detectores-de-expansion.md`, 10.4),
+    generalized to the rest of the family (PATTERN-PROVENANCE-001)."""
+    candles = zigzag([*RISING, 112])
+    received_at = {c.open_time: c.close_time for c in candles}  # no delay: everything arrives live
+    figure = figure_of(history(RisingWedgeDetector(), candles, received_at=received_at))
+    timing = facts_of(figure, "BREAKOUT_TIMING")
+    assert timing["receipts_available"] is True
+    assert "known_at" in timing and "market_formed_at" in timing
+    # Whether it lands on LIVE or RETROSPECTIVE here depends on how many candles separate the
+    # last contact from the breakout relative to `k` (`pivots-v1`); either way, with every candle
+    # received the instant it closed, it can never be `AFTER_MARKET_FORMATION`.
+    assert timing["provenance"] in ("LIVE", "RETROSPECTIVE")
+
+
 def test_a_falling_wedge_is_the_same_story_upside_down() -> None:
     figure = the_figure(FallingWedgeDetector(), mirror([*RISING, 112]))
 

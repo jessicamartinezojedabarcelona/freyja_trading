@@ -58,6 +58,7 @@ from freyja_backend.domain.pattern_detection import (
     judge,
     prior_trend_state,
     reference_range,
+    timing_evidence,
 )
 
 _SIX = Decimal("0.000001")
@@ -175,6 +176,9 @@ class MastDetector(ContinuationDetector):
             self._prior_trend(context, closed, start),
             *breakout_evidence(judgement, closed),
         )
+        timing = timing_evidence(context, closed, (start, *channel.window), judgement)
+        if timing is not None:
+            items = (*items, timing)
         return self.candidate(
             context,
             PatternEvaluation(
