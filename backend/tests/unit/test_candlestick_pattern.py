@@ -7,6 +7,7 @@ written out on its own.
 
 import dataclasses
 import re
+import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from itertools import product
@@ -423,18 +424,44 @@ def test_a_different_start_detector_or_parameters_is_another_instance() -> None:
 
 
 def test_derive_candle_pattern_instance_id_is_deterministic() -> None:
-    kwargs: dict[str, Any] = {
-        "pattern_type": CandlePatternType.HAMMER,
-        "instrument_id": "instrument-1",
-        "data_source": "BINANCE",
-        "timeframe": TF,
-        "started_at": T0,
-        "detector_version": "v1",
-        "parameter_version": "p1",
-    }
-    assert derive_candle_pattern_instance_id(**kwargs) == derive_candle_pattern_instance_id(
-        **kwargs
+    """Two independently-typed calls with the same values agree, and the result matches a value
+    computed by hand from the documented formula (namespace + `|`-joined key, section 4 of the
+    model doc) — not just the function agreeing with itself, which a broken implementation
+    (e.g. one that used `uuid4()` or an unseeded `hash()`) could still satisfy by accident."""
+    first = derive_candle_pattern_instance_id(
+        pattern_type=CandlePatternType.HAMMER,
+        instrument_id="instrument-1",
+        data_source="BINANCE",
+        timeframe=Timeframe.M1,
+        started_at=T0,
+        detector_version="v1",
+        parameter_version="p1",
     )
+    second = derive_candle_pattern_instance_id(
+        pattern_type=CandlePatternType.HAMMER,
+        instrument_id="instrument-1",
+        data_source="BINANCE",
+        timeframe=Timeframe.M1,
+        started_at=T0,
+        detector_version="v1",
+        parameter_version="p1",
+    )
+    assert first == second
+
+    namespace = uuid.UUID("8e4a2c60-5f91-4b3d-9a7e-2d6c1f8b0e35")
+    key = "|".join(
+        (
+            CANDLE_PATTERN_MODEL_VERSION,
+            "HAMMER",
+            "instrument-1",
+            "BINANCE",
+            "1m",
+            "2026-01-05T00:00:00Z",
+            "v1",
+            "p1",
+        )
+    )
+    assert first == uuid.uuid5(namespace, key) == uuid.UUID("a6f9154a-b79c-505c-a334-20b9c5a27b18")
 
 
 # -- no signal, no probability ------------------------------------------------------------------
