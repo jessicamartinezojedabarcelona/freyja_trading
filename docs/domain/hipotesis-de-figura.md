@@ -1,12 +1,12 @@
 # Hipótesis de figura: procedencia, operabilidad y evidencia combinada (v1, propuesta)
 
-- **Estado:** en redacción. Contrato `hypothesis-v1`, sobre el catálogo `chart-patterns-v1`
+- **Estado:** vigente. Contrato `hypothesis-v1`, sobre el catálogo `chart-patterns-v1`
   ([figuras-chartistas.md](figuras-chartistas.md)) y el modelo `pattern-instance-v1`
   ([instancia-de-figura.md](instancia-de-figura.md)).
 - **Fecha:** 2026-09-27
-- **Tarea:** POINT3-HYPOTHESIS-001 (6 de 7 del punto 3). Documentación vinculante: **no implementa
-  código**, igual que POINT3-DOMAIN-001 y FIB-DOMAIN-001. El modelo (`PatternHypothesis`,
-  `HypothesisEvaluation`) y el agregador se implementan después, con este documento como referencia.
+- **Tarea:** POINT3-HYPOTHESIS-001 (6 de 7 del punto 3).
+- **Código:** `backend/src/freyja_backend/domain/pattern_hypothesis.py`. Dominio puro, sin E/S.
+  Sus pruebas están en `backend/tests/unit/test_pattern_hypothesis.py`.
 - **Depende de:** [figuras-chartistas.md](figuras-chartistas.md) (roles y sesgo tradicional),
   [instancia-de-figura.md](instancia-de-figura.md) (identidad, ciclo de vida y evidencia de una
   figura), [tendencia-estructural.md](tendencia-estructural.md) y
@@ -278,6 +278,14 @@ la reescribe.
   evaluación registra `hypothesis_direction: UNKNOWN` y el motivo en `evidence`, y no se añade
   ninguna más — mismo principio de finalidad que `instancia-de-figura.md` sección 3.
 
+**Límite conocido de la v1 (al implementar, 2026-09-27):** `pattern_hypothesis.py` solo añade una
+evaluación cuando **la propia instancia de origen** avanza; un cambio en el conjunto de soporte o
+conflicto que ocurre *entre* dos evaluaciones de la fuente se recoge en la evaluación siguiente de
+la fuente, no en el instante exacto en que ocurrió. Sigue sin look-ahead (cada evaluación solo lee
+el pool tal como estaba en su propio instante), simplemente es más gruesa que el límite teórico que
+describe el párrafo anterior. Una versión futura podría re-evaluar también en cada instante en que
+cambia el pool, no solo cuando cambia la fuente.
+
 ## 7. Ejemplos
 
 ### 7.1 Hipótesis operable, sustentada por un diamante verificado
@@ -314,16 +322,24 @@ del canal — por ejemplo, porque la ventana de velas entregada no llegaba tan a
 
 ### 7.3 Hipótesis descriptiva, retrospectiva
 
-Un impulso alcista de Fibonacci, en la misma serie, tiene un cierre por debajo del nivel 0,618 en
-una vela que abrió **antes** de que el impulso quedara confirmado en el mercado (`market_formed_at`,
-sección 4.1): el nivel todavía no existía cuando esa vela abrió. Se usa como figura de
-`conflicting_patterns` de una hipótesis alcista, por su lectura bajista en ese nivel.
+Un `TRIPLE_BOTTOM` en la misma serie rompe al alza, `CONFIRMED_UP`, pero la vela de esa ruptura
+abrió **antes** de que la figura quedara confirmada en el mercado (`market_formed_at`, sección 4.1):
+la figura todavía no existía cuando esa vela abrió — se conoce ya resuelta, por reconstrucción, no en
+directo. Se usa como figura de `conflicting_patterns` de una hipótesis bajista, por su lectura
+alcista.
 
 - Procedencia de esa evidencia para este contrato: **`RETROSPECTIVE`** (la vela abrió antes de
   `market_formed_at`, sección 4). Se anota en la entrada de `conflicting_patterns` con su
   procedencia, para que quien lea la hipótesis sepa que ese conflicto es una descripción a toro
   pasado, no algo que se pudo ver en vivo; si esta fuera la figura de origen en vez de un conflicto,
   la hipótesis resultante sería `RETROSPECTIVE`, nunca `OPERABLE`.
+
+**Nota de alcance (2026-09-27, al implementar):** `supporting_patterns`/`conflicting_patterns`
+admiten otras `PatternInstance` (sección 3.3), nunca una medición de Fibonacci (`FibonacciObservation`,
+un modelo de dominio distinto, sin identidad de figura ni ciclo de vida propio). Combinar Fibonacci
+como evidencia de una hipótesis queda fuera de esta v1; el ejemplo de esta sección usaba antes un
+impulso de Fibonacci por error y se corrigió a una figura chartista para no contradecir la
+sección 3.3.
 
 ## 8. Lo que este documento no decide
 
@@ -332,6 +348,9 @@ sección 4.1): el nivel todavía no existía cuando esa vela abrió. Se usa como
   no las reglas de decisión.
 - Objetivos de precio, entradas, vencimientos ni tamaño (puntos 8, 10, 11 y siguientes).
 - Correlación entre temporalidades o instrumentos distintos (fuera del alcance v1, sección 3.3).
+- Usar Fibonacci (`FibonacciObservation`) como `supporting_patterns`/`conflicting_patterns`: esta
+  v1 solo combina `PatternInstance` (sección 3.3, 7.3); unificar los dos modelos es de una versión
+  futura, si se decide.
 - Hipótesis pre-ruptura (`BIDIRECTIONAL`), aplazadas a una versión futura (sección 2).
 - Cómo se calcula la procedencia dentro de cada detector: eso lo hicieron `PATTERN-PROVENANCE-001`
   (las 19 figuras que no son el diamante) y la corrección propia de Fibonacci (`FIB-CALC-001`,
@@ -341,24 +360,30 @@ sección 4.1): el nivel todavía no existía cuando esa vela abrió. Se usa como
 
 ## 9. Criterios de aceptación de esta tarea
 
-- [ ] `PatternHypothesis`/`HypothesisEvaluation` con identidad estable y evolución de solo-añadir,
-      igual que `PatternInstance` (secciones 2 y 6).
-- [ ] Procedencia de evidencia en cuatro estados, con `UNPROVEN` como valor fail-closed por defecto
-      cuando no se demuestra la definición estricta (sección 4).
-- [ ] `LIVE`/`OPERABLE` de un detector de origen no se aceptan como equivalentes solo por el nombre
+- [x] `PatternHypothesis`/`HypothesisEvaluation` con identidad estable y evolución de solo-añadir,
+      igual que `PatternInstance` (secciones 2 y 6). Implementado en `pattern_hypothesis.py`.
+- [x] Procedencia de evidencia en cuatro estados, con `UNPROVEN` como valor fail-closed por defecto
+      cuando no se demuestra la definición estricta (sección 4). `evidence_provenance()` exige
+      `known_at` presente en la evidencia del detector, no solo el nombre `provenance`.
+- [x] `LIVE`/`OPERABLE` de un detector de origen no se aceptan como equivalentes solo por el nombre
       sin verificar la definición estricta (sección 4.3) — verificado para las 19 figuras y para
       Fibonacci; la misma verificación se repite para cualquier detector nuevo.
-- [ ] Ninguna hipótesis es `OPERABLE` a partir de evidencia `UNPROVEN` de su figura de origen, sola
-      o combinada con evidencia de soporte de mejor procedencia (sección 5).
-- [ ] Instantes necesarios (`market_formed_at`, `known_at`, apertura de la vela juzgada)
-      especificados de forma general, no solo para el diamante (sección 4.1).
-- [ ] Recepciones desordenadas: `known_at` como máximo de llegadas, nunca por orden de calendario
-      (sección 4.2).
-- [ ] Replay estable: una evaluación ya registrada no cambia al añadir datos futuros (sección 6).
-- [ ] Ejemplos de hipótesis operable (diamante) y descriptivas (figura pendiente, Fibonacci)
-      (sección 7).
-- [ ] Ninguna puntuación agregada ni `probability` (sección 1).
-- [ ] Una hipótesis aislada nunca llama a executor ni a broker (sección 1).
+- [x] Ninguna hipótesis es `OPERABLE` a partir de evidencia `UNPROVEN` de su figura de origen, sola
+      o combinada con evidencia de soporte de mejor procedencia (sección 5). Probado explícitamente
+      (`test_an_unproven_source_never_becomes_operable_however_good_its_support`).
+- [x] Instantes necesarios (`market_formed_at`, `known_at`, apertura de la vela juzgada)
+      especificados de forma general, no solo para el diamante (sección 4.1) — reutilizados tal
+      cual los deja `PATTERN-PROVENANCE-001` en la evidencia de cada figura, no recalculados aquí.
+- [x] Recepciones desordenadas: `known_at` como máximo de llegadas, nunca por orden de calendario
+      (sección 4.2) — garantizado por `PATTERN-PROVENANCE-001`/Fibonacci, de donde esta capa lee.
+- [x] Replay estable: una evaluación ya registrada no cambia al añadir datos futuros (sección 6).
+      Probado (`test_replay_is_stable_a_prefix_of_the_series_gives_the_same_early_evaluations`).
+- [x] Ejemplos de hipótesis operable (diamante) y descriptivas (figura con datos incompletos,
+      figura retrospectiva) (sección 7).
+- [x] Ninguna puntuación agregada ni `probability` (sección 1). Probado
+      (`test_a_hypothesis_never_carries_a_probability_or_a_score`).
+- [x] Una hipótesis aislada nunca llama a executor ni a broker (sección 1): el módulo no importa
+      ninguna infraestructura de ejecución.
 
 ## 10. Decisiones técnicas tomadas al redactar
 
@@ -386,3 +411,19 @@ Registradas aquí para que se puedan corregir; ninguna es de producto.
    correlación multi-temporalidad que no se ha pedido todavía.
 9. **Instancias cubiertas por solapamiento no cuentan como evidencia**, generalizando la regla del
    diamante (`held_by_overlap`) a cualquier figura futura que pueda tener el mismo problema.
+10. **La procedencia se lee, no se recalcula.** `pattern_hypothesis.py` no vuelve a computar
+    `known_at`: lee `BREAKOUT_TIMING`/`DIAMOND_TIMING` de la evidencia que `PATTERN-PROVENANCE-001`
+    ya deja en cada `PatternEvaluation`, y solo aplica su propia regla fail-closed (sección 4.3:
+    sin `known_at` en la evidencia, `UNPROVEN`, sin mirar qué dice `provenance`). Evita duplicar la
+    lógica de `known_at_of`/`provenance_of` (`pattern_detection.py`) en una segunda capa.
+11. **Una evaluación es nueva si algo cambia, incluida su propia evidencia** (`_same_content`
+    compara también `evidence`, no solo los campos de más alto nivel): así un origen que pasa de
+    `BREAKOUT_PENDING_CONFIRMATION` a `CONFIRMED_UP` siempre añade una evaluación, aunque la
+    dirección, el tipo y la procedencia leída no cambien, porque `HYPOTHESIS_SOURCE` sí cambia
+    (`source_state`, `breakout_confirmed`).
+12. **Un cierre sin ruptura propia (`INVALIDATED` por `SUPERSEDED`/`GEOMETRY_BROKEN`) hereda el
+    último `hypothesis_kind`/`context_compatible`/`operability` conocidos**, sin recalcularlos: no
+    hay ruptura nueva de la que leerlos, y no se inventan.
+13. **Límite de v1: solo el avance de la fuente dispara una evaluación nueva**, no un cambio del
+    pool por sí solo (sección 6, «Límite conocido»). Documentado, no oculto; revisable en una
+    versión futura.
