@@ -15,10 +15,11 @@
   origen del cálculo estricto de procedencia que aquí se generaliza) y
   [fibonacci-retroceso.md](fibonacci-retroceso.md) sección 3 (comparado y **no** igualado, sección 4
   de este documento).
-- **Relacionado:** `PATTERN-PROVENANCE-001` (Notion, backlog): calcula procedencia en las 18 figuras
-  de reversión y continuación que hoy no la tienen. Este contrato no depende de que esa tarea esté
-  hecha para poder escribirse ni implementarse: define qué ocurre **mientras no lo esté**
-  (sección 4.3).
+- **Relacionado:** `PATTERN-PROVENANCE-001` (Notion) — completada el mismo día (PR #79, #80 y #81):
+  las 19 figuras que no son el diamante, y Fibonacci, ya calculan procedencia con la definición
+  estricta de la sección 4.1. Este contrato no dependía de que esa tarea estuviera hecha para poder
+  escribirse: definía qué ocurría **mientras no lo estaba** (sección 4.3), que ahora queda como
+  registro histórico de lo que se corrigió, no como estado vigente.
 
 ## 1. Qué es y qué no es una hipótesis
 
@@ -199,33 +200,35 @@ llegara el dato tardío. Esto es exactamente lo que ya prueba `detectores-de-exp
 10.4 para el diamante; aquí se exige igual para cualquier figura que aporte evidencia a una
 hipótesis.
 
-### 4.3 Sin procedencia demostrada, `UNPROVEN`: qué cubre hoy
+### 4.3 Sin procedencia demostrada, `UNPROVEN`: qué la produce hoy
 
 `UNPROVEN` no es «no se sabe si es `LIVE`»: es **la ausencia de una demostración** de que la
-etiqueta de procedencia de un detector satisface la definición estricta de la sección 4.1. Cubre,
-a fecha de este documento (2026-09-27), dos situaciones distintas que no deben confundirse entre
-sí ni con las 18 figuras pendientes:
+procedencia satisface la definición estricta de la sección 4.1, para una instancia y un instante
+concretos. **Actualización (2026-09-27, el mismo día):** las dos brechas que motivaron esta sección
+al escribirla ya se cerraron:
 
-1. **El detector de origen no calcula procedencia en absoluto.** Las 18 figuras de reversión y
-   continuación (todo el catálogo salvo el diamante) solo garantizan que cada evaluación fue
-   correcta para su propio instante (`evaluated_at`, `instancia-de-figura.md` sección 7); ninguna
-   calcula `market_formed_at` ni `known_at` para su ruptura todavía. Su evidencia es `UNPROVEN`
-   hasta que `PATTERN-PROVENANCE-001` la incorpore, figura por figura.
-2. **El detector de origen calcula algo con otro nombre que no está verificado contra la
-   definición estricta.** Es el caso de Fibonacci: su `availability` (`OPERABLE` /
-   `RETROSPECTIVE` / `UNPROVEN`, `fibonacci-retroceso.md` sección 3) usa un `known_at` que es «el
-   mayor de **dos** valores» (la confirmación de mercado y la recepción de `B`), sin incluir la
-   recepción de `A` ni la de las velas intermedias que sostienen el impulso (sección 2 del mismo
-   documento). No es la misma prueba que la sección 4.1 exige. **`OPERABLE` de Fibonacci no se
-   trata como `LIVE`**: mientras esa brecha no se cierre, toda evidencia que provenga de Fibonacci
-   entra en una hipótesis como `UNPROVEN`, exactamente igual que una de las 18 figuras pendientes,
-   **aunque Fibonacci devuelva `OPERABLE`**. La corrección de ese `known_at` es una tarea propia,
-   pequeña, sobre código ya fusionado (PR #71), con prioridad propia y **fuera de este documento y
-   de su PR**: no se toca código de Fibonacci aquí.
+1. ~~El detector de origen no calcula procedencia en absoluto.~~ Las 19 figuras del catálogo que no
+   son el diamante ya calculan `market_formed_at` y `known_at` para su ruptura, con la evidencia
+   `BREAKOUT_TIMING` (`PATTERN-PROVENANCE-001`: PR #80, triángulos, rectángulo, cuñas, formación
+   expansiva, banderas y banderines; PR #81, las 8 figuras de reversión).
+2. ~~Fibonacci calcula algo con otro nombre que no está verificado contra la definición
+   estricta.~~ El `known_at` de Fibonacci se corrigió (PR #79, `fibonacci-retroceso.md` sección 3)
+   para depender de toda la vela de `A` a `B`, no solo de `B`; su `OPERABLE` ya satisface la
+   sección 4.1 y se trata como `LIVE`.
 
-Este listado es de estado, no de contrato: en cuanto un detector demuestre (con pruebas, no solo
-con un nombre parecido) que satisface la sección 4.1, su evidencia deja de ser `UNPROVEN` sin que
-este documento cambie de versión.
+Con esto, `UNPROVEN` hoy solo se produce por **falta de datos en un caso concreto**, nunca por
+falta de cálculo:
+
+- El llamador no incluyó, en `closed`/`received_at`, alguna de las velas de las que depende la
+  validez de la figura (el ancla, la que confirma el último pivote, o una intermedia) — probado
+  para Fibonacci (`test_without_the_full_a_to_b_stretch_known_at_cannot_be_proven_even_if_b_was_received`)
+  y para cada detector, con su propio caso equivalente.
+- No se pasó ningún registro de recepción en absoluto (`received_at` ausente): entonces ninguna
+  figura de esa evaluación puede ser `LIVE`, por diseño (fail-closed).
+
+Este listado es de estado, no de contrato: si una figura futura, o una versión nueva de un detector
+existente, todavía no calculara procedencia, su evidencia volvería a ser `UNPROVEN` por esa razón,
+sin que este documento cambiara de versión.
 
 ## 5. Condición para declararse operable
 
@@ -294,32 +297,33 @@ la vela del cierre por debajo abrió en su `known_at` o después. La tendencia p
 - `conflicting_patterns`: vacío (ninguna otra figura, en ese instante, tenía una lectura `UP`).
 - Procedencia de la evidencia de origen: `LIVE` → `operability`: `OPERABLE`.
 
-### 7.2 Hipótesis descriptiva, sustentada por una figura pendiente de retrofit
+### 7.2 Hipótesis descriptiva, por falta de datos concretos (no por falta de cálculo)
 
 Un `ASCENDING_TRIANGLE` en la misma serie rompe por la resistencia horizontal, `CONFIRMED_UP`. El
-detector de triángulos (POINT3-CONTINUATION-001) todavía no calcula `market_formed_at` ni
-`known_at` (pendiente en `PATTERN-PROVENANCE-001`).
+detector sí calcula procedencia (`PATTERN-PROVENANCE-001`), pero para esta instancia concreta el
+`closed`/`received_at` que se le pasó no incluía la recepción de uno de los contactos intermedios
+del canal — por ejemplo, porque la ventana de velas entregada no llegaba tan atrás.
 
 - `hypothesis_kind`: sin rol `EXPANSION`; tendencia previa `UPTREND` coincide con la ruptura `UP` y
   el rol `CONTINUATION` → `CONTINUATION`. `context_compatible`: `true`.
 - `hypothesis_direction`: `UP`.
-- Procedencia de la evidencia de origen: **`UNPROVEN`** (situación 1 de la sección 4.3: el
-  detector no calcula procedencia). → `operability`: `UNPROVEN`. La hipótesis se registra completa,
-  con su dirección y su contexto, pero **no se ofrece como base operable** de nada en tiempo real.
+- Procedencia de la evidencia de origen: **`UNPROVEN`** (falta de datos, sección 4.3: falta la
+  recepción de una vela de la que depende la validez del canal, no una limitación del detector). →
+  `operability`: `UNPROVEN`. La hipótesis se registra completa, con su dirección y su contexto,
+  pero **no se ofrece como base operable** de nada en tiempo real.
 
-### 7.3 Hipótesis descriptiva, sustentada por Fibonacci
+### 7.3 Hipótesis descriptiva, retrospectiva
 
-Un impulso alcista de Fibonacci, en la misma serie, tiene un cierre por debajo del nivel 0,618 que
-su propio cálculo etiqueta `availability: OPERABLE` (`fibonacci-retroceso.md` sección 3). Se usa
-como figura de `conflicting_patterns` de una hipótesis alcista, por su lectura bajista en ese
-nivel.
+Un impulso alcista de Fibonacci, en la misma serie, tiene un cierre por debajo del nivel 0,618 en
+una vela que abrió **antes** de que el impulso quedara confirmado en el mercado (`market_formed_at`,
+sección 4.1): el nivel todavía no existía cuando esa vela abrió. Se usa como figura de
+`conflicting_patterns` de una hipótesis alcista, por su lectura bajista en ese nivel.
 
-- Procedencia de esa evidencia para este contrato: **`UNPROVEN`** (situación 2 de la sección 4.3:
-  Fibonacci calcula algo con ese nombre, pero su `known_at` no satisface todavía la definición
-  estricta de la sección 4.1). Se anota en la entrada de `conflicting_patterns` junto con el dato
-  de que la herramienta de origen la marcó `OPERABLE`, para que quede constancia de la discrepancia,
-  pero **no se trata como `LIVE`** y, si esta fuera la figura de origen en vez de un conflicto, la
-  hipótesis resultante sería `UNPROVEN`, nunca `OPERABLE`, solo por esa etiqueta.
+- Procedencia de esa evidencia para este contrato: **`RETROSPECTIVE`** (la vela abrió antes de
+  `market_formed_at`, sección 4). Se anota en la entrada de `conflicting_patterns` con su
+  procedencia, para que quien lea la hipótesis sepa que ese conflicto es una descripción a toro
+  pasado, no algo que se pudo ver en vivo; si esta fuera la figura de origen en vez de un conflicto,
+  la hipótesis resultante sería `RETROSPECTIVE`, nunca `OPERABLE`.
 
 ## 8. Lo que este documento no decide
 
@@ -329,9 +333,9 @@ nivel.
 - Objetivos de precio, entradas, vencimientos ni tamaño (puntos 8, 10, 11 y siguientes).
 - Correlación entre temporalidades o instrumentos distintos (fuera del alcance v1, sección 3.3).
 - Hipótesis pre-ruptura (`BIDIRECTIONAL`), aplazadas a una versión futura (sección 2).
-- Cómo se calcula la procedencia dentro de cada detector: eso es `PATTERN-PROVENANCE-001` (las 18
-  figuras) y la corrección propia de Fibonacci (`FIB-CALC-001`), ninguna de las dos parte de este
-  documento ni de su PR.
+- Cómo se calcula la procedencia dentro de cada detector: eso lo hicieron `PATTERN-PROVENANCE-001`
+  (las 19 figuras que no son el diamante) y la corrección propia de Fibonacci (`FIB-CALC-001`,
+  PR #79) — ninguna de las dos fue parte de este documento ni de su PR, aunque ya estén hechas.
 - Persistencia (tabla, migración, retención) ni exposición (API, pantalla): mismo alcance que
   `instancia-de-figura.md`, sección 1.
 
@@ -341,8 +345,9 @@ nivel.
       igual que `PatternInstance` (secciones 2 y 6).
 - [ ] Procedencia de evidencia en cuatro estados, con `UNPROVEN` como valor fail-closed por defecto
       cuando no se demuestra la definición estricta (sección 4).
-- [ ] `LIVE` y `OPERABLE` (Fibonacci) **no se presentan como equivalentes**; la evidencia de
-      Fibonacci es `UNPROVEN` hasta que se corrija su `known_at` (sección 4.3).
+- [ ] `LIVE`/`OPERABLE` de un detector de origen no se aceptan como equivalentes solo por el nombre
+      sin verificar la definición estricta (sección 4.3) — verificado para las 19 figuras y para
+      Fibonacci; la misma verificación se repite para cualquier detector nuevo.
 - [ ] Ninguna hipótesis es `OPERABLE` a partir de evidencia `UNPROVEN` de su figura de origen, sola
       o combinada con evidencia de soporte de mejor procedencia (sección 5).
 - [ ] Instantes necesarios (`market_formed_at`, `known_at`, apertura de la vela juzgada)
@@ -373,9 +378,10 @@ Registradas aquí para que se puedan corregir; ninguna es de producto.
 6. **Procedencia en cuatro estados**, no tres: `UNPROVEN` se añade porque esta capa combina
    detectores que hoy no ofrecen la garantía que el diamante sí ofrece, y hacía falta un valor para
    «no se puede demostrar», distinto de «se demostró que fue retrospectivo».
-7. **`OPERABLE` de Fibonacci se trata como `UNPROVEN`, no como `LIVE`**, hasta que su `known_at` se
-   corrija para incluir la recepción de `A` y de las velas intermedias del impulso (comparación
-   hecha el 2026-09-27, registrada en `PATTERN-PROVENANCE-001`).
+7. **`OPERABLE` de Fibonacci se trató como `UNPROVEN`, no como `LIVE`**, hasta que su `known_at` se
+   corrigiera para incluir la recepción de `A` y de las velas intermedias del impulso (comparación
+   hecha el 2026-09-27, registrada en `PATTERN-PROVENANCE-001`). **Resuelto el mismo día (PR #79):**
+   ya se trata como `LIVE` (sección 4.3).
 8. **Alcance v1 limitado a una sola serie** para soporte y conflicto: evita inventar una regla de
    correlación multi-temporalidad que no se ha pedido todavía.
 9. **Instancias cubiertas por solapamiento no cuentan como evidencia**, generalizando la regla del
