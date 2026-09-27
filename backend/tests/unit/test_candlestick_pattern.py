@@ -423,18 +423,18 @@ def test_a_different_start_detector_or_parameters_is_another_instance() -> None:
 
 
 def test_derive_candle_pattern_instance_id_is_deterministic() -> None:
-    kwargs = {
-        "pattern_type": CandlePatternType.HAMMER,
-        "instrument_id": "instrument-1",
-        "data_source": "BINANCE",
-        "timeframe": TF,
-        "started_at": T0,
-        "detector_version": "v1",
-        "parameter_version": "p1",
-    }
-    assert derive_candle_pattern_instance_id(**kwargs) == derive_candle_pattern_instance_id(
-        **kwargs
-    )
+    def build() -> Any:
+        return derive_candle_pattern_instance_id(
+            pattern_type=CandlePatternType.HAMMER,
+            instrument_id="instrument-1",
+            data_source="BINANCE",
+            timeframe=TF,
+            started_at=T0,
+            detector_version="v1",
+            parameter_version="p1",
+        )
+
+    assert build() == build()
 
 
 # -- no signal, no probability ------------------------------------------------------------------
