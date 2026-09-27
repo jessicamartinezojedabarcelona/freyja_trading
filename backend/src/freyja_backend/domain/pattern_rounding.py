@@ -43,6 +43,7 @@ from freyja_backend.domain.chart_pattern import (
 from freyja_backend.domain.market_data import Candle
 from freyja_backend.domain.market_structure import Pivot
 from freyja_backend.domain.pattern_detection import (
+    Anchor,
     DetectionContext,
     Judgement,
     PatternCandidate,
@@ -54,6 +55,7 @@ from freyja_backend.domain.pattern_detection import (
     judge,
     prior_trend_evidence,
     reference_range,
+    timing_evidence,
 )
 
 _SIX = Decimal("0.000001")
@@ -294,6 +296,12 @@ class _RoundingDetector(PatternDetector):
             prior_trend_evidence(context, closed, side, left),
             *breakout_evidence(judgement, closed),
         )
+        pivots_so_far: tuple[Anchor, ...] = (
+            (left, apex) if right_index is None else (left, apex, right)
+        )
+        timing = timing_evidence(context, closed, pivots_so_far, judgement)
+        if timing is not None:
+            items = (*items, timing)
         return self.candidate(
             context,
             PatternEvaluation(

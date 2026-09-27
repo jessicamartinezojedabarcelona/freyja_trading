@@ -9,7 +9,8 @@ checked at every instant, on the figures and on seeded random walks.
 import ast
 import dataclasses
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -89,7 +90,12 @@ def mirror(extremes: Sequence[int | str]) -> list[int | str]:
     return [str(Decimal(300) - Decimal(str(e))) for e in extremes]
 
 
-def context_for(candles: Sequence[Candle], **params: Any) -> DetectionContext:
+def context_for(
+    candles: Sequence[Candle],
+    *,
+    received_at: Mapping[datetime, datetime] | None = None,
+    **params: Any,
+) -> DetectionContext:
     return DetectionContext(
         instrument_id="instrument-1",
         instrument=BTC,
@@ -99,6 +105,7 @@ def context_for(candles: Sequence[Candle], **params: Any) -> DetectionContext:
         timeframe=TF,
         observed_at=candles[-1].close_time,
         params=ReversalParams(**params) if params else DEFAULT_REVERSAL_PARAMS,
+        received_at=received_at,
     )
 
 
@@ -109,10 +116,14 @@ HEAD_AND_SHOULDERS = [*UP, 118, 140, 119, 131, 105]
 
 
 def instances_of(
-    detector: PatternDetector, extremes: Sequence[int | str], **series: Any
+    detector: PatternDetector,
+    extremes: Sequence[int | str],
+    *,
+    received_at: Mapping[datetime, datetime] | None = None,
+    **series: Any,
 ) -> tuple[PatternInstance, ...]:
     candles = zigzag(extremes, **series)
-    return replay_detector(detector, context_for(candles), candles)
+    return replay_detector(detector, context_for(candles, received_at=received_at), candles)
 
 
 def the_one(
@@ -164,6 +175,45 @@ def test_a_double_top_is_seen_forming_then_valid_then_broken_out_of() -> None:
     assert breakout is not None and breakout.confirmed
     assert breakout.direction is BreakoutDirection.DOWN and breakout.close_price < trough.price
     assert breakout.candle_close_time <= figure.last_evaluated_at
+
+
+def test_a_breakout_reports_its_provenance_when_receipts_are_known() -> None:
+    """Same principle as the diamond's `DIAMOND_TIMING` (`detectores-de-expansion.md`, 10.4),
+    generalized to the reversal family (PATTERN-PROVENANCE-001)."""
+    candles = zigzag(DOUBLE_TOP, tail_to=104)
+    received_at = {c.open_time: c.close_time for c in candles}  # no delay: everything arrives live
+    figure = the_one(
+        instances_of(DoubleTopDetector(), DOUBLE_TOP, tail_to=104, received_at=received_at),
+        compatible=True,
+    )
+    timing = facts_of(figure, "BREAKOUT_TIMING")
+    assert timing["receipts_available"] is True
+    assert "known_at" in timing and "market_formed_at" in timing
+    # Never `AFTER_MARKET_FORMATION` with every candle received the instant it closed (section 3
+    # of `fibonacci-retroceso.md` proves the same for the tool's own `known_at`).
+    assert timing["provenance"] in ("LIVE", "RETROSPECTIVE")
+
+
+def test_a_late_receipt_of_an_early_contact_still_delays_known_at() -> None:
+    """`known_at` is the latest arrival among every candle the figure depends on, not only the
+    breakout's own (same property already proven for the diamond, for Fibonacci and for the
+    channel/mast family)."""
+    candles = zigzag(DOUBLE_TOP, tail_to=104)
+    received_at = {c.open_time: c.close_time for c in candles}
+    baseline = the_one(
+        instances_of(DoubleTopDetector(), DOUBLE_TOP, tail_to=104, received_at=received_at),
+        compatible=True,
+    )
+    first_extreme_time = baseline.latest.anchors[0].open_time
+    late_arrival = candles[-1].close_time + TF.duration * 10
+    received_at[first_extreme_time] = late_arrival
+    figure = the_one(
+        instances_of(DoubleTopDetector(), DOUBLE_TOP, tail_to=104, received_at=received_at),
+        compatible=True,
+    )
+    timing = facts_of(figure, "BREAKOUT_TIMING")
+    assert timing["known_at"] == late_arrival.isoformat()
+    assert timing["provenance"] != "LIVE"  # the breakout opened long before that late arrival
 
 
 def test_a_return_to_the_neckline_after_the_breakout_is_recorded_as_a_retest() -> None:
@@ -544,6 +594,19 @@ def test_a_triple_top_needs_all_three_extremes_to_agree() -> None:
     levels = facts_of(figure, "EXTREME_LEVELS")
     assert levels["largest_peak_gap"] <= levels["height"] * Decimal("0.15")
     assert levels["trough_gap"] <= levels["height"] * Decimal("0.15")
+
+
+def test_a_triple_top_breakout_reports_its_provenance_when_receipts_are_known() -> None:
+    candles = zigzag(TRIPLE_TOP, tail_to=99)
+    received_at = {c.open_time: c.close_time for c in candles}
+    figure = the_one(
+        instances_of(TripleTopDetector(), TRIPLE_TOP, tail_to=99, received_at=received_at),
+        compatible=True,
+    )
+    timing = facts_of(figure, "BREAKOUT_TIMING")
+    assert timing["receipts_available"] is True
+    assert "known_at" in timing and "market_formed_at" in timing
+    assert timing["provenance"] in ("LIVE", "RETROSPECTIVE")
 
 
 def test_a_triple_bottom_is_the_same_story_upside_down() -> None:

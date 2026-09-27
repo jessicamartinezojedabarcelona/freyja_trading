@@ -200,6 +200,20 @@ def test_a_rounding_top_forms_becomes_valid_and_is_broken_out_of() -> None:
     assert figure.detector_version == "rounding-top-detector-v1"
 
 
+def test_a_breakout_reports_its_provenance_when_receipts_are_known() -> None:
+    """Same principle as the diamond's `DIAMOND_TIMING` (`detectores-de-expansion.md`, 10.4),
+    generalized to the reversal family (PATTERN-PROVENANCE-001). The right end is a closed candle,
+    not a pivot (`AnchorPivot`), so this also proves `timing_evidence` accepts both kinds of
+    anchor."""
+    candles = curve()
+    received_at = {c.open_time: c.close_time for c in candles}
+    figure = the_one(run(RoundingTopDetector(), candles, received_at=received_at), compatible=True)
+    timing = facts_of(figure, "BREAKOUT_TIMING")
+    assert timing["receipts_available"] is True
+    assert "known_at" in timing and "market_formed_at" in timing
+    assert timing["provenance"] in ("LIVE", "RETROSPECTIVE")
+
+
 def test_the_right_end_is_a_closed_candle_known_when_it_closes_and_not_before() -> None:
     candles = curve()
     figure = the_one(run(RoundingTopDetector(), candles), compatible=True)
