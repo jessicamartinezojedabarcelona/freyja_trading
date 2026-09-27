@@ -81,8 +81,18 @@ herramienta conserva **los dos**, siempre:
 | Tiempo | Qué es | De quién es |
 | ------ | ------ | ----------- |
 | `pivot_confirmed_market_time` | el cierre de la `k`-ésima vela posterior a `B`: cuándo se confirma el pivote **en el mercado** | del par de pivotes (el de `A` es anterior) |
-| `pivot_received_at` | el instante en que Freyja **recibió realmente** esa vela terminada | de los datos (cada vela guardada tiene su `received_at`) |
-| `known_at` | el **mayor** de los dos: desde aquí el Fibonacci existe **para Freyja** | de la observación; **sin conocer** si no se conoce la recepción |
+| `pivot_received_at` | el instante en que Freyja **recibió realmente** la vela que confirma `B` | de los datos (cada vela guardada tiene su `received_at`); informativo, no basta por sí solo para `known_at` (corrección de abajo) |
+| `known_at` | el **mayor** de `pivot_confirmed_market_time` y de las llegadas de **todas** las velas de las que depende que el impulso sea válido: la que confirma `A`, la que confirma `B`, y cada vela entre la de `A` y la de `B`, ambas incluidas, cuyos extremos no se pueden superar (sección 2) | de la observación; **sin conocer**, o si falta cualquiera de esas velas o su recepción, `known_at` no existe |
+
+**Corrección (2026-09-27, `PATTERN-PROVENANCE-001`):** la versión original de `known_at` (PR #71)
+solo miraba la confirmación y la recepción de `B`, sin la recepción de `A` ni de las velas
+intermedias. Con recepciones desordenadas eso podía declarar `OPERABLE` antes de que Freyja
+tuviera realmente todos los datos que hacían válido el impulso — la misma clase de fallo que
+`detectores-de-expansion.md` (sección 10.4) corrigió para el diamante. `known_at` ahora exige la
+recepción de **toda** la vela de las que depende la validez del impulso, con la misma regla del
+diamante: el máximo de las llegadas, nunca el orden del calendario. Si el llamador no incluye en
+`closed`/`received_at` la vela que confirma `A` o alguna de las intermedias, `known_at` no puede
+probarse y queda `None` (`UNPROVEN`), aunque la de `B` sí se conozca.
 
 **Reglas, que son parte del contrato:**
 
@@ -99,7 +109,7 @@ herramienta conserva **los dos**, siempre:
    | ------ | ------ |
    | `OPERABLE` | su vela abrió en `known_at` o después: el **nivel ya era conocido desde la apertura de esa vela** |
    | `RETROSPECTIVE` | su vela abrió antes de `known_at` (o antes de la confirmación de mercado): un hecho sobre el pasado, útil para estudiar y **nunca historia operable** |
-   | `UNPROVEN` | su vela abrió tras la confirmación de mercado, pero **no se conoce la recepción** de la vela que la confirmó: no se afirma ni se niega |
+   | `UNPROVEN` | su vela abrió tras la confirmación de mercado, pero **no se conoce la recepción** de alguna de las velas de las que depende el impulso (la de `A`, la de `B` o una intermedia): no se afirma ni se niega |
 
 3. **Qué recepción es la buena: la de la versión que cuenta** (confirmado por Jessica, 2026-09-26: la
    «vela definitiva» es la **primera versión cerrada recibida**). `pivot_received_at` es el instante en
@@ -112,16 +122,25 @@ herramienta conserva **los dos**, siempre:
    misma lectura, «tal como era»**; una vela revisada después (`REVISED`) no cambia el impulso calculado
    con la versión que contó, y su señalamiento lo hace la capa de datos (`MARKET-DATA-REVISIONS-001`,
    pendiente), no esta herramienta.
-4. **Sin registro de recepción, nada posterior a la confirmación se da por operable** (`UNPROVEN`,
-   fail-closed). En particular, las velas **rellenadas a posteriori** traen como `received_at` la hora del
-   relleno, no la de su llegada en vivo: no sirven para probar cuándo se supo algo. Una prueba histórica
-   que necesite operabilidad exige recepciones reales o una hipótesis de latencia declarada aparte
-   (fuera de esta herramienta: es de la prueba de la estrategia).
-5. **Datos recibidos con retraso.** Una vela que ya cerró pero que Freyja aún no había recibido en
+4. **Sin registro de recepción de cualquiera de las velas de las que depende el impulso, nada
+   posterior a la confirmación se da por operable** (`UNPROVEN`, fail-closed): no basta con la
+   recepción de `B`. En particular, las velas **rellenadas a posteriori** traen como `received_at`
+   la hora del relleno, no la de su llegada en vivo: no sirven para probar cuándo se supo algo. Una
+   prueba histórica que necesite operabilidad exige recepciones reales o una hipótesis de latencia
+   declarada aparte (fuera de esta herramienta: es de la prueba de la estrategia). Si quien llama
+   no incluye en `closed`/`received_at` toda la vela de `A` a la de `B`, `known_at` tampoco puede
+   probarse, aunque `B` sí se conozca
+   (`test_without_the_full_a_to_b_stretch_known_at_cannot_be_proven_even_if_b_was_received`).
+5. **Recepciones desordenadas.** `known_at` es un máximo de llegadas, nunca un orden de calendario:
+   si una vela intermedia —ni la de `A`, ni su confirmadora, ni la de `B`— llega después que velas
+   que abren mucho más tarde que ella, `known_at` sube hasta esa llegada tardía, igual que si hubiera
+   sido la propia `B` la que llegó tarde. Se prueba explícitamente
+   (`test_a_stretch_candle_received_out_of_order_also_delays_known_at`).
+6. **Datos recibidos con retraso.** Una vela que ya cerró pero que Freyja aún no había recibido en
    `observed_at` **no se lee**. Pedir una observación antes de `known_at` es una petición equivocada. Una
    vela terminada no puede recibirse antes de cerrar (dato incoherente: se rechaza). Una vela sin
    recepción en el registro que se pasa **no se lee**.
-6. **Consecuencias de la confirmación de mercado**, que valen aunque no se conozca la recepción: un toque
+7. **Consecuencias de la confirmación de mercado**, que valen aunque no se conozca la recepción: un toque
    ocurrido en una vela anterior a ella, incluida la vela cuyo cierre confirma `B`, **no es un toque de un
    Fibonacci conocido**: el nivel se calculó después. **No se pierde ni se disfraza**: se registra como
    observación retrospectiva. Y si el precio ya retrocedió más allá de un nivel cuando el Fibonacci se

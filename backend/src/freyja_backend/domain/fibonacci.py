@@ -266,8 +266,9 @@ class Availability(enum.StrEnum):
     # of that candle. It says nothing more: not that an executable entry existed, nor at what
     # price, nor that it was a signal (that is for each StrategySpec to decide).
     OPERABLE = "OPERABLE"
-    # Its candle opened after the market-time confirmation, but the receipt of the confirming
-    # candle is not known, so it cannot be claimed that Freyja knew: fail-closed.
+    # Its candle opened after the market-time confirmation, but the receipt of at least one candle
+    # the impulse depends on (A's or B's confirming candle, or one between them) is not known, so
+    # it cannot be claimed that Freyja knew: fail-closed.
     UNPROVEN = "UNPROVEN"
 
 
@@ -315,6 +316,49 @@ class FibonacciObservation:
     nearest_level_distance: Decimal | None
 
 
+def _known_at(
+    impulse: Impulse,
+    closed: Sequence[Candle],
+    index: Mapping[datetime, int],
+    received_at: Mapping[datetime, datetime] | None,
+    market: datetime,
+) -> datetime | None:
+    """The instant the impulse was really known: the latest arrival among every candle its
+    validity depends on (A's own confirming candle, B's, and every candle from A's to B's, both
+    included, whose extremes `check_impulse` requires to hold) — never only B's, so that a late or
+    out-of-order arrival of any of them is not missed. Same principle as the diamond's `known_at`
+    (`docs/domain/detectores-de-expansion.md`, section 10.4). `None` if it cannot be proven: any of
+    those candles missing from `closed`, or without a receipt in `received_at` (fail-closed)."""
+    if received_at is None:
+        return None
+    if impulse.start.open_time not in index or impulse.end.open_time not in index:
+        return None
+
+    def confirming_candle(confirmed_at: datetime | None) -> Candle | None:
+        return next((c for c in closed if c.close_time == confirmed_at), None)
+
+    start_confirming = confirming_candle(impulse.start.confirmed_at)
+    end_confirming = confirming_candle(impulse.end.confirmed_at)
+    if start_confirming is None or end_confirming is None:
+        return None
+
+    first, last = index[impulse.start.open_time], index[impulse.end.open_time]
+    dependencies = [*closed[first : last + 1], start_confirming, end_confirming]
+    if not all(c.open_time in received_at for c in dependencies):
+        return None
+
+    arrivals = []
+    for candle_ in dependencies:
+        arrival = received_at[candle_.open_time]
+        _require_utc(arrival, "received_at")
+        if arrival < candle_.close_time:
+            raise InvalidFibonacciRequestError(
+                "a finished candle cannot be received before it closes"
+            )
+        arrivals.append(arrival)
+    return max(market, *arrivals)
+
+
 def observe(
     impulse: Impulse,
     closed: Sequence[Candle],
@@ -330,18 +374,29 @@ def observe(
     a finished candle: the version whose values are in `closed` (the first closed version
     received, the one that counts for decisions), never a provisional one or a later revision.
     Without it, only the market time is known and nothing after the confirmation can be proven
-    operable (`UNPROVEN`); with it, the Fibonacci is known from the later of the confirmation and
-    the receipt of the confirming candle, and a candle that opened before that is `RETROSPECTIVE`
-    even if it opened after the market-time confirmation. A candle missing from a given
-    `received_at` is not read: without a receipt it cannot be said to have been received.
-    Asking before the Fibonacci is known is a wrong request. Candles that close (or arrive) later
-    are ignored, so the answer at an instant never depends on the future."""
+    operable (`UNPROVEN`); with it, the Fibonacci is known (`known_at`) from the latest of: the
+    market-time confirmation, and the receipt of **every** candle the impulse's validity depends
+    on — A's and B's own confirming candles, and every candle from A's to B's, both included,
+    whose extremes had to hold for the pair to be an impulse at all (`check_impulse`). Missing any
+    of them from `closed`, or from `received_at`, is the same as not knowing it: `known_at` stays
+    unproven, fail-closed, exactly like a missing receipt of B alone used to be treated (corrected
+    2026-09-27: the old rule only looked at B's confirming candle, which is not enough to prove
+    `known_at` with out-of-order or late arrivals of A's data or of the candles between the two).
+    A candle that opened before that is `RETROSPECTIVE` even if it opened after the market-time
+    confirmation. A candle missing from a given `received_at` is not read: without a receipt it
+    cannot be said to have been received. Asking before the Fibonacci is known is a wrong request.
+    Candles that close (or arrive) later are ignored, so the answer at an instant never depends on
+    the future."""
     _require_utc(observed_at, "observed_at")
     market = impulse.pivot_confirmed_market_time
     if observed_at < market:
         raise InvalidFibonacciRequestError("the Fibonacci is not known yet at observed_at")
 
-    # The candle that confirmed B is the one that closes at that instant.
+    index = {candle.open_time: position for position, candle in enumerate(closed)}
+
+    # The candle that confirmed B is the one that closes at that instant. `pivot_received_at` is
+    # reported on its own (section 3 of the contract) even when it is not enough, by itself, to
+    # prove `known_at` (see `_known_at` below).
     pivot_received: datetime | None = None
     confirming = next((c for c in closed if c.close_time == market), None)
     if received_at is not None and confirming is not None and confirming.open_time in received_at:
@@ -351,7 +406,7 @@ def observe(
             raise InvalidFibonacciRequestError(
                 "a finished candle cannot be received before it closes"
             )
-    known_at = None if pivot_received is None else max(market, pivot_received)
+    known_at = _known_at(impulse, closed, index, received_at, market)
     if known_at is not None and observed_at < known_at:
         raise InvalidFibonacciRequestError("the Fibonacci is not known yet at observed_at")
 
