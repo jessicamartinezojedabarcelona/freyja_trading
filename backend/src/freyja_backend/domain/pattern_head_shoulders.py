@@ -45,6 +45,7 @@ from freyja_backend.domain.pattern_detection import (
     line_through,
     prior_trend_evidence,
     reference_range,
+    timing_evidence,
 )
 
 
@@ -181,6 +182,9 @@ class _HeadAndShouldersDetector(PatternDetector):
             prior_trend_evidence(context, closed, side, left),
             *breakout_evidence(judgement, closed),
         )
+        timing = timing_evidence(context, closed, window, judgement)
+        if timing is not None:
+            items = (*items, timing)
         return self.candidate(
             context,
             PatternEvaluation(

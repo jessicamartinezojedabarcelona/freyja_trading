@@ -840,6 +840,10 @@ def _volume_evidence(judgement: Judgement, closed: Sequence[Candle]) -> PatternE
 # imports these names back (it needs `published_at` too, for windows an overlapping diamond held
 # back, which no other figure has).
 
+# A point a figure rests on: a `Pivot`, or the rounding figures' right end (`AnchorPivot`), which
+# is a closed candle, not a pivot, confirmed by its own close (`instancia-de-figura.md`, section 7).
+Anchor = Pivot | AnchorPivot
+
 LIVE = "LIVE"
 AFTER_MARKET_FORMATION = "AFTER_MARKET_FORMATION"
 RETROSPECTIVE = "RETROSPECTIVE"
@@ -878,7 +882,7 @@ def seen_at(candle: Candle, received: Mapping[datetime, datetime] | None) -> dat
 def known_at_of(
     closed: Sequence[Candle],
     received: Mapping[datetime, datetime] | None,
-    window: Sequence[Pivot],
+    window: Sequence[Anchor],
     formed_at: datetime,
 ) -> datetime | None:
     """The last arrival among the candles a figure's validity depends on: from the one of its
@@ -901,7 +905,7 @@ def known_at_of(
 def timing_evidence(
     context: DetectionContext,
     closed: Sequence[Candle],
-    window: Sequence[Pivot],
+    window: Sequence[Anchor],
     judgement: Judgement,
 ) -> PatternEvidence | None:
     """Market time, arrival time and the moment the figure was known, kept apart, with a

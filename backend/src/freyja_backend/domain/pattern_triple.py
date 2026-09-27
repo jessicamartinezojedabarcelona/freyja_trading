@@ -40,6 +40,7 @@ from freyja_backend.domain.pattern_detection import (
     judge,
     prior_trend_evidence,
     reference_range,
+    timing_evidence,
 )
 
 
@@ -168,6 +169,9 @@ class _TripleDetector(PatternDetector):
             prior_trend_evidence(context, closed, side, first),
             *breakout_evidence(judgement, closed),
         )
+        timing = timing_evidence(context, closed, window, judgement)
+        if timing is not None:
+            items = (*items, timing)
         return self.candidate(
             context,
             PatternEvaluation(

@@ -93,6 +93,13 @@ de figuras, también los de continuación): además de `BREAKOUT_SCAN`, un detec
 - `BREAKOUT_VOLUME`: el volumen de la primera vela que cierra más allá, la media de las velas que la
   figura tardó en formarse y su cociente. Solo informativo: el volumen no es comparable entre
   fuentes y no es requisito de ninguna confirmación.
+- `BREAKOUT_TIMING` (añadido 2026-09-27, `PATTERN-PROVENANCE-001`): `market_formed_at`,
+  `receipts_available`, `known_at` (si hay recepciones para toda la ventana de anclas) y, con
+  ruptura, `provenance` (`LIVE`/`AFTER_MARKET_FORMATION`/`RETROSPECTIVE`, sección 10.4 de
+  `detectores-de-expansion.md`) y `breakout_received_at` (si se conoce). Mismo principio que
+  `DIAMOND_TIMING`, sin las particularidades de solapamiento/ápice del diamante. En los techos y
+  suelos redondeados, el extremo derecho es una vela cerrada, no un pivote, y su propio cierre
+  cuenta como su confirmación, igual que en el resto de este documento (sección 8).
 
 ## 4. Instancias entre instantes
 

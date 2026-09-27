@@ -152,6 +152,23 @@ def test_a_head_and_shoulders_top_forms_becomes_valid_and_is_broken_out_of() -> 
     assert figure.detector_version == "head-and-shoulders-top-detector-v1"
 
 
+def test_a_breakout_reports_its_provenance_when_receipts_are_known() -> None:
+    """Same principle as the diamond's `DIAMOND_TIMING` (`detectores-de-expansion.md`, 10.4),
+    generalized to the reversal family (PATTERN-PROVENANCE-001)."""
+    candles = zigzag(FLAT_NECKLINE, tail_to=104)
+    received_at = {c.open_time: c.close_time for c in candles}
+    figure = the_one(
+        instances_of(
+            HeadAndShouldersTopDetector(), FLAT_NECKLINE, tail_to=104, received_at=received_at
+        ),
+        compatible=True,
+    )
+    timing = facts_of(figure, "BREAKOUT_TIMING")
+    assert timing["receipts_available"] is True
+    assert "known_at" in timing and "market_formed_at" in timing
+    assert timing["provenance"] in ("LIVE", "RETROSPECTIVE")
+
+
 def test_the_result_explains_the_head_the_shoulders_and_the_height() -> None:
     figure = the_one(
         instances_of(HeadAndShouldersTopDetector(), FLAT_NECKLINE, tail_to=104), compatible=True
