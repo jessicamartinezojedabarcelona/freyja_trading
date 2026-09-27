@@ -707,7 +707,15 @@ def test_a_detector_result_holds_no_signal_no_decision_and_no_probability() -> N
 
 
 def test_the_detectors_only_read_the_domain_never_a_candlestick_pattern_or_an_indicator() -> None:
-    allowed = {"abc", "collections.abc", "dataclasses", "datetime", "decimal", "typing"}
+    allowed = {
+        "abc",
+        "collections.abc",
+        "dataclasses",
+        "datetime",
+        "decimal",
+        "itertools",
+        "typing",
+    }
     tree = ast.parse(Path(str(pattern_channel.__file__)).read_text(encoding="utf-8"))
     imported = {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module} | {
         a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names

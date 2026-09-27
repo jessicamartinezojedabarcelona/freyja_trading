@@ -26,6 +26,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
+from itertools import pairwise
 
 from freyja_backend.domain.chart_pattern import (
     Boundary,
@@ -90,6 +91,16 @@ def rising(rise: Decimal, height: Decimal, params: ContinuationParams) -> bool:
 
 def falling(rise: Decimal, height: Decimal, params: ContinuationParams) -> bool:
     return rise <= -params.slope_min * height
+
+
+def strictly_higher(contacts: Sequence[Pivot]) -> bool:
+    """Every contact higher than the one before (equal is not higher)."""
+    return all(before.price < after.price for before, after in pairwise(contacts))
+
+
+def strictly_lower(contacts: Sequence[Pivot]) -> bool:
+    """Every contact lower than the one before (equal is not lower)."""
+    return all(before.price > after.price for before, after in pairwise(contacts))
 
 
 def fit_channel(
