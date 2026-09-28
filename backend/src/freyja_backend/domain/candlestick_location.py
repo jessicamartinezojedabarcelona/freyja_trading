@@ -129,7 +129,7 @@ class LocationContext:
 _OPERABILITY_RANK = {Operability.UNPROVEN: 0, Operability.RETROSPECTIVE: 1, Operability.OPERABLE: 2}
 
 
-def _worst_operability(items: Sequence[Operability]) -> Operability:
+def worst_operability(items: Sequence[Operability]) -> Operability:
     return min(items, key=lambda op: _OPERABILITY_RANK[op], default=Operability.OPERABLE)
 
 
@@ -195,7 +195,7 @@ class LocationEvaluation:
                 for item in self.evidence
                 if item.code == "LEVEL"
             )
-            if self.operability is not _worst_operability(cited):
+            if self.operability is not worst_operability(cited):
                 raise InvalidDetectionRequestError(
                     "operability must be the worst tier among the LEVEL evidence actually cited "
                     "— never optimistic about what the evidence itself proves"
@@ -448,7 +448,7 @@ def _build_evaluation(
 
     if near:
         items = tuple(_nearby_evidence(c, f) for c, f in near)
-        operability = _worst_operability([c.operability for c, _f in near])
+        operability = worst_operability([c.operability for c, _f in near])
         return LocationEvaluation(
             evaluated_at,
             capped_as_of,
