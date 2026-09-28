@@ -127,7 +127,6 @@ export class MarketsPage {
   protected readonly listState = signal<'loading' | 'ready' | 'error'>('loading');
   protected readonly instruments = signal<InstrumentOut[]>([]);
   protected readonly totalInstruments = signal(0);
-  protected readonly search = signal('');
   protected readonly marketFilter = signal('');
 
   protected readonly markets = computed(() => {
@@ -139,17 +138,9 @@ export class MarketsPage {
   });
 
   protected readonly visibleInstruments = computed(() => {
-    const term = this.search().trim().toLowerCase();
     const market = this.marketFilter();
     return this.instruments().filter(
-      (instrument) =>
-        (market === '' || instrument.market.code === market) &&
-        (term === '' ||
-          instrument.canonical_symbol.toLowerCase().includes(term) ||
-          instrument.market.display_name.toLowerCase().includes(term) ||
-          marketLabel(instrument.market).toLowerCase().includes(term) ||
-          instrument.product_type.display_name.toLowerCase().includes(term) ||
-          productLabel(instrument.product_type).toLowerCase().includes(term)),
+      (instrument) => market === '' || instrument.market.code === market,
     );
   });
 
@@ -368,10 +359,6 @@ export class MarketsPage {
         },
         error: () => this.olderState.set('error'),
       });
-  }
-
-  protected onSearch(value: string): void {
-    this.search.set(value);
   }
 
   protected onMarketFilter(value: string): void {
