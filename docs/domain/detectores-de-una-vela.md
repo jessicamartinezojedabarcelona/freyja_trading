@@ -179,6 +179,18 @@ evaluación la que la lleva.
   nunca cambia una vez calculado, así que optimizar el recorrido (no repetirlo desde el principio
   en cada instante) queda abierto para cuando haga falta, sin cambiar el resultado.
 
+**Corrección (2026-09-29), revisión de Jessica sobre `candlestick_multi.py`.** La afirmación de
+arriba («nunca dos llamadas dan resultados contradictorios») no se cumplía en un caso concreto: la
+caché de tendencia previa (`SingleCandleContext._prior_trends`) se indexaba solo por el instante
+(`at`), no por cuántas velas se habían leído para responder. Si el mismo contexto se reutiliza
+(`.at()`, su propio mecanismo de repetición) entre dos llamadas donde una vela anterior, antes
+ausente, ya ha llegado, la segunda llamada debería ver más historia — pero la caché le devolvía la
+clasificación calculada con menos velas. Reproducido con una serie bajista real (60 velas
+recientes: `INSUFFICIENT_DATA`; las mismas 115 completas: `DOWNTREND`) antes de corregirlo: la
+memoria ahora se indexa por `(at, len(before))`, así que una vela que llega tarde cambia la clave y
+fuerza un recálculo. El mismo defecto, idéntico, se encontró y corrigió a la vez en
+`candlestick_multi.py` (`docs/domain/detectores-de-dos-y-tres-velas.md`, sección 4).
+
 ## 7. Contexto de detección propio, no el de las figuras chartistas
 
 Este detector usa `SingleCandleContext`, no `DetectionContext` (`pattern_detection.py`, de
@@ -226,3 +238,7 @@ Registradas aquí para que se puedan corregir; ninguna es de producto.
 7. **`SingleCandleContext` es su propio tipo**, no una extensión de `DetectionContext` de
    `pattern_detection.py` (sección 7): evita modificar un archivo de POINT3 desde una tarea de
    POINT4.
+8. **La caché de tendencia previa se indexa por `(instante, velas leídas)`, no solo por el
+   instante** (sección 6): corregido el 2026-09-29 tras reproducir un resultado obsoleto con una
+   vela que llega tarde y el mismo contexto reutilizado; el mismo defecto se corrigió, idéntico,
+   en `candlestick_multi.py`.
