@@ -16,7 +16,7 @@ technical-analysis definitions, not validated (PARAMS-VALIDATION-001).
 
 import enum
 from collections.abc import Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Protocol
@@ -128,16 +128,6 @@ class SingleCandleContext:
     observed_at: datetime
     params: SingleCandleParams = DEFAULT_SINGLE_CANDLE_PARAMS
     publication_grace: timedelta = DEFAULT_PUBLICATION_GRACE
-    # Memory of prior-trend classifications, keyed by (the candle's own open_time, how many
-    # candles were read to answer it). The count is part of the key, not just the instant: a
-    # candle that arrives late fills a previously-missing spot in the history read for the same
-    # open_time on a later call that reuses this same context (`.at()`); keying by open_time alone
-    # would return the classification computed from the earlier, incomplete history instead of
-    # recomputing (found and fixed during POINT4-MULTI-001's review of the identical pattern
-    # there; see `candlestick_multi.py`'s `_prior_trend`).
-    _prior_trends: dict[tuple[datetime, int], TrendState] = field(
-        default_factory=dict, compare=False, repr=False
-    )
 
     def at(self, observed_at: datetime) -> "SingleCandleContext":
         return replace(self, observed_at=observed_at)
@@ -302,17 +292,25 @@ _REQUIRED_TREND: dict[CandlePatternType, TrendState] = {
 
 
 def _prior_trend(
-    context: SingleCandleContext, before: Sequence[Candle], at: datetime
+    context: SingleCandleContext,
+    before: Sequence[Candle],
+    at: datetime,
+    cache: dict[datetime, TrendState],
 ) -> TrendState:
     """The trend the POINT2 classifier would give right before a candle opening at `at`, from the
-    candles strictly before it. A pure function of the past: unlike a chart figure's first pivot
-    (confirmed candles later), nothing here is still pending once the candle itself has closed —
-    provided `before` is itself complete. If a candle in `before` arrives late (backfilled after
-    an earlier call already answered for this `at` with fewer candles), the cache key includes
-    `len(before)` precisely so that case forces a recompute instead of returning the earlier,
-    incomplete answer."""
-    key = (at, len(before))
-    cached = context._prior_trends.get(key)
+    candles strictly before it.
+
+    `cache` is local to one `detect_single_candle_patterns` call (built there, passed down: never
+    stored on `context`). Within a single call, `before` for a given `at` is always the same
+    sequence, so keying by `at` alone is safe there. It is deliberately *not* kept across calls
+    that reuse the same context (`.at()`): a candle that later arrives, or an earlier one that
+    gets corrected, changes what `before` should be for the same `at` without necessarily
+    changing its length — a cache keyed by `(at, len(before))` was tried and still returned a
+    stale classification when a candle was corrected in place (same count, same instant,
+    different content); reproduced against two real series (a downtrend and an uptrend, same
+    length, same final instant) before removing the cross-call cache entirely (see the contract
+    doc)."""
+    cached = cache.get(at)
     if cached is not None:
         return cached
     params = context.params
@@ -330,7 +328,7 @@ def _prior_trend(
         min_history=params.min_history,
         publication_grace=context.publication_grace,
     ).state
-    context._prior_trends[key] = state
+    cache[at] = state
     return state
 
 
@@ -402,7 +400,10 @@ def _ambiguous(
 
 
 def _instances_for_candle(
-    context: SingleCandleContext, before: Sequence[Candle], candle: Candle
+    context: SingleCandleContext,
+    before: Sequence[Candle],
+    candle: Candle,
+    cache: dict[datetime, TrendState],
 ) -> tuple[list[CandlePatternInstance], list[AmbiguousGeometry]]:
     anchor = CandleAnchor.from_candle(candle, "FIRST")
     if anchor.range <= 0:
@@ -413,13 +414,13 @@ def _instances_for_candle(
     ambiguous: list[AmbiguousGeometry] = []
 
     if _is_doji(anchor, params):
-        observed = _prior_trend(context, before, candle.open_time)
+        observed = _prior_trend(context, before, candle.open_time, cache)
         found.append(_instance(context, _T.DOJI, _confirmed(anchor, at, None, observed)))
 
     for check, pattern_type in _SINGLE_NAME:
         if not check(anchor, params):
             continue
-        observed = _prior_trend(context, before, candle.open_time)
+        observed = _prior_trend(context, before, candle.open_time, cache)
         required = _REQUIRED_TREND[pattern_type]
         evaluation = (
             _confirmed(anchor, at, required, observed)
@@ -431,7 +432,7 @@ def _instances_for_candle(
     for check, down_type, up_type, geometry in _SHARED_GEOMETRY:
         if not check(anchor, params):
             continue
-        observed = _prior_trend(context, before, candle.open_time)
+        observed = _prior_trend(context, before, candle.open_time, cache)
         if observed is TrendState.DOWNTREND:
             found.append(
                 _instance(
@@ -461,6 +462,11 @@ def detect_single_candle_patterns(
     candle's own result never changes once computed, so calling this again with more candles only
     ever adds instances (or ambiguous-geometry observations), never revises one already found
     (docs/domain/detectores-de-una-vela.md, section 6).
+
+    The prior-trend cache lives only for the duration of this call (built here, never stored on
+    `context`): sharing it across separate calls proved unsafe even when keyed by
+    `(instant, candles read)`, because a candle corrected in place — same count, same instant,
+    different content — still returned the earlier, wrong classification (see the contract doc).
     """
     _require_utc(context.observed_at, "observed_at")  # a wrong request, not bad data
     try:
@@ -477,8 +483,9 @@ def detect_single_candle_patterns(
         return SingleCandleResult((), (), (MissingDataReason.SOURCE_NOT_AUTHORIZED,), as_of)
     instances: list[CandlePatternInstance] = []
     ambiguous: list[AmbiguousGeometry] = []
+    trend_cache: dict[datetime, TrendState] = {}
     for index, candle in enumerate(closed):
-        found, amb = _instances_for_candle(context, closed[:index], candle)
+        found, amb = _instances_for_candle(context, closed[:index], candle, trend_cache)
         instances.extend(found)
         ambiguous.extend(amb)
     return SingleCandleResult(tuple(instances), tuple(ambiguous), (), as_of)

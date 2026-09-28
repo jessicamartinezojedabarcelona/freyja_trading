@@ -19,7 +19,7 @@ reasoned from published technical-analysis definitions, not validated (PARAMS-VA
 
 import enum
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -209,15 +209,6 @@ class MultiCandleContext:
     params: MultiCandleParams = DEFAULT_MULTI_CANDLE_PARAMS
     triple: ThreeCandleParams = DEFAULT_THREE_CANDLE_PARAMS
     publication_grace: timedelta = DEFAULT_PUBLICATION_GRACE
-    # Memory of prior-trend classifications, keyed by (the pattern's first candle's open_time, how
-    # many candles were read to answer it). The count is part of the key, not just the instant, so
-    # a candle that arrives late (`before` grows for the same `at` across calls that reuse this
-    # same context via `.at()`) invalidates the cache instead of returning a stale classification
-    # computed from the smaller, earlier `before` (see `detectores-de-dos-y-tres-velas.md`,
-    # section on cache safety, and the reproduction that found this in POINT4-MULTI-001's review).
-    _prior_trends: dict[tuple[datetime, int], TrendState] = field(
-        default_factory=dict, compare=False, repr=False
-    )
 
     def at(self, observed_at: datetime) -> "MultiCandleContext":
         return replace(self, observed_at=observed_at)
@@ -413,18 +404,24 @@ _REQUIRED_TREND_TRIPLE: dict[CandlePatternType, TrendState | None] = {
 # -- context: the trend right before the pattern's first candle ---------------------------------
 
 
-def _prior_trend(context: MultiCandleContext, before: Sequence[Candle], at: datetime) -> TrendState:
+def _prior_trend(
+    context: MultiCandleContext,
+    before: Sequence[Candle],
+    at: datetime,
+    cache: dict[datetime, TrendState],
+) -> TrendState:
     """The trend the POINT2 classifier would give right before the pattern's first candle: a pure
     function of still older candles, same principle as `detectores-de-una-vela.md`.
 
-    Cached by `(at, len(before))`, not by `at` alone: a candle that arrives late fills a
-    previously-missing spot in `before`, changing its length for the same `at` on a later call
-    that reuses this same context (`.at()`). Keying by `at` alone would return the classification
-    computed from the earlier, incomplete `before` instead of recomputing — verified by
-    reproducing it against a real downtrend series before this fix (see the module's contract
-    doc)."""
-    key = (at, len(before))
-    cached = context._prior_trends.get(key)
+    `cache` is local to one `detect_multi_candle_patterns` call (built there, passed down: never
+    stored on `context`). Within a single call, `before` for a given `at` is always the same
+    sequence, so keying by `at` alone is safe there. It is deliberately *not* kept across calls
+    that reuse the same context (`.at()`): a first attempt keyed a context-level cache by
+    `(at, len(before))` to survive a late-arriving candle, but a candle corrected in place — same
+    count, same instant, different content — still returned a stale classification; reproduced
+    against two real series (a downtrend and an uptrend, same length, same final instant) before
+    removing the cross-call cache entirely (see the contract doc)."""
+    cached = cache.get(at)
     if cached is not None:
         return cached
     params = context.params
@@ -442,7 +439,7 @@ def _prior_trend(context: MultiCandleContext, before: Sequence[Candle], at: date
         min_history=params.min_history,
         publication_grace=context.publication_grace,
     ).state
-    context._prior_trends[key] = state
+    cache[at] = state
     return state
 
 
@@ -514,7 +511,11 @@ def _instance(
 
 
 def _instances_for_pair(
-    context: MultiCandleContext, before: Sequence[Candle], first: Candle, second: Candle
+    context: MultiCandleContext,
+    before: Sequence[Candle],
+    first: Candle,
+    second: Candle,
+    cache: dict[datetime, TrendState],
 ) -> list[CandlePatternInstance]:
     c1 = CandleAnchor.from_candle(first, "FIRST")
     c2 = CandleAnchor.from_candle(second, "SECOND")
@@ -527,7 +528,7 @@ def _instances_for_pair(
     for check, pattern_type in _PAIR_CHECKS:
         if not check(c1, c2, params):
             continue
-        observed = _prior_trend(context, before, first.open_time)
+        observed = _prior_trend(context, before, first.open_time, cache)
         required = _REQUIRED_TREND[pattern_type]
         evaluation = (
             _confirmed((c1, c2), at, required, observed)
@@ -553,6 +554,7 @@ def _instances_for_triple(
     first: Candle,
     second: Candle,
     third: Candle,
+    cache: dict[datetime, TrendState],
 ) -> list[CandlePatternInstance]:
     c1 = CandleAnchor.from_candle(first, "FIRST")
     c2 = CandleAnchor.from_candle(second, "SECOND")
@@ -566,10 +568,10 @@ def _instances_for_triple(
     def build(pattern_type: CandlePatternType, extra: tuple[PatternEvidence, ...] = ()) -> None:
         required = _REQUIRED_TREND_TRIPLE[pattern_type]
         if required is None:
-            observed = _prior_trend(context, before, first.open_time)
+            observed = _prior_trend(context, before, first.open_time, cache)
             evaluation = _confirmed((c1, c2, c3), at, None, observed, extra)
         else:
-            observed = _prior_trend(context, before, first.open_time)
+            observed = _prior_trend(context, before, first.open_time, cache)
             evaluation = (
                 _confirmed((c1, c2, c3), at, required, observed, extra)
                 if observed is required
@@ -613,6 +615,11 @@ def detect_multi_candle_patterns(
 
     A pure function of the whole closed series every time it is called (no incremental state),
     same principle as `detect_single_candle_patterns`.
+
+    The prior-trend cache lives only for the duration of this call (built here, never stored on
+    `context`): sharing it across separate calls proved unsafe even when keyed by
+    `(instant, candles read)`, because a candle corrected in place — same count, same instant,
+    different content — still returned the earlier, wrong classification (see the contract doc).
     """
     _require_utc(context.observed_at, "observed_at")  # a wrong request, not bad data
     try:
@@ -628,14 +635,17 @@ def detect_multi_candle_patterns(
     if context.data_source not in context.authorized_sources:
         return MultiCandleResult((), (MissingDataReason.SOURCE_NOT_AUTHORIZED,), as_of)
     instances: list[CandlePatternInstance] = []
+    trend_cache: dict[datetime, TrendState] = {}
     for index in range(2, len(closed)):
         before = closed[: index - 2]
         instances.extend(
             _instances_for_triple(
-                context, before, closed[index - 2], closed[index - 1], closed[index]
+                context, before, closed[index - 2], closed[index - 1], closed[index], trend_cache
             )
         )
     for index in range(1, len(closed)):
         before = closed[: index - 1]
-        instances.extend(_instances_for_pair(context, before, closed[index - 1], closed[index]))
+        instances.extend(
+            _instances_for_pair(context, before, closed[index - 1], closed[index], trend_cache)
+        )
     return MultiCandleResult(tuple(instances), (), as_of)

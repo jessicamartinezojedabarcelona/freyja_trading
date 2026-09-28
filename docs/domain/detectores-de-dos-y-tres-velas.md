@@ -90,23 +90,37 @@ necesita una segunda evaluación.
 
 ## 4. Caché de tendencia previa: sin resultados obsoletos
 
-**Corrección (2026-09-29), revisión de Jessica sobre la entrega 1/2.** Igual que
+**Dos correcciones (2026-09-29), dos revisiones de Jessica antes de la entrega 2/2.** Igual que
 `detectores-de-una-vela.md`, este módulo recuerda la clasificación de tendencia ya calculada para
 un instante, para no repetir el cálculo si varios patrones de la misma vela inicial la necesitan.
-La primera versión guardaba esa memoria (`_prior_trends`) indexada solo por el instante (`at`):
-segura mientras se procesa una sola llamada, pero no si el mismo contexto se reutiliza (`.at()`,
-su propio mecanismo de repetición) entre dos llamadas donde una vela anterior, antes ausente, ya
-ha llegado — el segundo cálculo debería ver más historia, pero la memoria le devolvía la
-clasificación antigua, calculada con menos velas.
 
-Se reprodujo con una serie bajista real (`zigzag(DOWN)`, 115 velas): con solo las 60 más recientes,
-el clasificador da `INSUFFICIENT_DATA`; con las 115 completas, da `DOWNTREND`. Reutilizando el
-mismo contexto, la segunda llamada devolvía `INSUFFICIENT_DATA` (el valor de la primera) en lugar
-de `DOWNTREND`. La memoria ahora se indexa por `(at, len(before))`: el número de velas leídas forma
-parte de la clave, así que una vela que llega tarde cambia la clave y fuerza un recálculo en vez de
-devolver la respuesta antigua. El mismo defecto existía, idéntico, en
-`detectores-de-una-vela.md` (`SingleCandleContext._prior_trends`) y se corrigió igual, ahí y aquí,
-en la misma revisión.
+**Primera variante: vela que llega tarde.** La primera versión guardaba esa memoria
+(`_prior_trends`) en el contexto, indexada solo por el instante (`at`): segura mientras se procesa
+una sola llamada, pero no si el mismo contexto se reutiliza (`.at()`, su propio mecanismo de
+repetición) entre dos llamadas donde una vela anterior, antes ausente, ya ha llegado — el segundo
+cálculo debería ver más historia, pero la memoria le devolvía la clasificación antigua, calculada
+con menos velas. Se reprodujo con una serie bajista real (`zigzag(DOWN)`, 115 velas): con solo las
+60 más recientes, el clasificador da `INSUFFICIENT_DATA`; con las 115 completas, da `DOWNTREND`.
+Reutilizando el mismo contexto, la segunda llamada devolvía `INSUFFICIENT_DATA` en lugar de
+`DOWNTREND`. Primer arreglo: indexar por `(at, len(before))`, para que el número de velas leídas
+formara parte de la clave.
+
+**Segunda variante, que ese arreglo no cubría: vela corregida, mismo recuento.** Una vela
+**anterior** al instante evaluado se corrige o se sustituye: mismo `open_time` del inicio del
+patrón, la misma cantidad de velas en `before`, contenido distinto. `len(before)` no cambia, así
+que la clave tampoco, y la memoria seguía devolviendo la clasificación antigua. Se reprodujo
+reutilizando el mismo contexto con dos series reales de la misma longitud y el mismo instante
+final (`zigzag(DOWN)` y la misma sustituida por `zigzag(UP)`, 115 velas cada una, mismo `at`): la
+segunda llamada devolvía `DOWNTREND` (el valor de la primera) en vez de recalcular `UPTREND`.
+
+Ninguna clave basada en `(instante, alguna medida de antes)` cubre esto en general: cualquier
+resumen que no sea el contenido completo de `before` puede coincidir por accidente entre dos
+series distintas. La corrección final **elimina la caché entre llamadas**: `_prior_trends` deja de
+vivir en `MultiCandleContext`; la memoria pasa a ser un diccionario local que
+`detect_multi_candle_patterns` crea al empezar y descarta al terminar, correcta por construcción
+(nunca sobrevive para poder quedarse obsoleta) sin perder el ahorro dentro de una misma llamada. El
+mismo defecto, en ambas variantes, se encontró y corrigió a la vez en `detectores-de-una-vela.md`
+(`SingleCandleContext._prior_trends`).
 
 ## 5. Dos velas: geometría exacta
 
@@ -247,8 +261,11 @@ Registradas aquí para que se puedan corregir; ninguna es de producto.
    corregido antes de implementar las tres velas, sobre la decisión original (un único
    `multi-candle-detector-v1`/`multi-candle-params-v1` para las catorce) que habría desplazado la
    identidad de las instancias de dos velas ante cualquier cambio en las de tres.
-6. **La caché de tendencia previa se indexa por `(instante, velas leídas)`, no solo por el
-   instante** (sección 4): corregido tras reproducir un resultado obsoleto con una vela que llega
-   tarde y el mismo contexto reutilizado; el mismo defecto se corrigió, idéntico, en
-   `detectores-de-una-vela.md`.
+6. **La caché de tendencia previa no sobrevive entre llamadas** (sección 4): corregido en dos
+   pasos. Un primer arreglo indexó `(instante, velas leídas)` en vez de solo el instante, tras
+   reproducir un resultado obsoleto con una vela que llega tarde y el mismo contexto reutilizado.
+   Una segunda revisión encontró que esa clave seguía sin cubrir una vela corregida con el mismo
+   recuento; la solución final quita la caché del contexto por completo: vive solo dentro de cada
+   llamada a `detect_multi_candle_patterns`. El mismo defecto, en ambas variantes, se corrigió
+   idéntico en `detectores-de-una-vela.md`.
 7. **Umbrales provisionales, sin validar**, registrados en PARAMS-VALIDATION-001 al introducirlos.
