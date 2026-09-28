@@ -178,18 +178,43 @@ evaluación la que la lleva.
   _look-ahead_) aunque no el más eficiente posible; para una vela cualquiera, su propio resultado
   nunca cambia una vez calculado, así que optimizar el recorrido (no repetirlo desde el principio
   en cada instante) queda abierto para cuando haga falta, sin cambiar el resultado.
+- **La memoria de tendencia previa vive solo dentro de una llamada.** `detect_single_candle_patterns`
+  construye su propia caché al empezar y la pasa hacia abajo; nunca se guarda en el contexto ni
+  sobrevive entre llamadas, ni siquiera reutilizando el mismo contexto con `.at()`. Es la lectura
+  final de dos correcciones (sección siguiente): la primera (indexar por `(instante, velas
+  leídas)`) bastaba para una vela que llega tarde, pero no para una vela **corregida in situ**
+  (mismo recuento, mismo instante, contenido distinto). Sin memoria compartida entre llamadas, no
+  hay clave posible que se quede corta: cada llamada empieza en blanco.
 
-**Corrección (2026-09-29), revisión de Jessica sobre `candlestick_multi.py`.** La afirmación de
-arriba («nunca dos llamadas dan resultados contradictorios») no se cumplía en un caso concreto: la
-caché de tendencia previa (`SingleCandleContext._prior_trends`) se indexaba solo por el instante
-(`at`), no por cuántas velas se habían leído para responder. Si el mismo contexto se reutiliza
-(`.at()`, su propio mecanismo de repetición) entre dos llamadas donde una vela anterior, antes
-ausente, ya ha llegado, la segunda llamada debería ver más historia — pero la caché le devolvía la
-clasificación calculada con menos velas. Reproducido con una serie bajista real (60 velas
-recientes: `INSUFFICIENT_DATA`; las mismas 115 completas: `DOWNTREND`) antes de corregirlo: la
-memoria ahora se indexa por `(at, len(before))`, así que una vela que llega tarde cambia la clave y
-fuerza un recálculo. El mismo defecto, idéntico, se encontró y corrigió a la vez en
-`candlestick_multi.py` (`docs/domain/detectores-de-dos-y-tres-velas.md`, sección 4).
+**Corrección (2026-09-29, dos revisiones de Jessica).** La afirmación de arriba («nunca dos
+llamadas dan resultados contradictorios») no se cumplía en dos variantes distintas, encontradas en
+dos revisiones seguidas antes de continuar con POINT4-CONTEXT-001:
+
+1. **Vela que llega tarde.** La primera versión de la caché de tendencia previa
+   (`SingleCandleContext._prior_trends`) se indexaba solo por el instante (`at`), no por cuántas
+   velas se habían leído para responder. Reutilizando el mismo contexto (`.at()`) entre dos
+   llamadas donde una vela anterior, antes ausente, ya ha llegado, la segunda llamada debería ver
+   más historia — pero la caché le devolvía la clasificación calculada con menos velas.
+   Reproducido con una serie bajista real (60 velas recientes: `INSUFFICIENT_DATA`; las mismas 115
+   completas: `DOWNTREND`). Primer arreglo: indexar por `(at, len(before))`, para que el número de
+   velas leídas formara parte de la clave.
+2. **Vela corregida, mismo recuento.** El primer arreglo no cubría esta variante: una vela
+   **anterior** al instante evaluado se corrige o se sustituye (los mismos `open_time`, la misma
+   cantidad de velas en `before`, contenido distinto). `len(before)` no cambia, así que la clave
+   tampoco, y la caché seguía devolviendo la clasificación antigua. Reproducido reutilizando el
+   mismo contexto con dos series reales de la misma longitud y el mismo instante final (una
+   bajista, `zigzag(DOWN)`, y la misma sustituida por una alcista, `zigzag(UP)`): la segunda
+   llamada devolvía `DOWNTREND` (el valor de la primera) en vez de recalcular `UPTREND`.
+
+Ninguna clave basada en `(instante, alguna medida de antes)` puede cubrir esto de forma general:
+cualquier resumen que no sea el contenido completo de `before` puede coincidir por accidente entre
+dos series distintas. La corrección final **elimina la caché entre llamadas**: `_prior_trends` deja
+de vivir en `SingleCandleContext`; la memoria pasa a ser un diccionario local que
+`detect_single_candle_patterns` crea al empezar y descarta al terminar, correcta por construcción
+(nunca sobrevive para poder quedarse obsoleta) sin perder el ahorro dentro de una misma llamada
+(varias comprobaciones de la misma vela siguen reutilizando el mismo cálculo). El mismo defecto,
+idéntico en ambas variantes, se encontró y corrigió a la vez en `candlestick_multi.py`
+(`docs/domain/detectores-de-dos-y-tres-velas.md`, sección 4).
 
 ## 7. Contexto de detección propio, no el de las figuras chartistas
 
@@ -238,7 +263,12 @@ Registradas aquí para que se puedan corregir; ninguna es de producto.
 7. **`SingleCandleContext` es su propio tipo**, no una extensión de `DetectionContext` de
    `pattern_detection.py` (sección 7): evita modificar un archivo de POINT3 desde una tarea de
    POINT4.
-8. **La caché de tendencia previa se indexa por `(instante, velas leídas)`, no solo por el
-   instante** (sección 6): corregido el 2026-09-29 tras reproducir un resultado obsoleto con una
-   vela que llega tarde y el mismo contexto reutilizado; el mismo defecto se corrigió, idéntico,
-   en `candlestick_multi.py`.
+8. **La caché de tendencia previa no sobrevive entre llamadas** (sección 6): corregido el
+   2026-09-29 en dos pasos. Un primer arreglo indexó `(instante, velas leídas)` en vez de solo el
+   instante, tras reproducir un resultado obsoleto con una vela que llega tarde y el mismo
+   contexto reutilizado. Una segunda revisión encontró que esa clave seguía sin cubrir una vela
+   **corregida** con el mismo recuento (mismo instante, mismas velas leídas, contenido distinto):
+   reproducido reutilizando el mismo contexto con dos series reales de igual longitud. Como
+   ninguna clave parcial cubre el caso general, la solución final quita la caché del contexto por
+   completo: vive solo dentro de cada llamada a `detect_single_candle_patterns`. El mismo defecto,
+   en ambas variantes, se corrigió idéntico en `candlestick_multi.py`.

@@ -396,15 +396,22 @@ def test_replay_is_stable_no_future_candle_changes_a_past_one() -> None:
 
 def test_a_late_arriving_candle_does_not_leave_a_stale_prior_trend_cached() -> None:
     """POINT4-MULTI-001 review (2026-09-28) found the identical pattern in `candlestick_multi.py`
-    and traced it back here: `_prior_trends` was keyed only by the candle's `open_time`, so
-    reusing the same context (via `.at()`, its own documented replay mechanism) across two calls
-    where a previously-missing candle arrives late returned the trend classification computed
-    from the earlier, incomplete history instead of recomputing. Reproduced against a real zigzag
-    downtrend (60 recent candles: INSUFFICIENT_DATA; the same 115 candles complete: DOWNTREND)
-    before fixing the cache key to include `len(before)`."""
+    and traced it back here: `_prior_trends`, stored on the context, was keyed only by the
+    candle's `open_time`, so reusing the same context (via `.at()`, its own documented replay
+    mechanism) across two calls where a previously-missing candle arrives late returned the trend
+    classification computed from the earlier, incomplete history instead of recomputing.
+    Reproduced against a real zigzag downtrend (60 recent candles: INSUFFICIENT_DATA; the same
+    115 candles complete: DOWNTREND). A first fix keyed the cache by `(open_time, len(before))`
+    instead — good enough for a late arrival, since that changes the count — but a second review
+    (2026-09-29) found it still stale for a candle *corrected in place* (see the test right below
+    this one): same count, same instant, different content. The final fix removes the cross-call
+    cache entirely; the trend cache now lives only for the duration of one
+    `detect_single_candle_patterns` call, never on the context, so there is nothing left to reuse
+    across calls at all — this test still exercises the original late-arrival scenario end to end
+    through the public API, and still must pass."""
     # A single-name pattern (not a shared-geometry one like HAMMER): with an unresolved trend it
     # still produces an instance, in MORPHOLOGICALLY_VALID, which is what this test needs to see
-    # flip to CONFIRMED once the cache correctly forgets the earlier, incomplete answer.
+    # flip to CONFIRMED once the second call reads the now-complete history.
     full_history = [_ordinary_body(c) for c in zigzag(DOWN, timeframe=TF)]
     target = shaped(full_history[-1].close_time, **BULLISH_PIN_BAR_ONLY)
     only_recent = full_history[-60:]  # not enough leading history to classify a trend
@@ -426,6 +433,41 @@ def test_a_late_arriving_candle_does_not_leave_a_stale_prior_trend_cached() -> N
         if i.pattern_type is T.BULLISH_PIN_BAR
     )
     assert confirmed.state is S.CONFIRMED  # the now-complete history must not be shadowed
+
+
+def test_a_corrected_candle_with_the_same_count_does_not_leave_a_stale_prior_trend_cached() -> None:
+    """The variant the `(open_time, len(before))` cache key did not cover (found on review,
+    2026-09-29): a candle earlier in the history gets corrected or replaced — same open_time for
+    the target instant, same number of candles read, different content, different real trend.
+    Reproduced directly against `_prior_trend` with two real series (a downtrend and an uptrend
+    zigzag, same length, same final instant) sharing one context: the second call returned the
+    first call's `DOWNTREND` instead of recomputing `UPTREND`. The fix removes the cache from the
+    context entirely (see the test above); this test drives the same scenario through the public
+    API, reusing one context across two calls whose histories differ only in content."""
+    down_history = [_ordinary_body(c) for c in zigzag(DOWN, timeframe=TF)]
+    up_history = [_ordinary_body(c) for c in zigzag(UP, timeframe=TF)]
+    assert down_history[-1].open_time == up_history[-1].open_time
+    assert len(down_history) == len(up_history)
+
+    target = shaped(down_history[-1].close_time, **BULLISH_PIN_BAR_ONLY)
+    candles_down = [*down_history, target]
+    candles_up = [*up_history, target]
+
+    context = context_for(candles_down)
+    down_result = next(
+        i
+        for i in detect_single_candle_patterns(context, candles_down).instances
+        if i.pattern_type is T.BULLISH_PIN_BAR
+    )
+    assert down_result.state is S.CONFIRMED  # BULLISH_PIN_BAR needs a downtrend: it has one
+
+    corrected_context = context.at(candles_up[-1].close_time + timedelta(seconds=15))
+    up_result = next(
+        i
+        for i in detect_single_candle_patterns(corrected_context, candles_up).instances
+        if i.pattern_type is T.BULLISH_PIN_BAR
+    )
+    assert up_result.state is S.MORPHOLOGICALLY_VALID  # now an uptrend: must not stay CONFIRMED
 
 
 # -- data quality gates ----------------------------------------------------------------------
