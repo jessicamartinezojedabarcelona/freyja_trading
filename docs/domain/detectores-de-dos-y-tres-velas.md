@@ -99,8 +99,9 @@ un instante, para no repetir el cálculo si varios patrones de la misma vela ini
 una sola llamada, pero no si el mismo contexto se reutiliza (`.at()`, su propio mecanismo de
 repetición) entre dos llamadas donde una vela anterior, antes ausente, ya ha llegado — el segundo
 cálculo debería ver más historia, pero la memoria le devolvía la clasificación antigua, calculada
-con menos velas. Se reprodujo con una serie bajista real (`zigzag(DOWN)`, 115 velas): con solo las
-60 más recientes, el clasificador da `INSUFFICIENT_DATA`; con las 115 completas, da `DOWNTREND`.
+con menos velas. Se reprodujo con una serie sintética de prueba en tendencia bajista
+(`zigzag(DOWN)`, 115 velas): con solo las 60 más recientes, el clasificador da
+`INSUFFICIENT_DATA`; con las 115 completas, da `DOWNTREND`.
 Reutilizando el mismo contexto, la segunda llamada devolvía `INSUFFICIENT_DATA` en lugar de
 `DOWNTREND`. Primer arreglo: indexar por `(at, len(before))`, para que el número de velas leídas
 formara parte de la clave.
@@ -109,8 +110,9 @@ formara parte de la clave.
 **anterior** al instante evaluado se corrige o se sustituye: mismo `open_time` del inicio del
 patrón, la misma cantidad de velas en `before`, contenido distinto. `len(before)` no cambia, así
 que la clave tampoco, y la memoria seguía devolviendo la clasificación antigua. Se reprodujo
-reutilizando el mismo contexto con dos series reales de la misma longitud y el mismo instante
-final (`zigzag(DOWN)` y la misma sustituida por `zigzag(UP)`, 115 velas cada una, mismo `at`): la
+reutilizando el mismo contexto con dos series sintéticas de prueba de la misma longitud y el
+mismo instante final (`zigzag(DOWN)` y la misma sustituida por `zigzag(UP)`, 115 velas cada una,
+mismo `at`): la
 segunda llamada devolvía `DOWNTREND` (el valor de la primera) en vez de recalcular `UPTREND`.
 
 Ninguna clave basada en `(instante, alguna medida de antes)` cubre esto en general: cualquier

@@ -195,16 +195,16 @@ dos revisiones seguidas antes de continuar con POINT4-CONTEXT-001:
    velas se habían leído para responder. Reutilizando el mismo contexto (`.at()`) entre dos
    llamadas donde una vela anterior, antes ausente, ya ha llegado, la segunda llamada debería ver
    más historia — pero la caché le devolvía la clasificación calculada con menos velas.
-   Reproducido con una serie bajista real (60 velas recientes: `INSUFFICIENT_DATA`; las mismas 115
-   completas: `DOWNTREND`). Primer arreglo: indexar por `(at, len(before))`, para que el número de
-   velas leídas formara parte de la clave.
+   Reproducido con una serie sintética de prueba en tendencia bajista (`zigzag(DOWN)`, 60 velas
+   recientes: `INSUFFICIENT_DATA`; las mismas 115 completas: `DOWNTREND`). Primer arreglo: indexar
+   por `(at, len(before))`, para que el número de velas leídas formara parte de la clave.
 2. **Vela corregida, mismo recuento.** El primer arreglo no cubría esta variante: una vela
    **anterior** al instante evaluado se corrige o se sustituye (los mismos `open_time`, la misma
    cantidad de velas en `before`, contenido distinto). `len(before)` no cambia, así que la clave
    tampoco, y la caché seguía devolviendo la clasificación antigua. Reproducido reutilizando el
-   mismo contexto con dos series reales de la misma longitud y el mismo instante final (una
-   bajista, `zigzag(DOWN)`, y la misma sustituida por una alcista, `zigzag(UP)`): la segunda
-   llamada devolvía `DOWNTREND` (el valor de la primera) en vez de recalcular `UPTREND`.
+   mismo contexto con dos series sintéticas de prueba de la misma longitud y el mismo instante
+   final (una bajista, `zigzag(DOWN)`, y la misma sustituida por una alcista, `zigzag(UP)`): la
+   segunda llamada devolvía `DOWNTREND` (el valor de la primera) en vez de recalcular `UPTREND`.
 
 Ninguna clave basada en `(instante, alguna medida de antes)` puede cubrir esto de forma general:
 cualquier resumen que no sea el contenido completo de `before` puede coincidir por accidente entre
@@ -268,7 +268,8 @@ Registradas aquí para que se puedan corregir; ninguna es de producto.
    instante, tras reproducir un resultado obsoleto con una vela que llega tarde y el mismo
    contexto reutilizado. Una segunda revisión encontró que esa clave seguía sin cubrir una vela
    **corregida** con el mismo recuento (mismo instante, mismas velas leídas, contenido distinto):
-   reproducido reutilizando el mismo contexto con dos series reales de igual longitud. Como
+   reproducido reutilizando el mismo contexto con dos series sintéticas de prueba de igual
+   longitud. Como
    ninguna clave parcial cubre el caso general, la solución final quita la caché del contexto por
    completo: vive solo dentro de cada llamada a `detect_single_candle_patterns`. El mismo defecto,
    en ambas variantes, se corrigió idéntico en `candlestick_multi.py`.
