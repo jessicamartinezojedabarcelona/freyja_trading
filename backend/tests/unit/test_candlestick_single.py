@@ -394,6 +394,40 @@ def test_replay_is_stable_no_future_candle_changes_a_past_one() -> None:
         assert matching == instance
 
 
+def test_a_late_arriving_candle_does_not_leave_a_stale_prior_trend_cached() -> None:
+    """POINT4-MULTI-001 review (2026-09-28) found the identical pattern in `candlestick_multi.py`
+    and traced it back here: `_prior_trends` was keyed only by the candle's `open_time`, so
+    reusing the same context (via `.at()`, its own documented replay mechanism) across two calls
+    where a previously-missing candle arrives late returned the trend classification computed
+    from the earlier, incomplete history instead of recomputing. Reproduced against a real zigzag
+    downtrend (60 recent candles: INSUFFICIENT_DATA; the same 115 candles complete: DOWNTREND)
+    before fixing the cache key to include `len(before)`."""
+    # A single-name pattern (not a shared-geometry one like HAMMER): with an unresolved trend it
+    # still produces an instance, in MORPHOLOGICALLY_VALID, which is what this test needs to see
+    # flip to CONFIRMED once the cache correctly forgets the earlier, incomplete answer.
+    full_history = [_ordinary_body(c) for c in zigzag(DOWN, timeframe=TF)]
+    target = shaped(full_history[-1].close_time, **BULLISH_PIN_BAR_ONLY)
+    only_recent = full_history[-60:]  # not enough leading history to classify a trend
+    candles_incomplete = [*only_recent, target]
+    candles_complete = [*full_history, target]
+
+    context = context_for(candles_incomplete)
+    incomplete = next(
+        i
+        for i in detect_single_candle_patterns(context, candles_incomplete).instances
+        if i.pattern_type is T.BULLISH_PIN_BAR
+    )
+    assert incomplete.state is S.MORPHOLOGICALLY_VALID  # not enough history yet to confirm
+
+    later_context = context.at(candles_complete[-1].close_time + timedelta(seconds=15))
+    confirmed = next(
+        i
+        for i in detect_single_candle_patterns(later_context, candles_complete).instances
+        if i.pattern_type is T.BULLISH_PIN_BAR
+    )
+    assert confirmed.state is S.CONFIRMED  # the now-complete history must not be shadowed
+
+
 # -- data quality gates ----------------------------------------------------------------------
 
 

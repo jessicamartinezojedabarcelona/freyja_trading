@@ -128,10 +128,14 @@ class SingleCandleContext:
     observed_at: datetime
     params: SingleCandleParams = DEFAULT_SINGLE_CANDLE_PARAMS
     publication_grace: timedelta = DEFAULT_PUBLICATION_GRACE
-    # Memory of prior-trend classifications, keyed by the candle's own open_time. It only saves
-    # work: each entry is a pure function of the candles before that instant, so it never changes
-    # an answer.
-    _prior_trends: dict[datetime, TrendState] = field(
+    # Memory of prior-trend classifications, keyed by (the candle's own open_time, how many
+    # candles were read to answer it). The count is part of the key, not just the instant: a
+    # candle that arrives late fills a previously-missing spot in the history read for the same
+    # open_time on a later call that reuses this same context (`.at()`); keying by open_time alone
+    # would return the classification computed from the earlier, incomplete history instead of
+    # recomputing (found and fixed during POINT4-MULTI-001's review of the identical pattern
+    # there; see `candlestick_multi.py`'s `_prior_trend`).
+    _prior_trends: dict[tuple[datetime, int], TrendState] = field(
         default_factory=dict, compare=False, repr=False
     )
 
@@ -302,8 +306,13 @@ def _prior_trend(
 ) -> TrendState:
     """The trend the POINT2 classifier would give right before a candle opening at `at`, from the
     candles strictly before it. A pure function of the past: unlike a chart figure's first pivot
-    (confirmed candles later), nothing here is still pending once the candle itself has closed."""
-    cached = context._prior_trends.get(at)
+    (confirmed candles later), nothing here is still pending once the candle itself has closed —
+    provided `before` is itself complete. If a candle in `before` arrives late (backfilled after
+    an earlier call already answered for this `at` with fewer candles), the cache key includes
+    `len(before)` precisely so that case forces a recompute instead of returning the earlier,
+    incomplete answer."""
+    key = (at, len(before))
+    cached = context._prior_trends.get(key)
     if cached is not None:
         return cached
     params = context.params
@@ -321,7 +330,7 @@ def _prior_trend(
         min_history=params.min_history,
         publication_grace=context.publication_grace,
     ).state
-    context._prior_trends[at] = state
+    context._prior_trends[key] = state
     return state
 
 
