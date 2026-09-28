@@ -33,12 +33,6 @@ const ETH = makeInstrument({
   instrument_id: OTHER_INSTRUMENT_ID,
   canonical_symbol: 'ETH/USDT',
 });
-const BINARY = makeInstrument({
-  instrument_id: 'binary-1',
-  canonical_symbol: 'BTC',
-  market: { id: 'm-crypto', code: 'CRYPTO', display_name: 'Crypto' },
-  product_type: { id: 'p-bin', code: 'BINARY_OPTION', display_name: 'Binary option' },
-});
 const FOREX = makeInstrument({
   instrument_id: 'forex-1',
   canonical_symbol: 'EUR/USD',
@@ -163,22 +157,7 @@ describe('MarketsPage', () => {
       expect(names).toEqual(['BTC/USDT', 'ETH/USDT']);
     });
 
-    it('filters the list by what the user types', async () => {
-      await open('/mercados');
-      flushInstruments([BTC, ETH, BINARY, FOREX]);
-      await settle();
-
-      const box = root().querySelector<HTMLInputElement>('input[type="search"]')!;
-      box.value = 'eur';
-      box.dispatchEvent(new Event('input'));
-      harness.detectChanges();
-
-      expect([...root().querySelectorAll('.instrument .symbol')].map((e) => squash(e))).toEqual([
-        'EUR/USD',
-      ]);
-    });
-
-    it('filters the list by market, and says when nothing matches', async () => {
+    it('filters the list by market', async () => {
       await open('/mercados');
       flushInstruments([BTC, FOREX]);
       await settle();
@@ -195,12 +174,6 @@ describe('MarketsPage', () => {
       expect([...root().querySelectorAll('.instrument .symbol')].map((e) => squash(e))).toEqual([
         'EUR/USD',
       ]);
-
-      const box = root().querySelector<HTMLInputElement>('input[type="search"]')!;
-      box.value = 'zzz';
-      box.dispatchEvent(new Event('input'));
-      harness.detectChanges();
-      expect(text()).toContain('Ningún instrumento coincide con el filtro.');
     });
 
     it('says how many instruments are not shown when the catalog is larger than a page', async () => {

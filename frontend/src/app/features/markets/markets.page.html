@@ -10,16 +10,6 @@
   <aside class="sidebar card" aria-label="Instrumentos">
     <div class="filters">
       <label class="field">
-        <span>Buscar</span>
-        <input
-          #searchBox
-          type="search"
-          placeholder="Buscar instrumento"
-          [value]="search()"
-          (input)="onSearch(searchBox.value)"
-        />
-      </label>
-      <label class="field">
         <span>Mercado</span>
         <select #marketBox [value]="marketFilter()" (change)="onMarketFilter(marketBox.value)">
           <option value="">Todos</option>
