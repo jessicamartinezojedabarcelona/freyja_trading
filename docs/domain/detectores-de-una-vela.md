@@ -110,11 +110,44 @@ futuros puedan resolver.
   previa bajista, `HANGING_MAN` con alcista; forma martillo invertido → `INVERTED_HAMMER` con
   bajista, `SHOOTING_STAR` con alcista): si la tendencia previa es la que un nombre exige, nace
   **esa** instancia, ya `CONFIRMED`. Si la tendencia previa es de rango, transición, o no se
-  puede clasificar, **no nace ninguna instancia**: declarar cualquiera de los dos nombres sin
-  contexto sería inventar cuál aplica (decisión ya registrada en
+  puede clasificar, **no nace ninguna instancia con nombre**: declarar cualquiera de los dos
+  nombres sin contexto sería inventar cuál aplica (decisión ya registrada en
   `instancia-de-patron-de-vela.md`, sección 7). Esto es distinto del caso de un solo nombre
   posible, porque aquí sí hay una alternativa concreta que la ambigüedad dejaría sin declarar
-  incorrectamente si se eligiera una al azar.
+  incorrectamente si se eligiera una al azar. **La observación geométrica no desaparece**: ver
+  sección 4 bis.
+
+## 4 bis. Geometría sin nombre: `AmbiguousGeometry`
+
+**Corrección (2026-09-28).** La primera versión de esta tarea (PR #88) no dejaba rastro alguno de
+una vela con forma de martillo/martillo invertido cuando el contexto no resolvía el nombre: ni
+instancia, ni evidencia, nada consultable. Jessica lo detectó al revisar el resumen del bloque de
+trabajo. La corrección (PR #89) separa dos hechos que antes se habían fundido en uno:
+
+- **Que la vela tenga esa geometría** es un hecho, verificable con solo mirar la propia vela.
+- **Qué nombre le corresponde** (`HAMMER` o `HANGING_MAN`) exige contexto, y sin él no se afirma.
+
+`AmbiguousGeometry` (`backend/src/freyja_backend/domain/candlestick_single.py`) registra el
+primer hecho sin comprometerse con el segundo:
+
+| Campo | Contenido |
+| ----- | --------- |
+| `geometry` | Cuál de las dos familias compartidas (`HAMMER_OR_HANGING_MAN`, `INVERTED_HAMMER_OR_SHOOTING_STAR`). |
+| `instrument_id`, `data_source`, `timeframe` | La serie sobre la que se observó. |
+| `anchor` | La vela completa (`CandleAnchor`, mismo tipo que usan las instancias). |
+| `observed_at` | El cierre de la vela: el instante en que la geometría quedó fijada. |
+| `observed_trend` | La tendencia previa **real** que se observó (`RANGE`, `TRANSITION` o `INSUFFICIENT_DATA`): el motivo concreto, no solo «no se pudo nombrar». |
+| `detector_version`, `parameter_version` | Los mismos que llevaría la instancia si el contexto la hubiera resuelto. |
+
+**Deliberadamente no es una `CandlePatternInstance`.** No tiene `pattern_type` ni `state`: no hay
+forma de leerlo como un patrón con nombre, ni siquiera sin confirmar, porque el propio campo
+`pattern_type` ya sería una interpretación. `SingleCandleResult.ambiguous_geometries` lo devuelve
+aparte de `instances`, así que un consumidor que solo recorra `instances` (como hará
+POINT4-HYPOTHESIS-001 al agregar evidencia) nunca lo ve ni por accidente.
+
+**Reproducible, nunca reescrito.** Igual que el resto de este detector (sección 6), es una función
+pura del pasado de esa vela: si se vuelve a calcular con más velas futuras añadidas, la misma vela
+produce el mismo `AmbiguousGeometry`, con el mismo `observed_trend`.
 
 ## 5. Evidencia: `CONTEXT`
 
@@ -176,11 +209,14 @@ Registradas aquí para que se puedan corregir; ninguna es de producto.
 3. **Ninguna geometría excluye a otra**: el catálogo pide explícitamente declarar todas las que
    se cumplan; agruparlas para no contarlas como confirmaciones independientes es de
    POINT4-HYPOTHESIS-001.
-4. **Ante una geometría compartida sin contexto que la resuelva, no nace ninguna instancia** (ni
-   siquiera en `MORPHOLOGICALLY_VALID`): se prefirió a la alternativa de crear una instancia
-   provisional e invalidarla después con `SUPERSEDED`, por ser más simple y no exigir un
-   mecanismo de revocación para v1. `instancia-de-patron-de-vela.md` deja ambas estrategias
-   representables por el modelo; esta tarea elige la primera.
+4. **Ante una geometría compartida sin contexto que la resuelva, no nace ninguna instancia con
+   nombre** (ni siquiera en `MORPHOLOGICALLY_VALID`): se prefirió a la alternativa de crear una
+   instancia provisional e invalidarla después con `SUPERSEDED`, por ser más simple y no exigir
+   un mecanismo de revocación para v1. `instancia-de-patron-de-vela.md` deja ambas estrategias
+   representables por el modelo; esta tarea elige la primera. **Corregido (2026-09-28, sección 4
+   bis):** «ninguna instancia con nombre» no es lo mismo que «ninguna observación». La primera
+   versión de esta decisión perdía la geometría por completo cuando el contexto no la resolvía;
+   `AmbiguousGeometry` la conserva sin nombrarla.
 5. **Un solo detector y una sola versión para los nueve patrones**, no una por patrón: comparten
    parámetros y regla de contexto en su totalidad, así que versionarlos por separado no aportaría
    nada y complicaría el seguimiento de un cambio que los afecta a todos.

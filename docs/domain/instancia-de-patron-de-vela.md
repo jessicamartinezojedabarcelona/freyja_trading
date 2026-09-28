@@ -165,6 +165,13 @@ estrategias se implementa es una decisión de POINT4-SINGLE-001/CONTEXT-001**, n
 solo se fija que ambas son representables y que nunca coexisten dos instancias con nombres opuestos
 sobre las mismas velas dándose ambas por válidas a la vez.
 
+«Ninguna instancia» se refiere siempre a `CandlePatternInstance`: no nace ninguna con un
+`pattern_type` de la geometría compartida. No impide que el detector conserve el hecho geométrico
+por otra vía, fuera de este modelo, sin nombrarlo (`AmbiguousGeometry`,
+`docs/domain/detectores-de-una-vela.md` sección 4 bis, corrección 2026-09-28 a POINT4-SINGLE-001):
+ese registro no es una instancia, no tiene `pattern_type` ni `state`, y este documento no lo
+regula.
+
 ## 8. Sin _look-ahead_
 
 Cada evaluación se rechaza si usa algo que no se sabía en su instante: una vela ancla que aún no
