@@ -246,7 +246,7 @@ def evidence_provenance(evaluation: PatternEvaluation) -> str:
     return str(facts["provenance"])
 
 
-def _operability_of(provenance: str) -> Operability:
+def operability_of(provenance: str) -> Operability:
     if provenance == LIVE:
         return Operability.OPERABLE
     if provenance in (AFTER_MARKET_FORMATION, RETROSPECTIVE):
@@ -372,7 +372,7 @@ def _build(
             )
             confirmed_provenance = evidence_provenance(current)
             provenance: str | None = confirmed_provenance
-            operability = _operability_of(confirmed_provenance)
+            operability = operability_of(confirmed_provenance)
         elif previous is not None:
             # INVALIDATED with no breakout of its own (SUPERSEDED/GEOMETRY_BROKEN): carry the
             # last known reading forward, only the direction closes.
@@ -408,7 +408,7 @@ def _build(
             source.traditional_roles, prior_trend, current.breakout.direction
         )
         provenance = evidence_provenance(current)
-        operability = _operability_of(provenance)
+        operability = operability_of(provenance)
         supporting, conflicting = _related_patterns(
             current.breakout.direction, current.evaluated_at, pool
         )

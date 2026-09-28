@@ -13,6 +13,9 @@
   procedencia — el mismo vocabulario, reutilizado, no reinventado).
 - **Código:** `backend/src/freyja_backend/domain/candlestick_location.py` (pendiente de esta
   tarea). Dominio puro, sin E/S.
+- **Corrección tras revisión de Jessica (2026-09-28, antes de POINT4-HYPOTHESIS-001), PR #96**:
+  dos huecos reales encontrados con reproducción directa, sección 2 bis y sección 4 punto 3
+  reescritas en consecuencia — ver ambas para el detalle.
 
 ## 1. Qué añade esta pieza y qué no
 
@@ -42,6 +45,35 @@ Esto hace que `evaluated_at` sea una función pura de la estructura misma, no de
 detector: volver a ejecutar la localización más tarde, con más velas, da la **misma** secuencia de
 evaluaciones con los **mismos** instantes — estabilidad de replay, verificada con pruebas (sección
 6).
+
+## 2 bis. `computed_at`: `evaluated_at` no certifica disponibilidad operativa
+
+El instante propio del patrón (`pattern_at`, sección 2) es el `evaluated_at` que
+`candlestick_single.py`/`candlestick_multi.py` ya asignan: el cierre de la última vela ancla
+(`candle.close_time`), nunca el instante en que Freyja realmente recibió esa vela — ese módulo no
+tiene ningún concepto de recepción. Si la vela cierra a las 10:00 pero Freyja solo la recibe (y por
+tanto solo puede construir el patrón y llamar a esta pieza) a las 10:03, la primera evaluación de
+localización sigue teniendo `evaluated_at = pattern_at = 10:00`: correcto, es verdad de mercado, y
+debe seguir siendo así para no romper la estabilidad de replay (sección 2) — recortar esa fecha, o
+basar `evaluated_at` en `context.observed_at`, sería falsificar la propia verdad que describe.
+
+Pero sin más, ese registro por sí solo permitiría a un consumidor futuro creer que la evaluación
+estaba disponible a las 10:00, cuando Freyja no pudo producirla antes de las 10:03. Por eso cada
+`LocationEvaluation` lleva también `computed_at`: el instante de pared (el propio `observed_at` de
+la llamada que la produjo) en el que esa evaluación llegó a existir — mismo campo, mismo nombre y
+mismo razonamiento que `context_snapshot.ContextSnapshot.computed_at` (reutilizado, no reinventado).
+Ninguna evaluación se presenta nunca como disponible antes de su propio `computed_at`, que
+`LocationEvaluation.__post_init__` exige `>= evaluated_at`. Al recalcular (`_advance` con contenido
+idéntico), se conserva el `computed_at` de la evaluación original: no se sustituye por el de un
+replay posterior.
+
+Esto es un límite conocido, no resuelto por esta pieza: `candlestick_single.py`/`multi.py` no
+distinguen "el patrón cerró en el mercado" de "Freyja lo recibió", así que ninguna pieza corriente
+abajo de ellos (esta, y por tanto POINT4-HYPOTHESIS-001) puede reconstruir cuánto tardó realmente
+la recepción de las propias anclas del patrón — solo puede ser honesta sobre cuándo ELLA MISMA
+produjo su propia evaluación. Corregir esa distinción en el propio patrón (p. ej. mediante el
+mecanismo `received_at` que `pattern_detection.DetectionContext` ya usa para figuras) es un límite
+para una tarea futura, no de esta.
 
 ## 3. Qué pasa si un pivote o una figura se confirma o se publica después del patrón
 
@@ -78,17 +110,43 @@ de referencia `T`:
    retuvo), **`published_at ≤ T` también**. Sin este segundo requisito, se usaría una figura que en
    el instante `T` aún no había sido ofrecida como tal, aunque su geometría ya se conociera.
 3. **La procedencia de la figura (`provenance`, cuando la figura ya tiene ruptura) se registra
-   como evidencia**, no como filtro adicional: la procedencia describe la ruptura, un hecho
+   como evidencia**, no como filtro de candidatura: la procedencia describe la ruptura, un hecho
    distinto de si la frontera geométrica podía usarse como nivel. Una figura `GEOMETRICALLY_VALID`
    sin ruptura todavía no tiene procedencia que registrar, y su frontera se usa igual si cumple 1 y
    2. Cuando sí hay procedencia, se copia tal cual a la evidencia de esta pieza
    (`LEVEL`, sección 5) para que quede auditable de dónde viene el nivel usado — nunca se
    recalcula, nunca se infiere de otra cosa (mismo principio que `hipotesis-de-figura.md`, sección
-   5: «la procedencia se lee, no se recalcula»).
+   5: «la procedencia se lee, no se recalcula»). **Pero no filtrar la candidatura por procedencia
+   no significa tratar toda procedencia por igual** (corrección tras revisión de Jessica,
+   2026-09-28): una figura `RETROSPECTIVE`, o sin ruptura todavía (procedencia no probada), puede
+   seguir haciendo `NEAR_LEVEL` — es un hecho descriptivo real — pero esa evaluación **no debe
+   presentarse como evidencia operable** frente a POINT4-HYPOTHESIS-001. Ver «Operabilidad»
+   más abajo.
 
 Un pivote del punto 2 (soporte/resistencia simple, sin figura) solo exige la condición 1, con su
 propio `confirmed_at` en el papel de `known_at`: no tiene `published_at` ni procedencia (esos
-conceptos son propios de una figura con ruptura).
+conceptos son propios de una figura con ruptura) — siempre `OPERABLE` (estructuralmente confirmado,
+sin ambigüedad de procedencia).
+
+### 4 bis. Operabilidad: descriptivo no es lo mismo que operable
+
+`pattern_hypothesis.py` ya resolvió exactamente este problema para las hipótesis de figuras: su
+operabilidad (`OPERABLE`/`RETROSPECTIVE`/`UNPROVEN`) depende solo de la procedencia de la ruptura de
+origen, leída en modo fail-closed por `evidence_provenance` (nunca confía en un `provenance` suelto
+sin `known_at` probado junto a él). Esta pieza **reutiliza exactamente esa función y ese enum**
+(`operability_of`, hecha pública para esto), en vez de inventar una segunda regla que pudiera
+divergir con el tiempo.
+
+Cada `_Candidate` lleva su propia `operability`: un pivote siempre `OPERABLE`; una figura, la que
+`operability_of(evidence_provenance(figure.latest))` determine — `UNPROVEN` cuando la figura
+todavía no tiene procedencia registrada (sin ruptura), `RETROSPECTIVE`/`OPERABLE` según lo que su
+propia evidencia de ruptura pruebe. Cada evidencia `LEVEL` lleva su `source_operability` (sección 5).
+La `operability` de la evaluación completa es la **peor** entre los niveles que efectivamente la
+sustentan (`NEAR_LEVEL`) — nunca optimista: `LocationEvaluation.__post_init__` recalcula esa peor
+operabilidad a partir de la propia evidencia `LEVEL` y rechaza la evaluación si no coincide,
+fail-closed, independiente de lo que el código constructor haya decidido llamarla. Para
+`NOT_NEAR_LEVEL`/`INSUFFICIENT_DATA` la operabilidad es siempre `OPERABLE`, vacíamente: no se
+afirma ningún nivel del que dudar.
 
 ## 5. Evidencia: `LEVEL`
 
@@ -103,6 +161,9 @@ Por cada nivel cercano encontrado, una evidencia `LEVEL` con:
   referencia (versionado, sección 7).
 - `source_known_at`, y cuando aplique `source_published_at`, `source_provenance`: copiados tal
   cual del nivel de origen (sección 4).
+- `source_operability`: siempre presente (`OPERABLE`/`RETROSPECTIVE`/`UNPROVEN`, sección 4 bis) —
+  nunca condicional como `source_provenance`, porque la operabilidad siempre es calculable incluso
+  cuando la procedencia misma no existe todavía (figura sin ruptura → `UNPROVEN`).
 
 Cuando no hay ningún nivel cerca, una evidencia `LEVELS_CHECKED` con cuántos niveles se
 comprobaron y la distancia mínima encontrada (`distance_fraction` del más cercano) — para poder
@@ -136,6 +197,9 @@ la evaluación que sí lo ve, sin tocar la anterior.
   la tolerancia de «cerca» nunca debe desplazar la identidad de un patrón ya guardado, y viceversa.
 - Umbral de tolerancia (`distance_fraction` máximo para `NEAR_LEVEL`) provisional y sin validar:
   PARAMS-VALIDATION-001 al introducirlo.
+- `Operability` (`OPERABLE`/`RETROSPECTIVE`/`UNPROVEN`) y `operability_of`/`evidence_provenance` no
+  son propios de esta pieza: se reutilizan literalmente de `pattern_hypothesis.py` (sección 4 bis),
+  igual que `PatternEvidence`/`evidence()` ya se reutilizan en todo el dominio.
 
 ## 8. Replay: casos que el código debe superar
 
