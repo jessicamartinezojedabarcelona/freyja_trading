@@ -50,6 +50,11 @@ from freyja_backend.domain.market_structure import (
     detect_pivots,
 )
 from freyja_backend.domain.pattern_detection import InvalidDetectionRequestError, line_through
+from freyja_backend.domain.pattern_hypothesis import (
+    Operability,
+    evidence_provenance,
+    operability_of,
+)
 
 LOCATION_MODEL_VERSION = "candle-location-v1"
 # Bump on ANY change to a threshold or to how they are read. Its own version, independent of
@@ -121,25 +126,60 @@ class LocationContext:
     publication_grace: timedelta = DEFAULT_PUBLICATION_GRACE
 
 
+_OPERABILITY_RANK = {Operability.UNPROVEN: 0, Operability.RETROSPECTIVE: 1, Operability.OPERABLE: 2}
+
+
+def _worst_operability(items: Sequence[Operability]) -> Operability:
+    return min(items, key=lambda op: _OPERABILITY_RANK[op], default=Operability.OPERABLE)
+
+
 @dataclass(frozen=True, slots=True)
 class LocationEvaluation:
     """What was knowable about a pattern's location at one instant. Complete on its own: its
-    evidence names every level it used, so nothing has to be looked up later to understand it."""
+    evidence names every level it used, so nothing has to be looked up later to understand it.
+
+    `evaluated_at` is a market-time truth instant (contract, section 2): a pure function of the
+    pattern's own instant and the `known_at`/`published_at` of the levels used, independent of
+    when this evaluation was actually produced. `computed_at` is the separate, non-replay-stable
+    operational fact this record was missing before it existed: the earliest wall-clock instant
+    (this call's own `context.observed_at`) at which this evaluation could have been asserted —
+    mirrors `context_snapshot.ContextSnapshot.computed_at` exactly, same reasoning (a pattern's
+    own `evaluated_at` is its market-close instant, `candlestick_single.py`/`multi.py`, never its
+    reception instant; without a field of its own for "when did Freyja actually produce this",
+    nothing here could later prove an evaluation was *not* available before its `evaluated_at`
+    alone would suggest — contract, section 2).
+
+    `operability` (`OPERABLE`/`RETROSPECTIVE`/`UNPROVEN`, reused from `pattern_hypothesis.py`,
+    never reinvented) is the worst tier among the levels a `NEAR_LEVEL` verdict actually rests
+    on: a pivot is always `OPERABLE` (structurally confirmed, no provenance concept); a chart
+    figure's tier comes from its own breakout provenance, read fail-closed exactly as
+    `pattern_hypothesis.evidence_provenance` already does (never trusting a bare `provenance`
+    fact without `known_at` proven alongside it). A `NEAR_LEVEL` backed only by a `RETROSPECTIVE`
+    or `UNPROVEN` figure is still recorded as `NEAR_LEVEL` — a true descriptive fact — but its
+    `operability` must say so, so a future consumer (POINT4-HYPOTHESIS-001) cannot mistake it for
+    real-time-actionable evidence without deliberately ignoring this field (contract, section 4)."""
 
     evaluated_at: datetime
     as_of: datetime | None
     state: LocationState
+    computed_at: datetime
+    operability: Operability
     insufficient_data_reasons: tuple[MissingDataReason, ...] = ()
     evidence: tuple[PatternEvidence, ...] = ()
 
     def __post_init__(self) -> None:
         _require_utc(self.evaluated_at, "evaluated_at")
+        _require_utc(self.computed_at, "computed_at")
         if self.as_of is not None:
             _require_utc(self.as_of, "as_of")
             if self.as_of > self.evaluated_at:
                 raise InvalidDetectionRequestError(
                     "a candle that closes after the evaluation was read"
                 )
+        if self.computed_at < self.evaluated_at:
+            raise InvalidDetectionRequestError(
+                "a location evaluation cannot be computed before the instant it describes"
+            )
         if bool(self.insufficient_data_reasons) != (self.state is LocationState.INSUFFICIENT_DATA):
             raise InvalidDetectionRequestError("insufficient-data reasons exist exactly when it is")
         codes = {item.code for item in self.evidence}
@@ -148,6 +188,21 @@ class LocationEvaluation:
         if self.state is LocationState.NOT_NEAR_LEVEL and "LEVELS_CHECKED" not in codes:
             raise InvalidDetectionRequestError(
                 "NOT_NEAR_LEVEL needs a LEVELS_CHECKED evidence item"
+            )
+        if self.state is LocationState.NEAR_LEVEL:
+            cited = tuple(
+                Operability(str(dict(item.facts)["source_operability"]))
+                for item in self.evidence
+                if item.code == "LEVEL"
+            )
+            if self.operability is not _worst_operability(cited):
+                raise InvalidDetectionRequestError(
+                    "operability must be the worst tier among the LEVEL evidence actually cited "
+                    "— never optimistic about what the evidence itself proves"
+                )
+        elif self.operability is not Operability.OPERABLE:
+            raise InvalidDetectionRequestError(
+                "operability is only ever meaningful for NEAR_LEVEL: nothing else asserts a level"
             )
 
 
@@ -234,6 +289,10 @@ class _Candidate:
     known_at: datetime
     published_at: datetime | None
     provenance: str | None
+    # A pivot is always OPERABLE (structurally confirmed, no breakout/provenance concept). A
+    # figure's tier comes from its own breakout provenance, read fail-closed the same way
+    # `pattern_hypothesis.evidence_provenance` already does — reused, never recomputed here.
+    operability: Operability
 
 
 def _pivot_candidates(pivots: Sequence[Pivot], *, knowability_cutoff: datetime) -> list[_Candidate]:
@@ -251,6 +310,7 @@ def _pivot_candidates(pivots: Sequence[Pivot], *, knowability_cutoff: datetime) 
                 pivot.confirmed_at,
                 None,
                 None,
+                Operability.OPERABLE,
             )
         )
     return out
@@ -288,6 +348,10 @@ def _figure_candidates(
             continue
         if published_at is not None and published_at > knowability_cutoff:
             continue
+        # Fail-closed, same rule as `pattern_hypothesis.evidence_provenance`: a figure with no
+        # breakout yet (no `provenance` fact at all, only geometry) is `UNPROVEN`, never
+        # optimistically treated as usable evidence just because its boundary is knowable.
+        operability = operability_of(evidence_provenance(figure.latest))
         for boundary in figure.latest.boundaries:
             price = _boundary_price_at(boundary, pattern_at)
             if price is None:
@@ -300,6 +364,7 @@ def _figure_candidates(
                     known_at,
                     published_at,
                     provenance,
+                    operability,
                 )
             )
     return out
@@ -325,6 +390,7 @@ def _nearby_evidence(candidate: _Candidate, distance_fraction: Decimal) -> Patte
         "price": candidate.price,
         "distance_fraction": distance_fraction,
         "source_known_at": candidate.known_at.isoformat(),
+        "source_operability": candidate.operability.value,
     }
     if candidate.published_at is not None:
         facts["source_published_at"] = candidate.published_at.isoformat()
@@ -378,15 +444,27 @@ def _build_evaluation(
     params = context.params
     near = [(c, f) for c, f in scored if f <= params.max_distance_fraction]
     closest = min((f for _c, f in scored), default=None)
+    computed_at = context.observed_at
 
     if near:
         items = tuple(_nearby_evidence(c, f) for c, f in near)
+        operability = _worst_operability([c.operability for c, _f in near])
         return LocationEvaluation(
-            evaluated_at, capped_as_of, LocationState.NEAR_LEVEL, evidence=items
+            evaluated_at,
+            capped_as_of,
+            LocationState.NEAR_LEVEL,
+            computed_at,
+            operability,
+            evidence=items,
         )
     items = (_checked_evidence(len(candidates), closest),)
     return LocationEvaluation(
-        evaluated_at, capped_as_of, LocationState.NOT_NEAR_LEVEL, evidence=items
+        evaluated_at,
+        capped_as_of,
+        LocationState.NOT_NEAR_LEVEL,
+        computed_at,
+        Operability.OPERABLE,
+        evidence=items,
     )
 
 
@@ -443,6 +521,8 @@ def evaluate_location(
             knowability_cutoff,
             None,
             LocationState.INSUFFICIENT_DATA,
+            context.observed_at,
+            Operability.OPERABLE,
             insufficient_data_reasons=(MissingDataReason.INVALID_CANDLES,),
         )
         return _advance(previous, source, evaluation)
@@ -466,6 +546,8 @@ def evaluate_location(
             knowability_cutoff,
             capped_as_of,
             LocationState.INSUFFICIENT_DATA,
+            context.observed_at,
+            Operability.OPERABLE,
             insufficient_data_reasons=observable.missing_data_reasons,
         )
         return _advance(previous, source, evaluation)

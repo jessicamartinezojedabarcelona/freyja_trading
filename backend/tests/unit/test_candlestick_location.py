@@ -47,6 +47,7 @@ from freyja_backend.domain.market_context import MissingDataReason
 from freyja_backend.domain.market_data import Candle, InstrumentRef, Timeframe
 from freyja_backend.domain.market_structure import PivotKind
 from freyja_backend.domain.pattern_detection import InvalidDetectionRequestError
+from freyja_backend.domain.pattern_hypothesis import Operability
 
 S = LocationState
 TF = Timeframe.M5
@@ -215,6 +216,45 @@ def test_a_pivot_confirmed_later_is_added_as_a_new_evaluation_not_backdated() ->
     assert "LEVEL" in levels
 
 
+# -- reception delay: evaluated_at is market-time, computed_at is when Freyja actually knew ------
+
+
+def test_evaluated_at_is_market_time_computed_at_is_when_freyja_actually_produced_it() -> None:
+    """`pattern_at` (`source.latest.evaluated_at`, `candlestick_single.py`) is the candle's own
+    CLOSE time, 10:00 here — a market-time instant, never Freyja's own reception instant (that
+    module has no concept of one: `_confirmed`/`_morphologically_valid` set `evaluated_at` to
+    `candle.close_time` directly). If Freyja only actually receives that last candle — and so can
+    only actually build `source` and call `evaluate_location` for it — at 10:03, the earliest
+    truthful call is `context_for(observed_at=10:03)`.
+
+    `evaluated_at` for that first evaluation is still exactly `pattern_at` (10:00): correct,
+    market-time, replay-stable (contract, section 2) — but on its own this would let a future
+    reader believe this evaluation was available at 10:00, when Freyja could not have produced it
+    before 10:03. `computed_at` is the field that closes that gap honestly, instead of recasting
+    `evaluated_at` itself (which would corrupt its market-time, replay-stable meaning — not "just
+    trimming a date", an actual second, independent instant): it says exactly when this call
+    happened, and nothing here is ever presented as available before it.
+    """
+    candles = flat_candles(T0, 15)
+    last = candle_at(candles[-1].close_time, "109", "111", "108", "110")
+    candles = [*candles, last]
+    pattern_at = last.close_time  # 10:00 sharp, in market terms
+    reception_at = pattern_at + timedelta(minutes=3)  # 10:03: when Freyja actually received it
+
+    pattern = doji_pattern(pattern_at, price="110")
+    assert pattern.latest.evaluated_at == pattern_at
+
+    location = evaluate_location(context_for(observed_at=reception_at), candles, pattern, ())
+    first = location.latest
+
+    assert first.evaluated_at == pattern_at  # market-time truth: unaffected by when we ran
+    assert first.as_of == pattern_at  # the newest candle actually used to reach that truth
+    assert first.computed_at == reception_at  # when THIS evaluation actually came to exist
+    assert first.computed_at > first.evaluated_at
+    # The gap between them IS the 3 minutes of reception delay: nothing here claims otherwise.
+    assert first.computed_at - first.evaluated_at == timedelta(minutes=3)
+
+
 # -- required scenario 2: a figure initially covered (held) by another --------------------------
 
 
@@ -264,6 +304,56 @@ def test_provenance_is_copied_from_the_figure_never_recomputed() -> None:
     assert dict(level.facts)["source_provenance"] == "RETROSPECTIVE"
 
 
+# -- a RETROSPECTIVE or unproven figure stays descriptive, never operable -----------------------
+
+
+def test_a_retrospective_figure_is_near_level_but_not_operable() -> None:
+    """A figure whose breakout provenance is RETROSPECTIVE (rebuilt well after the fact, e.g.
+    after a backfill) can still make the pattern's location NEAR_LEVEL — a true descriptive fact
+    (contract, section 4 point 3: provenance is never a candidacy filter) — but the evaluation's
+    own `operability` must say this is not real-time-actionable evidence, so POINT4-HYPOTHESIS-001
+    cannot mistake it for OPERABLE without deliberately ignoring this field."""
+    pattern = doji_pattern(T0, price="110")
+    figure = make_figure(
+        base=T0 - STEP * 200,
+        known_at=T0 - STEP * 5,
+        provenance="RETROSPECTIVE",
+        boundary_price="110",
+    )
+    candles = flat_candles(T0 - STEP * 300, 400)
+    location = evaluate_location(
+        context_for(observed_at=T0 + timedelta(seconds=1)), candles, pattern, (figure,)
+    )
+    assert location.latest.state is S.NEAR_LEVEL
+    assert location.latest.operability is Operability.RETROSPECTIVE
+    level = next(item for item in location.latest.evidence if item.code == "LEVEL")
+    assert dict(level.facts)["source_operability"] == "RETROSPECTIVE"
+
+
+def test_a_figure_without_proven_provenance_is_near_level_but_unproven() -> None:
+    """A figure with no breakout yet (only geometry, no `provenance` fact at all — the normal
+    state of a GEOMETRICALLY_VALID figure before it resolves) is a legitimate `known` candidate
+    (its geometry's `known_at` is real) but has nothing proving it could ever be operable:
+    `evidence_provenance` (reused from `pattern_hypothesis.py`, never recomputed here) reads this
+    as UNPROVEN, the same fail-closed default it already uses when `known_at`/`provenance` are not
+    both present — never silently promoted to OPERABLE just because the boundary is knowable."""
+    pattern = doji_pattern(T0, price="110")
+    figure = make_figure(
+        base=T0 - STEP * 200,
+        known_at=T0 - STEP * 5,
+        provenance=None,
+        boundary_price="110",
+    )
+    candles = flat_candles(T0 - STEP * 300, 400)
+    location = evaluate_location(
+        context_for(observed_at=T0 + timedelta(seconds=1)), candles, pattern, (figure,)
+    )
+    assert location.latest.state is S.NEAR_LEVEL
+    assert location.latest.operability is Operability.UNPROVEN
+    level = next(item for item in location.latest.evidence if item.code == "LEVEL")
+    assert dict(level.facts)["source_operability"] == "UNPROVEN"
+
+
 # -- NOT_NEAR_LEVEL vs INSUFFICIENT_DATA never confused ------------------------------------------
 
 
@@ -301,13 +391,32 @@ def test_an_unauthorized_source_is_insufficient_data() -> None:
 # -- replay stability -------------------------------------------------------------------------
 
 
+def _business_content(evaluation: LocationEvaluation) -> tuple[object, ...]:
+    """Everything a `LocationEvaluation` asserts about the market, excluding `computed_at`: two
+    independent computations of the *same* business content legitimately have different
+    `computed_at` values (it records when THAT call actually ran, `context_snapshot.py`'s own
+    `computed_at` idiom, reused) — replay stability is about this tuple matching, never about
+    two separate invocations sharing a wall-clock instant they cannot share."""
+    return (
+        evaluation.evaluated_at,
+        evaluation.as_of,
+        evaluation.state,
+        evaluation.operability,
+        evaluation.insufficient_data_reasons,
+        evaluation.evidence,
+    )
+
+
 def test_replay_is_stable_evaluating_once_at_the_end_matches_step_by_step() -> None:
     """Replay significa rehacer la MISMA secuencia de llamadas (primera restringida a
     `pattern_at`, después encadenando `previous`), no una única llamada con `previous=None`:
     la sección 3 del contrato exige que la primera evaluación se restrinja siempre al instante
     propio del patrón, sin importar cuántas velas u `observed_at` se le pasen. Por eso un replay
     "de una sentada" sigue siendo dos llamadas — igual que en vivo — y se compara contra el
-    resultado paso a paso obtenido con `observed_at` intermedios reales.
+    resultado paso a paso obtenido con `observed_at` intermedios reales. `computed_at` se excluye
+    de la comparación a propósito: dos llamadas realmente distintas producen honestamente
+    `computed_at` distintos (sección 2 del contrato, corrección del 29-09-2026); lo que debe
+    coincidir es el contenido de negocio.
     """
     padding = flat_candles(T0, 15)
     peak = candle_at(padding[-1].close_time, "105", "110", "104", "106")
@@ -338,7 +447,13 @@ def test_replay_is_stable_evaluating_once_at_the_end_matches_step_by_step() -> N
         (),
         previous=replayed,
     )
-    assert replayed.evaluations == stepwise.evaluations
+    assert [_business_content(e) for e in replayed.evaluations] == [
+        _business_content(e) for e in stepwise.evaluations
+    ]
+    # The two FIRST calls used different observed_at (mirroring a live run vs. a later replay of
+    # the same first instant): their evaluations agree on content but honestly disagree on when
+    # they were actually computed.
+    assert replayed.evaluations[0].computed_at != stepwise.evaluations[0].computed_at
 
 
 # -- model and parameter validation --------------------------------------------------------------
@@ -364,6 +479,8 @@ def test_evaluations_must_move_strictly_forward() -> None:
         T0,
         T0,
         S.NOT_NEAR_LEVEL,
+        T0,
+        Operability.OPERABLE,
         evidence=(evidence("LEVELS_CHECKED", "0 checked", levels_checked=0),),
     )
     location = PatternLocation(pattern.candle_pattern_instance_id, (early,))
@@ -371,6 +488,8 @@ def test_evaluations_must_move_strictly_forward() -> None:
         T0,
         T0,
         S.NOT_NEAR_LEVEL,
+        T0,
+        Operability.OPERABLE,
         evidence=(evidence("LEVELS_CHECKED", "0 checked", levels_checked=0),),
     )
     with pytest.raises(InvalidDetectionRequestError, match="forward"):
@@ -379,9 +498,48 @@ def test_evaluations_must_move_strictly_forward() -> None:
 
 def test_near_level_requires_a_level_evidence_item() -> None:
     with pytest.raises(InvalidDetectionRequestError, match="LEVEL"):
-        LocationEvaluation(T0, T0, S.NEAR_LEVEL)
+        LocationEvaluation(T0, T0, S.NEAR_LEVEL, T0, Operability.OPERABLE)
 
 
 def test_not_near_level_requires_a_levels_checked_evidence_item() -> None:
     with pytest.raises(InvalidDetectionRequestError, match="LEVELS_CHECKED"):
-        LocationEvaluation(T0, T0, S.NOT_NEAR_LEVEL)
+        LocationEvaluation(T0, T0, S.NOT_NEAR_LEVEL, T0, Operability.OPERABLE)
+
+
+def test_computed_at_before_evaluated_at_is_refused() -> None:
+    with pytest.raises(InvalidDetectionRequestError, match="cannot be computed before"):
+        LocationEvaluation(
+            T0,
+            T0,
+            S.NOT_NEAR_LEVEL,
+            T0 - timedelta(seconds=1),
+            Operability.OPERABLE,
+            evidence=(evidence("LEVELS_CHECKED", "0 checked", levels_checked=0),),
+        )
+
+
+def test_not_near_level_cannot_claim_anything_but_operable() -> None:
+    with pytest.raises(InvalidDetectionRequestError, match="only ever meaningful for NEAR_LEVEL"):
+        LocationEvaluation(
+            T0,
+            T0,
+            S.NOT_NEAR_LEVEL,
+            T0,
+            Operability.RETROSPECTIVE,
+            evidence=(evidence("LEVELS_CHECKED", "0 checked", levels_checked=0),),
+        )
+
+
+def test_operability_must_match_the_worst_level_evidence_cited() -> None:
+    level = evidence(
+        "LEVEL",
+        "HIGH pivot at 110, 0.10 away",
+        kind="CHART_PATTERN_BOUNDARY",
+        label="DOUBLE_TOP boundary",
+        price=Decimal("110"),
+        distance_fraction=Decimal("0.10"),
+        source_known_at=T0.isoformat(),
+        source_operability="RETROSPECTIVE",
+    )
+    with pytest.raises(InvalidDetectionRequestError, match="worst tier"):
+        LocationEvaluation(T0, T0, S.NEAR_LEVEL, T0, Operability.OPERABLE, evidence=(level,))
