@@ -14,6 +14,7 @@ Thresholds are provisional and versioned (``single-candle-params-v1``): reasoned
 technical-analysis definitions, not validated (PARAMS-VALIDATION-001).
 """
 
+import enum
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
@@ -138,12 +139,60 @@ class SingleCandleContext:
         return replace(self, observed_at=observed_at)
 
 
+class SharedGeometry(enum.StrEnum):
+    """A geometry two catalogue patterns share, distinguished only by which trend preceded it
+    (docs/domain/detectores-de-una-vela.md, section 4)."""
+
+    HAMMER_OR_HANGING_MAN = "HAMMER_OR_HANGING_MAN"
+    INVERTED_HAMMER_OR_SHOOTING_STAR = "INVERTED_HAMMER_OR_SHOOTING_STAR"
+
+
+@dataclass(frozen=True, slots=True)
+class AmbiguousGeometry:
+    """A candle whose geometry matches a shared-geometry family, observed at an instant whose
+    prior trend does not resolve which of its two names applies (RANGE, TRANSITION, or the trend
+    classifier itself lacking enough data).
+
+    Deliberately not a `CandlePatternInstance`: it carries no `pattern_type` and no
+    `CandlePatternState`, because assigning either — even unconfirmed — would be exactly the
+    invented interpretation `patrones-de-vela.md` (section 6) and `instancia-de-patron-de-vela.md`
+    (section 7) refuse to make without context. It holds the geometric fact only — which candle,
+    which shared family, what trend was actually observed, and which detector and parameter
+    version read it — so the observation stays reproducible and auditable without ever being
+    mistaken for a confirmed pattern, counted as evidence of one, or read as a signal: nothing in
+    this module, and nothing that only reads `CandlePatternInstance` values (a future hypothesis
+    aggregator included), can consume it as if it were.
+    """
+
+    geometry: SharedGeometry
+    instrument_id: str
+    data_source: str
+    timeframe: Timeframe
+    anchor: CandleAnchor
+    observed_at: datetime
+    observed_trend: TrendState
+    detector_version: str
+    parameter_version: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.geometry, SharedGeometry):
+            raise InvalidDetectionRequestError(
+                "geometry must be one of the shared-geometry families"
+            )
+        for name in ("instrument_id", "data_source", "detector_version", "parameter_version"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value.strip():
+                raise InvalidDetectionRequestError(f"{name} must be declared")
+
+
 @dataclass(frozen=True, slots=True)
 class SingleCandleResult:
     """What the single-candle detectors saw at one instant. If the data was not fit to judge,
     there are no instances and the reasons say why: nothing is guessed from unfit data."""
 
     instances: tuple[CandlePatternInstance, ...]
+    # Shared-geometry candles whose context did not resolve a name (section above).
+    ambiguous_geometries: tuple[AmbiguousGeometry, ...]
     unfit_reasons: tuple[MissingDataReason, ...]
     # Close of the newest closed candle read; None if there was none.
     as_of: datetime | None
@@ -223,10 +272,18 @@ _SINGLE_NAME: tuple[tuple[_GeometryCheck, CandlePatternType], ...] = (
 )
 
 # The same geometry, two mutually exclusive names depending on which trend preceded it. Neither
-# name is declared when the context does not resolve which one applies (section 4 of the doc).
-_SHARED_GEOMETRY: tuple[tuple[_GeometryCheck, CandlePatternType, CandlePatternType], ...] = (
-    (_is_hammer_shape, _T.HAMMER, _T.HANGING_MAN),
-    (_is_inverted_hammer_shape, _T.INVERTED_HAMMER, _T.SHOOTING_STAR),
+# name is declared when the context does not resolve which one applies (section 4 of the doc);
+# the geometry itself is still reported, as an `AmbiguousGeometry`, never as either name.
+_SHARED_GEOMETRY: tuple[
+    tuple[_GeometryCheck, CandlePatternType, CandlePatternType, SharedGeometry], ...
+] = (
+    (_is_hammer_shape, _T.HAMMER, _T.HANGING_MAN, SharedGeometry.HAMMER_OR_HANGING_MAN),
+    (
+        _is_inverted_hammer_shape,
+        _T.INVERTED_HAMMER,
+        _T.SHOOTING_STAR,
+        SharedGeometry.INVERTED_HAMMER_OR_SHOOTING_STAR,
+    ),
 )
 
 _REQUIRED_TREND: dict[CandlePatternType, TrendState] = {
@@ -315,15 +372,36 @@ def _instance(
     )
 
 
+def _ambiguous(
+    context: SingleCandleContext,
+    geometry: SharedGeometry,
+    anchor: CandleAnchor,
+    at: datetime,
+    observed: TrendState,
+) -> AmbiguousGeometry:
+    return AmbiguousGeometry(
+        geometry=geometry,
+        instrument_id=context.instrument_id,
+        data_source=context.data_source,
+        timeframe=context.timeframe,
+        anchor=anchor,
+        observed_at=at,
+        observed_trend=observed,
+        detector_version=SINGLE_CANDLE_DETECTOR_VERSION,
+        parameter_version=context.params.version,
+    )
+
+
 def _instances_for_candle(
     context: SingleCandleContext, before: Sequence[Candle], candle: Candle
-) -> list[CandlePatternInstance]:
+) -> tuple[list[CandlePatternInstance], list[AmbiguousGeometry]]:
     anchor = CandleAnchor.from_candle(candle, "FIRST")
     if anchor.range <= 0:
-        return []
+        return [], []
     params = context.params
     at = candle.close_time
     found: list[CandlePatternInstance] = []
+    ambiguous: list[AmbiguousGeometry] = []
 
     if _is_doji(anchor, params):
         observed = _prior_trend(context, before, candle.open_time)
@@ -341,7 +419,7 @@ def _instances_for_candle(
         )
         found.append(_instance(context, pattern_type, evaluation))
 
-    for check, down_type, up_type in _SHARED_GEOMETRY:
+    for check, down_type, up_type, geometry in _SHARED_GEOMETRY:
         if not check(anchor, params):
             continue
         observed = _prior_trend(context, before, candle.open_time)
@@ -355,9 +433,12 @@ def _instances_for_candle(
             found.append(
                 _instance(context, up_type, _confirmed(anchor, at, TrendState.UPTREND, observed))
             )
-        # RANGE / TRANSITION / INSUFFICIENT_DATA: neither name is declared.
+        else:
+            # RANGE / TRANSITION / INSUFFICIENT_DATA: neither name is declared, but the geometric
+            # observation itself is not discarded (see `AmbiguousGeometry`).
+            ambiguous.append(_ambiguous(context, geometry, anchor, at, observed))
 
-    return found
+    return found, ambiguous
 
 
 def detect_single_candle_patterns(
@@ -369,8 +450,8 @@ def detect_single_candle_patterns(
 
     A pure function of the whole closed series every time it is called (no incremental state): a
     candle's own result never changes once computed, so calling this again with more candles only
-    ever adds instances, never revises one already found (docs/domain/detectores-de-una-vela.md,
-    section 6).
+    ever adds instances (or ambiguous-geometry observations), never revises one already found
+    (docs/domain/detectores-de-una-vela.md, section 6).
     """
     _require_utc(context.observed_at, "observed_at")  # a wrong request, not bad data
     try:
@@ -381,11 +462,14 @@ def detect_single_candle_patterns(
             publication_grace=context.publication_grace,
         ).candles
     except InvalidMarketDataError:
-        return SingleCandleResult((), (MissingDataReason.INVALID_CANDLES,), None)
+        return SingleCandleResult((), (), (MissingDataReason.INVALID_CANDLES,), None)
     as_of = closed[-1].close_time if closed else None
     if context.data_source not in context.authorized_sources:
-        return SingleCandleResult((), (MissingDataReason.SOURCE_NOT_AUTHORIZED,), as_of)
+        return SingleCandleResult((), (), (MissingDataReason.SOURCE_NOT_AUTHORIZED,), as_of)
     instances: list[CandlePatternInstance] = []
+    ambiguous: list[AmbiguousGeometry] = []
     for index, candle in enumerate(closed):
-        instances.extend(_instances_for_candle(context, closed[:index], candle))
-    return SingleCandleResult(tuple(instances), (), as_of)
+        found, amb = _instances_for_candle(context, closed[:index], candle)
+        instances.extend(found)
+        ambiguous.extend(amb)
+    return SingleCandleResult(tuple(instances), tuple(ambiguous), (), as_of)

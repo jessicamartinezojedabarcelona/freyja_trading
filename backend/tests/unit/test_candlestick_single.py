@@ -6,23 +6,32 @@ after: geometry and context are then both known quantities, so every expected ou
 read off the numbers.
 """
 
+import dataclasses
 from datetime import datetime, timedelta
 from decimal import Decimal
 
 import pytest
 
-from freyja_backend.domain.candlestick_pattern import CandlePatternState, CandlePatternType
+from freyja_backend.domain.candlestick_pattern import (
+    CandlePatternInstance,
+    CandlePatternState,
+    CandlePatternType,
+)
 from freyja_backend.domain.candlestick_single import (
     DEFAULT_SINGLE_CANDLE_PARAMS,
     SINGLE_CANDLE_DETECTOR_VERSION,
     SINGLE_CANDLE_PARAMETER_VERSION,
+    AmbiguousGeometry,
+    SharedGeometry,
     SingleCandleContext,
     SingleCandleParams,
+    SingleCandleResult,
     detect_single_candle_patterns,
 )
 from freyja_backend.domain.market_calendar import MarketSchedule
 from freyja_backend.domain.market_context import MissingDataReason
 from freyja_backend.domain.market_data import Candle, InstrumentRef, Timeframe
+from freyja_backend.domain.market_trend import TrendState
 from freyja_backend.domain.pattern_detection import InvalidDetectionRequestError
 from tests.unit.test_market_trend import DOWN, RANGE, UP, zigzag
 
@@ -98,15 +107,28 @@ def context_for(
     )
 
 
+def result_for(
+    candles: list[Candle],
+    *,
+    observed_at: datetime | None = None,
+    authorized_sources: frozenset[str] = AUTHORIZED,
+) -> SingleCandleResult:
+    context = context_for(candles, observed_at=observed_at, authorized_sources=authorized_sources)
+    return detect_single_candle_patterns(context, candles)
+
+
 def types_found(
     candles: list[Candle],
     *,
     observed_at: datetime | None = None,
     authorized_sources: frozenset[str] = AUTHORIZED,
 ) -> set[CandlePatternType]:
-    context = context_for(candles, observed_at=observed_at, authorized_sources=authorized_sources)
-    result = detect_single_candle_patterns(context, candles)
-    return {i.pattern_type for i in result.instances}
+    return {
+        i.pattern_type
+        for i in result_for(
+            candles, observed_at=observed_at, authorized_sources=authorized_sources
+        ).instances
+    }
 
 
 def state_of(
@@ -224,11 +246,22 @@ def test_hammer_shape_after_an_uptrend_is_hanging_man_not_hammer() -> None:
     assert state_of(candles, T.HANGING_MAN) is S.CONFIRMED
 
 
-def test_hammer_shape_in_a_range_declares_neither_name() -> None:
+def test_hammer_shape_in_a_range_declares_neither_name_but_keeps_the_geometry() -> None:
     candles = series(RANGE, **HAMMER_ONLY)
-    found = types_found(candles)
+    result = result_for(candles)
+    found = {i.pattern_type for i in result.instances}
     assert T.HAMMER not in found
     assert T.HANGING_MAN not in found
+    target = candles[-1]
+    matches = [g for g in result.ambiguous_geometries if g.anchor.open_time == target.open_time]
+    assert len(matches) == 1, f"expected exactly one ambiguous observation, found {len(matches)}"
+    observation = matches[0]
+    assert observation.geometry is SharedGeometry.HAMMER_OR_HANGING_MAN
+    assert observation.observed_trend is TrendState.RANGE
+    assert observation.anchor.open == target.open
+    assert observation.anchor.close == target.close
+    assert observation.anchor.high == target.high
+    assert observation.anchor.low == target.low
 
 
 def test_inverted_hammer_shape_after_a_downtrend_is_inverted_hammer() -> None:
@@ -243,10 +276,91 @@ def test_inverted_hammer_shape_after_an_uptrend_is_shooting_star() -> None:
     assert state_of(candles, T.SHOOTING_STAR) is S.CONFIRMED
 
 
-def test_inverted_hammer_shape_in_a_range_declares_neither_name() -> None:
-    found = types_found(series(RANGE, **INVERTED_HAMMER_ONLY))
+def test_inverted_hammer_shape_in_a_range_declares_neither_name_but_keeps_the_geometry() -> None:
+    candles = series(RANGE, **INVERTED_HAMMER_ONLY)
+    result = result_for(candles)
+    found = {i.pattern_type for i in result.instances}
     assert T.INVERTED_HAMMER not in found
     assert T.SHOOTING_STAR not in found
+    target = candles[-1]
+    matches = [g for g in result.ambiguous_geometries if g.anchor.open_time == target.open_time]
+    assert len(matches) == 1
+    assert matches[0].geometry is SharedGeometry.INVERTED_HAMMER_OR_SHOOTING_STAR
+    assert matches[0].observed_trend is TrendState.RANGE
+
+
+def test_hammer_shape_with_insufficient_trend_history_keeps_the_geometry_too() -> None:
+    """Not enough history to classify a trend at all is a different reason than RANGE, but the
+    same rule applies: no name, the geometry stays consultable, with the real reason recorded."""
+    short_history = [_ordinary_body(c) for c in zigzag(DOWN, timeframe=TF)][:20]
+    target = shaped(short_history[-1].close_time, **HAMMER_ONLY)
+    candles = [*short_history, target]
+    result = result_for(candles)
+    assert types_found(candles) == set()
+    matches = [g for g in result.ambiguous_geometries if g.anchor.open_time == target.open_time]
+    assert len(matches) == 1
+    assert matches[0].observed_trend is TrendState.INSUFFICIENT_DATA
+
+
+# -- AmbiguousGeometry: consultable, never an interpretation, never a signal --------------------
+
+
+def test_ambiguous_geometry_carries_no_pattern_type_or_confirmation_state() -> None:
+    """It must be impossible to read `AmbiguousGeometry` as a named, confirmed pattern: it has
+    neither field at all, unlike `CandlePatternInstance`."""
+    field_names = {f.name for f in dataclasses.fields(AmbiguousGeometry)}
+    assert "pattern_type" not in field_names
+    assert "state" not in field_names
+    forbidden = {"side", "entry", "target", "confidence", "probability", "signal"}
+    assert forbidden.isdisjoint(field_names)
+
+
+def test_ambiguous_geometry_is_not_a_candle_pattern_instance() -> None:
+    candles = series(RANGE, **HAMMER_ONLY)
+    result = result_for(candles)
+    observation = next(iter(result.ambiguous_geometries))
+    assert not isinstance(observation, CandlePatternInstance)
+    assert isinstance(observation, AmbiguousGeometry)
+
+
+def test_ambiguous_geometry_identifies_the_candle_family_and_versions() -> None:
+    candles = series(RANGE, **HAMMER_ONLY)
+    target = candles[-1]
+    observation = next(iter(result_for(candles).ambiguous_geometries))
+    assert observation.anchor.open_time == target.open_time
+    assert observation.anchor.close_time == target.close_time
+    assert observation.instrument_id == "instrument-1"
+    assert observation.data_source == SOURCE
+    assert observation.timeframe == TF
+    assert observation.detector_version == SINGLE_CANDLE_DETECTOR_VERSION
+    assert observation.parameter_version == SINGLE_CANDLE_PARAMETER_VERSION
+
+
+def test_ambiguous_geometries_are_never_mixed_into_instances_or_their_evidence() -> None:
+    """A future hypothesis aggregator (POINT4-HYPOTHESIS-001) reads `CandlePatternInstance`
+    values and their evidence; an `AmbiguousGeometry` must be structurally unreachable from
+    there, not just absent by convention."""
+    candles = series(RANGE, **HAMMER_ONLY)
+    result = result_for(candles)
+    assert result.ambiguous_geometries != ()
+    for instance in result.instances:
+        for evaluation in instance.evaluations:
+            for item in evaluation.evidence:
+                assert item.code != "AMBIGUOUS_GEOMETRY"
+                assert "geometry" not in dict(item.facts)
+
+
+def test_replay_is_stable_for_ambiguous_geometry_too() -> None:
+    """What was observed about a candle's geometry at the instant it closed does not change
+    because more candles arrived later: same principle as `test_replay_is_stable_...` for
+    instances, applied to `AmbiguousGeometry`."""
+    candles = series(RANGE, **HAMMER_ONLY)
+    early = result_for(candles, observed_at=candles[-1].close_time)
+    later_candles = [*candles, *zigzag(RANGE, start=candles[-1].close_time, timeframe=TF)]
+    later = result_for(later_candles)
+    assert early.ambiguous_geometries != ()
+    for observation in early.ambiguous_geometries:
+        assert observation in later.ambiguous_geometries
 
 
 # -- no look-ahead, no open candles ---------------------------------------------------------
