@@ -4,10 +4,10 @@
   `BULLISH_ENGULFING`, `BEARISH_ENGULFING`, `BULLISH_HARAMI`, `BEARISH_HARAMI`, `TWEEZER_BOTTOM`,
   `TWEEZER_TOP`, `PIERCING_PATTERN`, `DARK_CLOUD_COVER`, `MORNING_STAR`, `EVENING_STAR`,
   `THREE_WHITE_SOLDIERS`, `THREE_BLACK_CROWS`, `THREE_INSIDE_UP`, `THREE_INSIDE_DOWN`.
-- **Fecha:** 2026-09-28.
+- **Fecha:** 2026-09-28 (dos velas), 2026-09-29 (tres velas y correcciones).
 - **Tarea:** POINT4-MULTI-001 (4 de 7 del punto 4). Implementada en dos entregas (una por
-  familia): dos velas primero, tres velas después, porque las de tres velas reutilizan la
-  geometría del harami.
+  familia): dos velas primero (PR #90), tres velas después (PR #91), porque las de tres velas
+  reutilizan la geometría del harami.
 - **Depende de:** [patrones-de-vela.md](patrones-de-vela.md) (qué es cada patrón) y
   [instancia-de-patron-de-vela.md](instancia-de-patron-de-vela.md) (cómo se representa). Reutiliza
   el clasificador de tendencia del punto 2 (`classify_trend`), igual que
@@ -36,20 +36,36 @@ tendencia previa es una función pura de velas todavía más antiguas.
 - **Ninguna vela abierta produce nada.** Solo se leen velas cerradas.
 - **No genera señal, orden ni probabilidad.**
 
-## 2. Parámetros (`multi-candle-params-v1`)
+## 2. Parámetros: dos versiones independientes, nunca una compartida
 
 **Provisionales y sin validar** (PARAMS-VALIDATION-001), razonados a partir de definiciones
-tradicionales de análisis técnico.
+tradicionales de análisis técnico. Dos velas y tres velas se versionan **por separado**: ver la
+sección 9 («Versionado») para por qué.
+
+### 2.1 Dos velas (`multi-candle-params-v1`, `MultiCandleParams`)
 
 | Parámetro | Valor | Significado |
 | --------- | ----- | ----------- |
 | `harami_outer_min_body_ratio` | 0,50 | La vela 1 del harami es «de cuerpo amplio»: su cuerpo es al menos esta fracción de su propio rango. |
 | `harami_inner_max_body_ratio` | 0,50 | La vela 2 del harami es «de cuerpo pequeño»: su cuerpo es como mucho esta fracción del cuerpo de la vela 1. |
 | `tweezer_tolerance` | 0,10 | Dos mínimos (o máximos) son «prácticamente iguales» si difieren, como mucho, esta fracción de la media de los rangos de las dos velas. |
-| `three_soldiers_upper_wick_max_ratio` | 0,20 | En `THREE_WHITE_SOLDIERS`/`THREE_BLACK_CROWS`, la mecha del lado contrario a la tendencia de cada vela es como mucho esta fracción de su rango («mechas superiores pequeñas»). |
-| `gap_min_fraction` | 0,10 | Con `GAP_REQUIRED`: el hueco entre cuerpos (vela 1 a vela 2 en `MORNING_STAR`/`EVENING_STAR`) es al menos esta fracción del cuerpo de la vela 1. |
-| `min_body_ratio` (genérico, «cuerpo pequeño» de la vela 2 en las estrellas) | 0,30 | La vela 2 de `MORNING_STAR`/`EVENING_STAR` tiene un cuerpo como mucho esta fracción de su propio rango (o es un doji). |
 | `pivot_params`, `trend_params`, `min_history` | los del punto 2 | Los que usa `classify_trend` para la tendencia previa. |
+
+### 2.2 Tres velas (`three-candle-params-v1`, `ThreeCandleParams`)
+
+| Parámetro | Valor | Significado |
+| --------- | ----- | ----------- |
+| `harami_outer_min_body_ratio` | 0,50 | **Copia propia** del umbral de la vela 1 del harami, leída aquí para `THREE_INSIDE_UP`/`DOWN` y para la vela 1 de las estrellas — nunca de `MultiCandleParams` (sección 9). |
+| `harami_inner_max_body_ratio` | 0,50 | Copia propia, igual razón. |
+| `min_body_ratio` | 0,30 | La vela 2 de `MORNING_STAR`/`EVENING_STAR` tiene un cuerpo como mucho esta fracción de su propio rango (o es un doji). |
+| `gap_min_fraction` | 0,10 | Con `GAP_REQUIRED`: el hueco entre cuerpos (vela 1 a vela 2) es al menos esta fracción del cuerpo de la vela 1. |
+| `gap_policy` | `GAP_NOT_APPLICABLE` | La política de gaps vigente (sección 6). |
+| `three_soldiers_upper_wick_max_ratio` | 0,20 | En `THREE_WHITE_SOLDIERS`/`THREE_BLACK_CROWS`, la mecha del lado contrario a la tendencia de cada vela es como mucho esta fracción de su rango («mechas superiores pequeñas»). |
+| `pivot_params`, `trend_params`, `min_history` | los del punto 2 | Los que usa `classify_trend`. |
+
+`ThreeCandleParams.harami_params()` construye, a partir de sus propios campos, un `MultiCandleParams`
+con su **propia** versión (nunca `multi-candle-params-v1`) para que `is_bullish_harami`/
+`is_bearish_harami` lo lean sin acoplar las dos familias (sección 9).
 
 ## 3. Contexto: el mismo principio que en el punto anterior
 
@@ -63,13 +79,36 @@ necesita una segunda evaluación.
   o el martillo invertido): cada geometría de esta tarea tiene un único nombre posible. Por tanto
   no existe aquí el caso de `AmbiguousGeometry` (`detectores-de-una-vela.md`, sección 4 bis): con
   la geometría cumplida, siempre nace una instancia; `CONFIRMED` si el contexto coincide,
-  `MORPHOLOGICALLY_VALID` si no coincide o no se puede clasificar.
+  `MORPHOLOGICALLY_VALID` si no coincide o no se puede clasificar (con una excepción: bajo
+  `GAP_REQUIRED`, un hueco insuficiente hace que `MORNING_STAR`/`EVENING_STAR` no exista en
+  absoluto, ni siquiera `MORPHOLOGICALLY_VALID` — el hueco es parte de la geometría, no del
+  contexto; sección 6).
 - `THREE_WHITE_SOLDIERS`/`THREE_BLACK_CROWS` no exigen una tendencia previa estricta
   (`patrones-de-vela.md`: «ninguno estricto»), así que no tienen un valor `required`: su evidencia
   `CONTEXT` registra la tendencia observada como informativa, `compatible` siempre verdadero, y la
   instancia nace directamente `CONFIRMED` en cuanto la geometría se cumple.
 
-## 4. Dos velas: geometría exacta
+## 4. Caché de tendencia previa: sin resultados obsoletos
+
+**Corrección (2026-09-29), revisión de Jessica sobre la entrega 1/2.** Igual que
+`detectores-de-una-vela.md`, este módulo recuerda la clasificación de tendencia ya calculada para
+un instante, para no repetir el cálculo si varios patrones de la misma vela inicial la necesitan.
+La primera versión guardaba esa memoria (`_prior_trends`) indexada solo por el instante (`at`):
+segura mientras se procesa una sola llamada, pero no si el mismo contexto se reutiliza (`.at()`,
+su propio mecanismo de repetición) entre dos llamadas donde una vela anterior, antes ausente, ya
+ha llegado — el segundo cálculo debería ver más historia, pero la memoria le devolvía la
+clasificación antigua, calculada con menos velas.
+
+Se reprodujo con una serie bajista real (`zigzag(DOWN)`, 115 velas): con solo las 60 más recientes,
+el clasificador da `INSUFFICIENT_DATA`; con las 115 completas, da `DOWNTREND`. Reutilizando el
+mismo contexto, la segunda llamada devolvía `INSUFFICIENT_DATA` (el valor de la primera) en lugar
+de `DOWNTREND`. La memoria ahora se indexa por `(at, len(before))`: el número de velas leídas forma
+parte de la clave, así que una vela que llega tarde cambia la clave y fuerza un recálculo en vez de
+devolver la respuesta antigua. El mismo defecto existía, idéntico, en
+`detectores-de-una-vela.md` (`SingleCandleContext._prior_trends`) y se corrigió igual, ahí y aquí,
+en la misma revisión.
+
+## 5. Dos velas: geometría exacta
 
 Sea cuerpo, mecha superior e inferior de cada vela, y `c1`/`c2` las dos velas en orden.
 
@@ -94,42 +133,36 @@ Sea cuerpo, mecha superior e inferior de cada vela, y `c1`/`c2` las dos velas en
   lo superara, es `BULLISH_ENGULFING`: los dos patrones no se solapan en el límite).
 - **`DARK_CLOUD_COVER`**: espejo.
 
-## 5. Tres velas: geometría exacta
+## 6. Tres velas: geometría exacta y política de gaps
 
 Sea `c1`, `c2`, `c3` las tres velas en orden.
 
 - **`MORNING_STAR`**: `c1` bajista con cuerpo amplio (`harami_outer_min_body_ratio`); `c2` con
   cuerpo pequeño (`body(c2)/range(c2) ≤ min_body_ratio`, incluye un doji); `c3` alcista que cierra
   dentro del cuerpo de `c1` o más allá (`c3.close ≥ (c1.open + c1.close) / 2`, la mitad del cuerpo
-  de `c1`, lectura simétrica al «cierra dentro del cuerpo de la vela 1, o más allá» del catálogo,
-  qué mitad exacta se explica en la sección 6). El hueco entre `c1` y `c2` sigue la política de
-  gaps (sección 6).
+  de `c1`). El hueco entre `c1` y `c2` sigue la política de gaps:
+
+  | Política | Qué exige |
+  | -------- | --------- |
+  | `GAP_REQUIRED` | `c2` debe abrir y cerrar fuera del cuerpo de `c1` (midiendo desde el extremo del cuerpo de `c1` más próximo hasta el de `c2` más próximo), con una separación de al menos `gap_min_fraction × body(c1)`; si no la alcanza, **el patrón no existe**, ni siquiera `MORPHOLOGICALLY_VALID` — el hueco es parte de la geometría, no del contexto. |
+  | `GAP_OPTIONAL` | El hueco, si existe, se mide y se registra como evidencia `GAP`; su ausencia no impide el patrón. |
+  | `GAP_NOT_APPLICABLE` (por defecto) | No se comprueba ningún hueco: solo se exige que `c2` tenga cuerpo pequeño. Sin evidencia `GAP`. |
+
+  **`CRYPTO × SPOT` usa `GAP_NOT_APPLICABLE`** por defecto (cotiza en continuo, sin huecos reales
+  — `patrones-de-vela.md`, sección 2); el resto de mercados quedan con `GAP_OPTIONAL` hasta que una
+  tarea posterior revise el caso de un mercado con sesiones reales. Es una decisión técnica de
+  esta tarea, versionada en `three-candle-params-v1` (sección 2.2).
 - **`EVENING_STAR`**: espejo.
 - **`THREE_WHITE_SOLDIERS`**: `c1`, `c2`, `c3` alcistas; `c2.close > c1.close`,
   `c3.close > c2.close`; `c2.open` y `c3.open` dentro del cuerpo de la vela anterior (entre su
   apertura y su cierre); mecha superior de cada vela ≤ `three_soldiers_upper_wick_max_ratio` de su
   propio rango.
 - **`THREE_BLACK_CROWS`**: espejo (mecha **inferior** pequeña).
-- **`THREE_INSIDE_UP`**: `c1`/`c2` cumplen la geometría de `BULLISH_HARAMI` (sección 4,
-  reutilizada, no reescrita: ver sección 7); `c3` cierra por encima del máximo de `c1`
+- **`THREE_INSIDE_UP`**: `c1`/`c2` cumplen la geometría de `BULLISH_HARAMI` (sección 5,
+  reutilizada, no reescrita: ver sección 7), con los umbrales propios de `three-candle-params-v1`
+  (sección 2.2, nunca los de `multi-candle-params-v1`); `c3` cierra por encima del máximo de `c1`
   (`c3.close > c1.high`).
 - **`THREE_INSIDE_DOWN`**: espejo sobre `BEARISH_HARAMI` (`c3.close < c1.low`).
-
-## 6. Política de gaps (`MORNING_STAR` / `EVENING_STAR`)
-
-Los tres valores de `patrones-de-vela.md` (sección 2), aplicados solo al hueco entre el cuerpo de
-`c1` y el de `c2`:
-
-| Política | Qué exige aquí |
-| -------- | -------------- |
-| `GAP_REQUIRED` | `c2` debe abrir (y cerrar) fuera del cuerpo de `c1`, con una separación de al menos `gap_min_fraction × body(c1)`. |
-| `GAP_OPTIONAL` | El hueco, si existe, es un hecho adicional de evidencia; su ausencia no impide el patrón. |
-| `GAP_NOT_APPLICABLE` | No se comprueba ningún hueco: solo se exige que `c2` tenga cuerpo pequeño. |
-
-**`CRYPTO × SPOT` usa `GAP_NOT_APPLICABLE`** por defecto (cotiza en continuo, sin huecos reales —
-`patrones-de-vela.md`, sección 2); el resto de mercados quedan con `GAP_OPTIONAL` hasta que una
-tarea posterior revise el caso de un mercado con sesiones reales. Es una decisión técnica de esta
-tarea, versionada junto al resto de `multi-candle-params-v1`, no una regla de producto.
 
 ## 7. `THREE_INSIDE_UP`/`DOWN` no duplica el harami
 
@@ -138,8 +171,9 @@ cero: es un `BULLISH_HARAMI` confirmado», y que la forma exacta de implementarl
 pendiente para quien lo construyera. Esta tarea la resuelve así:
 
 - El detector de `THREE_INSIDE_UP` **reutiliza la misma función de geometría** que el detector de
-  `BULLISH_HARAMI` para juzgar `c1`/`c2` (una sola implementación, nunca dos copias de la misma
-  comprobación).
+  `BULLISH_HARAMI` (`is_bullish_harami`, pública) para juzgar `c1`/`c2` — una sola implementación,
+  nunca dos copias de la misma comprobación — pero con los **umbrales propios** de
+  `three-candle-params-v1`, nunca los de `multi-candle-params-v1` directamente (sección 9).
 - **Ambas instancias coexisten**, con su propia identidad, igual que ya coexisten patrones con
   geometrías solapadas en el punto de una vela (pin bar y martillo, `detectores-de-una-vela.md`).
   `BULLISH_HARAMI` existe en cuanto cierra `c2`; `THREE_INSIDE_UP`, en cuanto cierra `c3` y
@@ -150,18 +184,43 @@ pendiente para quien lo construyera. Esta tarea la resuelve así:
   esa tarea, no de detección: aquí solo se garantiza que ambas instancias son reproducibles y que
   ninguna se fabrica ni se descarta por conveniencia.
 
-## 8. Evidencia: `CONTEXT`, y una nueva `GAP` para las estrellas
+## 8. Evidencia: `CONTEXT`, y `GAP` para las estrellas
 
-Mismo formato que `detectores-de-una-vela.md` (sección 5) para `CONTEXT`. Además, `MORNING_STAR` y
-`EVENING_STAR` llevan una evidencia `GAP` con la política aplicada, el hueco medido (si lo hay,
-como fracción del cuerpo de `c1`) y si la política se cumplió.
+Mismo formato que `detectores-de-una-vela.md` (sección 5) para `CONTEXT`. `MORNING_STAR` y
+`EVENING_STAR`, bajo `GAP_REQUIRED` u `GAP_OPTIONAL`, llevan además una evidencia `GAP` con la
+política aplicada, el hueco medido (como precio exacto, no como fracción — el umbral sí es una
+fracción del cuerpo de `c1`), el hueco exigido y si se cumplió.
 
-## 9. Identidad y versión
+## 9. Versionado: dos familias, dos versiones, nunca una compartida
 
-Un único `multi-candle-detector-v1` para los catorce patrones: comparten parámetros y regla de
-contexto, igual que `single-candle-detector-v1` (mismo razonamiento,
-`detectores-de-una-vela.md` sección 6, decisión 5). Cada instancia identifica su serie, su vela
-inicial (`c1`), el detector y los parámetros, como fija `instancia-de-patron-de-vela.md`.
+**Corrección (2026-09-29), revisión de Jessica antes de implementar las tres velas.** La primera
+versión de este documento planeaba un único `multi-candle-detector-v1`/`multi-candle-params-v1`
+para los catorce patrones, «porque comparten parámetros y regla de contexto en su totalidad» — una
+afirmación que resultó falsa: las de tres velas necesitan umbrales que las de dos velas no leen
+(`min_body_ratio`, `gap_min_fraction`, `gap_policy`, `three_soldiers_upper_wick_max_ratio`).
+
+El problema no es solo de estilo: si las catorce compartieran una sola versión, cambiar un umbral
+de `MORNING_STAR` obligaría a subir la versión que **también** llevan las instancias de
+`BULLISH_ENGULFING` ya guardadas — la identidad de una figura que no cambió en absoluto cambiaría
+igualmente, porque `derive_candle_pattern_instance_id` incluye `parameter_version`
+(`instancia-de-patron-de-vela.md`, sección 4). «La misma figura, hallada de nuevo, es la misma
+instancia» dejaría de cumplirse por un cambio ajeno.
+
+La corrección, antes de escribir una sola línea de las tres velas:
+
+- **Dos velas**: `MultiCandleParams`/`multi-candle-params-v1`, `MULTI_CANDLE_DETECTOR_VERSION`.
+  Sin cambios respecto a la entrega 1/2: ningún campo nuevo, ninguna subida de versión.
+- **Tres velas**: `ThreeCandleParams`/`three-candle-params-v1`, `THREE_CANDLE_DETECTOR_VERSION`,
+  un conjunto propio, independiente.
+- **El puente entre ambas** (`THREE_INSIDE_UP`/`DOWN` reutilizando el harami) no comparte versión:
+  `ThreeCandleParams.harami_params()` construye un `MultiCandleParams` con los umbrales propios de
+  `ThreeCandleParams` pero **estampado con la versión de `ThreeCandleParams`**, nunca con
+  `multi-candle-params-v1`. Es el mismo recurso que usa `DiamondParams.channel_params()` en
+  `pattern_detection.py` para reutilizar el canal de dos fronteras sin atar la identidad del
+  diamante a `continuation-params-v1`. Con esto: cambiar un umbral de las estrellas o de los
+  soldados nunca desplaza la identidad de `BULLISH_HARAMI`, y cambiar un umbral del harami de dos
+  velas nunca desplaza la de `THREE_INSIDE_UP`. Verificado con pruebas que cambian un parámetro de
+  una familia y comprueban que la identidad de la otra no se mueve.
 
 ## 10. Lo que este documento no decide
 
@@ -184,6 +243,12 @@ Registradas aquí para que se puedan corregir; ninguna es de producto.
    directamente la razón que da `patrones-de-vela.md` (sin huecos reales en continuo).
 4. **Ninguna geometría de esta tarea comparte pareja** (a diferencia de martillo/hanging man): no
    hace falta un `AmbiguousGeometry` propio de esta tarea (sección 3).
-5. **Un solo detector y una sola versión** para los catorce patrones, mismo razonamiento que
+5. **Dos familias, dos versiones de parámetros y de detector, nunca una compartida** (sección 9):
+   corregido antes de implementar las tres velas, sobre la decisión original (un único
+   `multi-candle-detector-v1`/`multi-candle-params-v1` para las catorce) que habría desplazado la
+   identidad de las instancias de dos velas ante cualquier cambio en las de tres.
+6. **La caché de tendencia previa se indexa por `(instante, velas leídas)`, no solo por el
+   instante** (sección 4): corregido tras reproducir un resultado obsoleto con una vela que llega
+   tarde y el mismo contexto reutilizado; el mismo defecto se corrigió, idéntico, en
    `detectores-de-una-vela.md`.
-6. **Umbrales provisionales, sin validar**, registrados en PARAMS-VALIDATION-001 al introducirlos.
+7. **Umbrales provisionales, sin validar**, registrados en PARAMS-VALIDATION-001 al introducirlos.
