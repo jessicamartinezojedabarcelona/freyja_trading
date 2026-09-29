@@ -327,7 +327,8 @@ está en marcha, sin depender de ningún cron externo. Se activa con variables d
 | -------- | ----- | ----------- |
 | `FREYJA_CANDLE_SCANNER_ENABLED` | `true` / `false` (defecto `false`) | Arranca el escáner con la aplicación. |
 | `FREYJA_CANDLE_SCANNER_INTERVAL_SECONDS` | 30 a 3600 (defecto 60) | Pausa entre pasadas. |
-| `FREYJA_CANDLE_SCANNER_SOURCES` | `BINANCE` (defecto), `KRAKEN` | Fuentes a leer, separadas por comas. Cada fuente guarda su propia serie. |
+| `FREYJA_CANDLE_SCANNER_SOURCES` | `BINANCE` (defecto), `KRAKEN`, `TWELVEDATA` | Fuentes a leer, separadas por comas. Cada fuente guarda su propia serie. |
+| `FREYJA_TWELVE_DATA_API_KEY` | — | Obligatoria solo si `TWELVEDATA` está en `FREYJA_CANDLE_SCANNER_SOURCES`; nunca en el repo. |
 
 En cada pasada, cada serie (fuente × instrumento × temporalidad) se comprueba por separado:
 si ya está al día **no se hace ninguna petición**; si le faltan pocas velas se piden las
@@ -367,6 +368,18 @@ que tras una parada más larga queda un hueco visible, nunca velas inventadas; y
 peticiones, por lo que el adaptador las espacia. Para activarla en un entorno hay que aplicar antes
 la migración 0014 (en Neon, con `docs/operations/neon-0014-kraken-manual.sql`) y añadir `KRAKEN` a
 `FREYJA_CANDLE_SCANNER_SOURCES`. Mientras no se haga, nada cambia: Mercados sigue abriendo en Binance.
+
+**Twelve Data como tercera fuente, forex y metales (ADR 0009).** El escáner y la CLI
+(`freyja-sync-candles --source TWELVEDATA`) pueden leer de Twelve Data los pares EUR/USD,
+GBP/USD, USD/JPY y USD/CHF (mercado FOREX) y XAU/USD (mercado METALS, decisión de Jessica del
+29-09-2026: el oro no es un par de divisas). A diferencia de Binance y Kraken, este proveedor
+exige una clave (`FREYJA_TWELVE_DATA_API_KEY`, nunca en el repo) y su plan gratuito limita a
+unas 800 peticiones al día y 8 por minuto; el adaptador lleva su propio contador diario (en
+memoria, por proceso — no sobrevive un reinicio) y espacia las peticiones. El catálogo de estos
+cinco instrumentos ya está en producción desde la migración 0016
+(`docs/operations/neon-0016-forex-metals-manual.sql`, MARKET-DATA-TWELVEDATA-CATALOG-001); falta
+activarla en el escáner desplegado, que sigue leyendo solo Binance y Kraken hasta que Jessica
+disponga de la clave y la configure en Render.
 
 Las velas guardadas se leen con `GET /api/v1/market-data/candles` (requiere sesión):
 `instrument_id` y `data_source_code` obligatorios, `timeframe_code` (por defecto
