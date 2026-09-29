@@ -90,6 +90,19 @@ universal:
 Qué política aplica a qué combinación de mercado y producto es una decisión técnica de
 POINT4-MULTI-001 (con los parámetros que necesite), no de este documento.
 
+**Decisión tomada (POINT4-TEST-001, seguimiento TWELVEDATA-4H-GRID-001, 29-09-2026):**
+`CRYPTO` recibe `GAP_NOT_APPLICABLE` (cotiza en continuo, sin huecos reales). `FOREX` y `METALS`
+reciben `GAP_OPTIONAL`: ambos pueden tener un hueco real, pero prácticamente solo en la reapertura
+semanal — nunca vela a vela dentro de una sesión, en ninguna de las temporalidades intradía del
+catálogo de Freyja — así que exigirlo (`GAP_REQUIRED`) dejaría `MORNING_STAR`/`EVENING_STAR`
+virtualmente indetectables ahí, el mismo problema que este documento ya advierte para `CRYPTO`. Un
+hueco real, si aparece, sigue siendo evidencia adicional. `METALS` se trata igual que `FOREX` por
+ahora porque XAU/USD (Twelve Data) es un mercado de tipo OTC con un patrón de sesión equivalente al
+de forex; si en el futuro Freyja añade un mercado con huecos diarios reales (una bolsa clásica), le
+correspondería `GAP_REQUIRED`, no `GAP_OPTIONAL`. Implementado en
+`candlestick_multi.py::_gap_policy_for_market`, aplicado cuando `ThreeCandleParams.gap_policy` se
+deja sin fijar (`None`); un valor explícito siempre gana sobre el valor por mercado.
+
 ## 3. Estados
 
 Ocho estados. Este documento fija su **significado**; el modelo de una instancia concreta, sus
