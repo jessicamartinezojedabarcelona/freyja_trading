@@ -111,7 +111,7 @@ def test_upgrade_downgrade_upgrade_cycle(temp_database_name: str) -> None:
             current = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-        assert current == "0015_context_snapshots"
+        assert current == "0016_forex_metals_catalog"
 
         command.downgrade(cfg, "base")
         with engine.connect() as connection:
@@ -123,7 +123,7 @@ def test_upgrade_downgrade_upgrade_cycle(temp_database_name: str) -> None:
         command.upgrade(cfg, "head")
         with engine.connect() as connection:
             final = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert final == "0015_context_snapshots"
+        assert final == "0016_forex_metals_catalog"
     finally:
         engine.dispose()
 
@@ -223,19 +223,23 @@ _CANONICAL_COUNTS = {
 }
 
 
-def test_upgrade_from_empty_to_head_reaches_expected_head_with_exact_seed(
+def test_upgrade_from_empty_reaches_the_frozen_v1_seed_with_exact_counts(
     temp_database_name: str,
 ) -> None:
+    """Pinned to 0009_seed_integrity_guard explicitly, not "head": that revision is where
+    the frozen POINT1-DOMAIN-001 v1 seed (catalog_seed_v1.py) is fully established and
+    verified. Later migrations (0016 onward) extend the catalog beyond v1 on purpose —
+    this test's job is only to prove the frozen v1 scope itself stayed exact."""
     temp_url = get_postgres_settings().url.set(database=temp_database_name)
     cfg = _alembic_config(temp_url)
     engine = create_engine(temp_url)
     try:
-        command.upgrade(cfg, "head")
+        command.upgrade(cfg, "0009_seed_integrity_guard")
         with engine.connect() as connection:
             current = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            assert current == "0015_context_snapshots"
+            assert current == "0009_seed_integrity_guard"
             counts = {
                 table: connection.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
                 for table in _CATALOG_TABLES
@@ -542,7 +546,7 @@ def test_0012_downgrade_upgrade_is_reversible(temp_database_name: str) -> None:
             current = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            assert current == "0015_context_snapshots"
+            assert current == "0016_forex_metals_catalog"
     finally:
         engine.dispose()
 
@@ -1143,7 +1147,9 @@ def test_0014_adds_the_kraken_source_and_mappings_and_changes_nothing_else(
             }
             tables_before = _existing_tables(connection, _MARKET_DATA_TABLES)
 
-        command.upgrade(cfg, "head")
+        # Not "head": later migrations (0016 onward) add their own catalog rows, and this
+        # test's job is only to isolate what 0014 itself changes.
+        command.upgrade(cfg, "0014_kraken_data_source")
         with engine.connect() as connection:
             assert _data_sources(connection) == [
                 ("BINANCE", "EXCHANGE", True),
@@ -1207,9 +1213,11 @@ def test_0014_downgrade_refuses_to_delete_stored_kraken_candles(temp_database_na
             command.downgrade(cfg, _BEFORE_KRAKEN)
 
         # Nothing was touched: the revision, the source, its mappings and the candle remain.
+        # (A multi-step downgrade runs as one transaction: 0014's guard rolls the whole
+        # chain back, including 0016/0015's own steps, so the version stays at head.)
         with engine.connect() as connection:
             assert _scalar(connection, "SELECT version_num FROM alembic_version") == (
-                "0015_context_snapshots"
+                "0016_forex_metals_catalog"
             )
             assert [row[0] for row in _data_sources(connection)] == ["BINANCE", "KRAKEN"]
             assert len(_mappings_of(connection, "KRAKEN")) == 4
@@ -1438,7 +1446,9 @@ def test_0015_adds_the_snapshots_table_and_changes_nothing_else(temp_database_na
             }
             sources_before = _data_sources(connection)
 
-        command.upgrade(cfg, "head")
+        # Not "head": later migrations (0016 onward) add their own catalog rows, and this
+        # test's job is only to isolate what 0015 itself changes.
+        command.upgrade(cfg, "0015_context_snapshots")
         with engine.connect() as connection:
             assert _existing_tables(connection, (_SNAPSHOTS_TABLE,)) == {_SNAPSHOTS_TABLE}
             assert _scalar(connection, f"SELECT COUNT(*) FROM {_SNAPSHOTS_TABLE}") == 0
@@ -1493,8 +1503,10 @@ def test_0015_downgrade_refuses_to_delete_stored_snapshots(temp_database_name: s
             command.downgrade(cfg, _BEFORE_SNAPSHOTS)
 
         with engine.connect() as connection:  # nothing was touched
+            # A multi-step downgrade runs as one transaction: 0015's guard rolls the whole
+            # chain back, including 0016's own step, so the version stays at head.
             assert _scalar(connection, "SELECT version_num FROM alembic_version") == (
-                "0015_context_snapshots"
+                "0016_forex_metals_catalog"
             )
             assert _scalar(connection, f"SELECT COUNT(*) FROM {_SNAPSHOTS_TABLE}") == 1
 
@@ -1541,7 +1553,9 @@ def test_0015_manual_neon_script_leaves_exactly_the_schema_the_migration_leaves(
         command.downgrade(cfg, _BEFORE_SNAPSHOTS)  # Alembic accepts what the script left behind
         with engine.connect() as connection:
             assert _existing_tables(connection, (_SNAPSHOTS_TABLE,)) == set()
-        command.upgrade(cfg, "head")
+        # Not "head": later migrations (0016 onward) leave their own schema/data behind, and
+        # this comparison is only about 0015's own script vs. its own migration.
+        command.upgrade(cfg, "0015_context_snapshots")
         with engine.connect() as connection:
             by_migration = _snapshot_schema(connection)
 
@@ -1575,5 +1589,297 @@ def test_0015_manual_neon_script_refuses_to_run_twice_or_on_the_wrong_revision(
             connection.exec_driver_sql(script)
         with engine.connect() as connection:
             assert _snapshot_schema(connection) == after_first  # the second run changed nothing
+    finally:
+        engine.dispose()
+
+
+# --- 0016_forex_metals_catalog (MARKET-DATA-TWELVEDATA-CATALOG-001) -----------------------------
+
+_BEFORE_FOREX_METALS = "0015_context_snapshots"
+
+_NEW_MARKET_CODE = "METALS"
+_NEW_ASSET_CODES = ("GBP", "JPY", "CHF", "XAU")
+# (market, symbol)
+_NEW_INSTRUMENT_KEYS: tuple[tuple[str, str], ...] = (
+    ("FOREX", "GBP/USD"),
+    ("FOREX", "USD/JPY"),
+    ("FOREX", "USD/CHF"),
+    (_NEW_MARKET_CODE, "XAU/USD"),
+)
+
+
+def _markets(connection: Connection) -> list[tuple[str, str, bool]]:
+    rows = connection.execute(
+        text("SELECT code, display_name, is_active FROM freyja2_underlying_markets ORDER BY code")
+    ).all()
+    return [(row[0], row[1], row[2]) for row in rows]
+
+
+def _new_instrument_rows(connection: Connection) -> list[tuple[str, str]]:
+    rows = connection.execute(
+        text(
+            "SELECT m.code, i.canonical_symbol FROM freyja2_instruments i "
+            "JOIN freyja2_underlying_markets m ON m.id = i.underlying_market_id "
+            "WHERE i.canonical_symbol = ANY(:symbols) "
+            "ORDER BY m.code, i.canonical_symbol"
+        ),
+        {"symbols": [symbol for _market, symbol in _NEW_INSTRUMENT_KEYS]},
+    ).all()
+    return [(row[0], row[1]) for row in rows]
+
+
+def test_0016_adds_the_forex_metals_catalog_and_changes_nothing_else(
+    temp_database_name: str,
+) -> None:
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, _BEFORE_FOREX_METALS)
+        with engine.connect() as connection:
+            markets_before = _markets(connection)
+            binance_before = _mappings_of(connection, "BINANCE")
+            kraken_before = _mappings_of(connection, "KRAKEN")
+            tables_before = _existing_tables(connection, _MARKET_DATA_TABLES)
+
+        # Not "head": this test's job is only to isolate what 0016 itself changes.
+        command.upgrade(cfg, "0016_forex_metals_catalog")
+        with engine.connect() as connection:
+            markets_after = _markets(connection)
+            assert set(markets_after) - set(markets_before) == {(_NEW_MARKET_CODE, "Metals", True)}
+
+            new_rows = _new_instrument_rows(connection)
+            assert new_rows == sorted(_NEW_INSTRUMENT_KEYS)
+
+            assets = {
+                row[0]
+                for row in connection.execute(
+                    text("SELECT code FROM freyja2_assets WHERE code = ANY(:codes)"),
+                    {"codes": list(_NEW_ASSET_CODES)},
+                ).all()
+            }
+            assert assets == set(_NEW_ASSET_CODES)
+
+            for _market, symbol in _NEW_INSTRUMENT_KEYS:
+                count = connection.execute(
+                    text(
+                        "SELECT COUNT(*) FROM freyja2_instrument_timeframes it "
+                        "JOIN freyja2_instruments i ON i.instrument_id = it.instrument_id "
+                        "WHERE i.canonical_symbol = :symbol"
+                    ),
+                    {"symbol": symbol},
+                ).scalar_one()
+                assert count == 5  # every existing timeframe
+
+            # EUR/USD SPOT (already seeded in v1) is untouched, still with no provider mapping.
+            eur_usd_market = connection.execute(
+                text(
+                    "SELECT m.code FROM freyja2_instruments i "
+                    "JOIN freyja2_underlying_markets m ON m.id = i.underlying_market_id "
+                    "JOIN freyja2_product_types p ON p.id = i.product_type_id "
+                    "WHERE i.canonical_symbol = 'EUR/USD' AND p.code = 'SPOT'"
+                )
+            ).scalar_one()
+            assert eur_usd_market == "FOREX"
+
+            # Providers, unrelated market data, and schema are exactly as they were.
+            assert _mappings_of(connection, "BINANCE") == binance_before
+            assert _mappings_of(connection, "KRAKEN") == kraken_before
+            assert _existing_tables(connection, _MARKET_DATA_TABLES) == tables_before
+    finally:
+        engine.dispose()
+
+
+def test_0016_downgrade_upgrade_is_reversible_and_leaves_v1_seed_intact(
+    temp_database_name: str,
+) -> None:
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, "0016_forex_metals_catalog")
+        command.downgrade(cfg, _BEFORE_FOREX_METALS)
+        with engine.connect() as connection:
+            assert _scalar(connection, "SELECT version_num FROM alembic_version") == (
+                _BEFORE_FOREX_METALS
+            )
+            assert _new_instrument_rows(connection) == []
+            assert _NEW_MARKET_CODE not in {code for code, _name, _active in _markets(connection)}
+            for code in _NEW_ASSET_CODES:
+                assert (
+                    connection.execute(
+                        text("SELECT COUNT(*) FROM freyja2_assets WHERE code = :code"),
+                        {"code": code},
+                    ).scalar_one()
+                    == 0
+                )
+            # The frozen v1 seed itself is untouched.
+            assert (
+                connection.execute(text("SELECT COUNT(*) FROM freyja2_instruments")).scalar_one()
+                == 10
+            )
+
+        command.upgrade(cfg, "0016_forex_metals_catalog")
+        with engine.connect() as connection:
+            assert len(_new_instrument_rows(connection)) == 4
+    finally:
+        engine.dispose()
+
+
+def test_0016_downgrade_refuses_to_delete_dependent_provider_mapping(
+    temp_database_name: str,
+) -> None:
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, "0016_forex_metals_catalog")
+        with engine.begin() as connection:
+            xau_usd = connection.execute(
+                text(
+                    "SELECT instrument_id FROM freyja2_instruments "
+                    "WHERE canonical_symbol = 'XAU/USD'"
+                )
+            ).scalar_one()
+            source_id = connection.execute(
+                text(
+                    "INSERT INTO freyja2_data_sources "
+                    "(id, code, display_name, source_type, is_active) "
+                    "VALUES (gen_random_uuid(), 'TWELVE_DATA', 'Twelve Data', 'MARKET_DATA', true) "
+                    "RETURNING id"
+                )
+            ).scalar_one()
+            connection.execute(
+                text(
+                    "INSERT INTO freyja2_data_source_instruments "
+                    "(id, data_source_id, instrument_id, provider_symbol, purpose, is_active) "
+                    "VALUES (gen_random_uuid(), :source, :instrument, 'XAU/USD', "
+                    "CAST('ANALYSIS' AS freyja2_data_source_instrument_purpose), true)"
+                ),
+                {"source": source_id, "instrument": xau_usd},
+            )
+
+        with pytest.raises(RuntimeError, match="0016 downgrade refused"):
+            command.downgrade(cfg, _BEFORE_FOREX_METALS)
+
+        # Nothing was touched: the revision and the new catalog rows remain.
+        with engine.connect() as connection:
+            assert _scalar(connection, "SELECT version_num FROM alembic_version") == (
+                "0016_forex_metals_catalog"
+            )
+            assert len(_new_instrument_rows(connection)) == 4
+
+        # Once that data is removed on purpose, the downgrade is allowed.
+        with engine.begin() as connection:
+            connection.execute(text("DELETE FROM freyja2_data_source_instruments"))
+            connection.execute(text("DELETE FROM freyja2_data_sources WHERE code = 'TWELVE_DATA'"))
+        command.downgrade(cfg, _BEFORE_FOREX_METALS)
+        with engine.connect() as connection:
+            assert _new_instrument_rows(connection) == []
+    finally:
+        engine.dispose()
+
+
+_MANUAL_FOREX_METALS_SQL = (
+    Path(__file__).resolve().parents[3]
+    / "docs"
+    / "operations"
+    / "neon-0016-forex-metals-manual.sql"
+)
+
+
+def _forex_metals_state(connection: Connection) -> tuple[object, ...]:
+    """Everything 0016 is responsible for, ids included (they are deterministic)."""
+    markets = connection.execute(
+        text(
+            "SELECT id, code, display_name, is_active FROM freyja2_underlying_markets "
+            "WHERE code = :code"
+        ),
+        {"code": _NEW_MARKET_CODE},
+    ).all()
+    assets = connection.execute(
+        text(
+            "SELECT id, code, display_name, is_active FROM freyja2_assets WHERE code = ANY(:codes)"
+        ),
+        {"codes": list(_NEW_ASSET_CODES)},
+    ).all()
+    instruments = connection.execute(
+        text(
+            "SELECT instrument_id, underlying_market_id, product_type_id, canonical_symbol, "
+            "base_asset_id, quote_asset_id, is_active FROM freyja2_instruments "
+            "WHERE canonical_symbol = ANY(:symbols)"
+        ),
+        {"symbols": [symbol for _market, symbol in _NEW_INSTRUMENT_KEYS]},
+    ).all()
+    associations = connection.execute(
+        text(
+            "SELECT it.instrument_id, it.timeframe_id, it.is_active "
+            "FROM freyja2_instrument_timeframes it "
+            "JOIN freyja2_instruments i ON i.instrument_id = it.instrument_id "
+            "WHERE i.canonical_symbol = ANY(:symbols)"
+        ),
+        {"symbols": [symbol for _market, symbol in _NEW_INSTRUMENT_KEYS]},
+    ).all()
+    version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+    return (
+        sorted(tuple(map(str, row)) for row in markets),
+        sorted(tuple(map(str, row)) for row in assets),
+        sorted(tuple(map(str, row)) for row in instruments),
+        sorted(tuple(map(str, row)) for row in associations),
+        version,
+    )
+
+
+def test_0016_manual_neon_script_does_exactly_what_the_migration_does(
+    temp_database_name: str,
+) -> None:
+    """Neon is migrated by hand with this script (Render never runs migrations), so it must
+    never drift from the migration: same rows, same ids, same revision, and a database it
+    touched must still be downgradable by Alembic."""
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    try:
+        command.upgrade(cfg, _BEFORE_FOREX_METALS)
+        script = _MANUAL_FOREX_METALS_SQL.read_text(encoding="utf-8")
+        with engine.begin() as connection:
+            connection.exec_driver_sql(script)
+        with engine.connect() as connection:
+            by_script = _forex_metals_state(connection)
+
+        command.downgrade(cfg, _BEFORE_FOREX_METALS)  # Alembic accepts what the script left behind
+        with engine.connect() as connection:
+            assert _new_instrument_rows(connection) == []
+        command.upgrade(cfg, "0016_forex_metals_catalog")  # the script's revision, not head
+        with engine.connect() as connection:
+            by_migration = _forex_metals_state(connection)
+
+        assert by_script == by_migration
+    finally:
+        engine.dispose()
+
+
+def test_0016_manual_neon_script_refuses_to_run_twice_or_on_the_wrong_revision(
+    temp_database_name: str,
+) -> None:
+    temp_url = get_postgres_settings().url.set(database=temp_database_name)
+    cfg = _alembic_config(temp_url)
+    engine = create_engine(temp_url)
+    script = _MANUAL_FOREX_METALS_SQL.read_text(encoding="utf-8")
+    try:
+        command.upgrade(cfg, "0014_kraken_data_source")  # before context snapshots existed
+        with pytest.raises(DBAPIError), engine.begin() as connection:
+            connection.exec_driver_sql(script)
+
+        command.upgrade(cfg, _BEFORE_FOREX_METALS)
+        with engine.begin() as connection:
+            connection.exec_driver_sql(script)
+        with engine.connect() as connection:
+            after_first = _forex_metals_state(connection)
+
+        with pytest.raises(DBAPIError, match="0016 abortada"), engine.begin() as connection:
+            connection.exec_driver_sql(script)
+        with engine.connect() as connection:
+            assert _forex_metals_state(connection) == after_first  # the second run changed nothing
     finally:
         engine.dispose()

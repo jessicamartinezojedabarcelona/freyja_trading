@@ -34,8 +34,11 @@ def _alembic_config() -> Config:
 
 @pytest.fixture(scope="module")
 def seeded_engine() -> Iterator[Engine]:
-    """One isolated temp database, migrated to head (schema + seed), shared
-    read-only across the tests in this module."""
+    """One isolated temp database, migrated to 0009_seed_integrity_guard (schema + the
+    frozen v1 seed, fully established and verified), shared read-only across the tests in
+    this module. Not "head": this module tests the exact, frozen POINT1-DOMAIN-001 v1
+    seed itself (catalog_seed_v1.py) — later migrations (0016 onward) extend the catalog
+    beyond v1 on purpose, and must not shift what this module asserts."""
     settings = get_postgres_settings()
     admin_url = settings.url.set(database="postgres")
     admin_engine = create_engine(admin_url, isolation_level="AUTOCOMMIT")
@@ -48,7 +51,7 @@ def seeded_engine() -> Iterator[Engine]:
         temp_url = settings.url.set(database=db_name)
         cfg = _alembic_config()
         cfg.attributes["database_url"] = temp_url
-        command.upgrade(cfg, "head")
+        command.upgrade(cfg, "0009_seed_integrity_guard")
 
         engine = create_engine(temp_url)
         try:
@@ -72,7 +75,9 @@ def seeded_engine() -> Iterator[Engine]:
 def isolated_seeded_connection() -> Iterator[Connection]:
     """A fresh isolated temp database per test, for tests that mutate seed
     state (idempotency re-verification, divergence detection) — never
-    shared with other tests."""
+    shared with other tests. Pinned to 0009_seed_integrity_guard, not "head":
+    these tests are about the frozen v1 seed's own divergence mechanics,
+    unaffected by later, additive catalog extensions (0016 onward)."""
     settings = get_postgres_settings()
     admin_url = settings.url.set(database="postgres")
     admin_engine = create_engine(admin_url, isolation_level="AUTOCOMMIT")
@@ -85,7 +90,7 @@ def isolated_seeded_connection() -> Iterator[Connection]:
         temp_url = settings.url.set(database=db_name)
         cfg = _alembic_config()
         cfg.attributes["database_url"] = temp_url
-        command.upgrade(cfg, "head")
+        command.upgrade(cfg, "0009_seed_integrity_guard")
 
         engine = create_engine(temp_url)
         try:
@@ -1084,7 +1089,7 @@ def test_downgrade_aborts_on_modified_canonical_row_and_deletes_nothing(
     isolated_migrated_database: tuple[Config, Engine],
 ) -> None:
     cfg, engine = isolated_migrated_database
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "0009_seed_integrity_guard")
 
     with engine.begin() as connection:
         connection.execute(
@@ -1102,14 +1107,14 @@ def test_downgrade_aborts_on_modified_canonical_row_and_deletes_nothing(
         assert _count(connection, "freyja2_timeframes") == 5
         assert _count(connection, "freyja2_instruments") == 10
         assert _count(connection, "freyja2_instrument_timeframes") == 50
-        assert _current_revision(connection) == "0015_context_snapshots"
+        assert _current_revision(connection) == "0009_seed_integrity_guard"
 
 
 def test_downgrade_aborts_on_inactive_canonical_row_and_deletes_nothing(
     isolated_migrated_database: tuple[Config, Engine],
 ) -> None:
     cfg, engine = isolated_migrated_database
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "0009_seed_integrity_guard")
 
     with engine.begin() as connection:
         connection.execute(
@@ -1123,7 +1128,7 @@ def test_downgrade_aborts_on_inactive_canonical_row_and_deletes_nothing(
     with engine.connect() as connection:
         assert _count(connection, "freyja2_instruments") == 10
         assert _count(connection, "freyja2_instrument_timeframes") == 50
-        assert _current_revision(connection) == "0015_context_snapshots"
+        assert _current_revision(connection) == "0009_seed_integrity_guard"
 
 
 def test_downgrade_blocked_by_external_reference_without_cascade_or_partial_loss(
@@ -1137,7 +1142,7 @@ def test_downgrade_blocked_by_external_reference_without_cascade_or_partial_loss
     failure rolls back every delete already issued in this downgrade: no
     partial loss."""
     cfg, engine = isolated_migrated_database
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "0009_seed_integrity_guard")
 
     custom_instrument_id = uuid.uuid4()
     one_minute_id = seed_spec.timeframe_id("1m")
@@ -1173,7 +1178,7 @@ def test_downgrade_blocked_by_external_reference_without_cascade_or_partial_loss
         assert _count(connection, "freyja2_timeframes") == 5
         assert _count(connection, "freyja2_instruments") == 11  # 10 canonical + 1 custom
         assert _count(connection, "freyja2_instrument_timeframes") == 51  # 50 + 1 custom
-        assert _current_revision(connection) == "0015_context_snapshots"
+        assert _current_revision(connection) == "0009_seed_integrity_guard"
 
 
 # --- POINT1-DB-001: 0007 <-> 0008 preserve the seed (unchanged behavior) ----
@@ -1238,7 +1243,7 @@ def test_downgrade_0008_to_0007_and_back_preserves_seed_data() -> None:
         temp_url = settings.url.set(database=db_name)
         cfg = _alembic_config()
         cfg.attributes["database_url"] = temp_url
-        command.upgrade(cfg, "head")
+        command.upgrade(cfg, "0009_seed_integrity_guard")
 
         engine = create_engine(temp_url)
         try:
@@ -1326,7 +1331,7 @@ def test_0009_downgrade_upgrade_roundtrip_does_not_modify_data(
     round-tripping head (0009) -> 0008 -> 0009 must leave every catalog
     table byte-for-byte identical at each step."""
     cfg, engine = isolated_migrated_database
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "0009_seed_integrity_guard")
 
     with engine.connect() as connection:
         before = _snapshot_catalog(connection)
@@ -1358,7 +1363,7 @@ def test_downgrade_seed_removes_only_seeded_rows_keeps_schema_and_legacy_intact(
         temp_url = settings.url.set(database=db_name)
         cfg = _alembic_config()
         cfg.attributes["database_url"] = temp_url
-        command.upgrade(cfg, "head")
+        command.upgrade(cfg, "0009_seed_integrity_guard")
 
         engine = create_engine(temp_url)
         try:
@@ -1383,7 +1388,7 @@ def test_downgrade_seed_removes_only_seeded_rows_keeps_schema_and_legacy_intact(
                 ).scalar_one()
                 assert auth_users_count == 0
 
-            command.upgrade(cfg, "head")
+            command.upgrade(cfg, "0009_seed_integrity_guard")
             with engine.connect() as connection:
                 assert _count(connection, "freyja2_instruments") == 10
         finally:

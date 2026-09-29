@@ -153,7 +153,9 @@ def test_filters_by_market_product_symbol_timeframe(
     response = client.get(INSTRUMENTS_URL, params={"timeframe_code": "4h"})
     assert response.status_code == 200
     body = response.json()
-    assert body["total"] == 10  # all 10 seeded v1 instruments support every timeframe
+    # 10 seeded v1 instruments + 4 from MARKET-DATA-TWELVEDATA-CATALOG-001
+    # (GBP/USD, USD/JPY, USD/CHF, XAU/USD), all supporting every timeframe.
+    assert body["total"] == 14
 
 
 def test_empty_result_is_honest_not_a_fallback(client: TestClient, db_session: Session) -> None:
