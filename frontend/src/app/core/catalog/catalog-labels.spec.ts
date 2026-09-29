@@ -4,6 +4,7 @@ describe('catalog labels', () => {
   it('translates the codes the catalog has today', () => {
     expect(marketLabel({ code: 'CRYPTO', display_name: 'Crypto' })).toBe('Cripto');
     expect(marketLabel({ code: 'FOREX', display_name: 'Forex' })).toBe('Forex');
+    expect(marketLabel({ code: 'METALS', display_name: 'Metals' })).toBe('Metales');
     expect(productLabel({ code: 'SPOT', display_name: 'Spot' })).toBe('Spot');
     expect(productLabel({ code: 'BINARY_OPTION', display_name: 'Binary option' })).toBe(
       'Opción binaria',
