@@ -922,6 +922,7 @@ plan gratuito de Neon).
 | `FREYJA_FRONTEND_ORIGIN` | Único origen permitido para CORS con credenciales | Secreto gestionado — URL real del Static Site |
 | `FREYJA_ALLOWED_HOSTS` | Hosts aceptados en la cabecera `Host` | Secreto gestionado — hostname real del backend |
 | `FREYJA_RATE_LIMIT_HMAC_KEY` | Clave HMAC para *rate limiting* | Secreto gestionado — generado una vez |
+| `FREYJA_TWELVE_DATA_API_KEY` | Clave de la API de Twelve Data (ADR 0009) | Secreto gestionado — plan gratuito de Twelve Data |
 | `FREYJA_SESSION_TTL_MINUTES` | Duración de la cookie de sesión | Valor literal (`720`) |
 | `DATABASE_URL` | Cadena de conexión **pooled** de Neon (consultas en tiempo de ejecución) | Secreto gestionado — debe incluir `sslmode=require` |
 
