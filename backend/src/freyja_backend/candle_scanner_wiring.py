@@ -34,20 +34,27 @@ def _require_twelve_data_api_key(settings: Settings) -> str:
 
 
 # Every source the scanner can read: how to build its client (given settings, since Twelve
-# Data needs an API key) and which canonical instruments it publishes. A test keeps the
-# keys in step with `SCANNER_SOURCES`.
-_SOURCES: Mapping[str, tuple[Callable[[Settings], _SourceClient], tuple[InstrumentRef, ...]]] = {
+# Data needs an API key), which canonical instruments it publishes, and which timeframes it
+# can actually serve for them (TWELVEDATA-4H-GRID-001: not every source supports every
+# catalog timeframe — Twelve Data's forex/metals 4h candles don't align to Freyja's UTC
+# grid, so its adapter never offers Timeframe.H4). A test keeps the keys in step with
+# `SCANNER_SOURCES`.
+_SOURCES: Mapping[
+    str, tuple[Callable[[Settings], _SourceClient], tuple[InstrumentRef, ...], frozenset[Timeframe]]
+] = {
     binance_spot_rest.SOURCE_CODE: (
         lambda _settings: binance_spot_rest.BinanceSpotRestClient(),
         tuple(
             InstrumentRef("CRYPTO", "SPOT", symbol) for symbol in binance_spot_rest.PROVIDER_SYMBOLS
         ),
+        frozenset(Timeframe),
     ),
     kraken_spot_rest.SOURCE_CODE: (
         lambda _settings: kraken_spot_rest.KrakenSpotRestClient(),
         tuple(
             InstrumentRef("CRYPTO", "SPOT", symbol) for symbol in kraken_spot_rest.PROVIDER_SYMBOLS
         ),
+        frozenset(Timeframe),
     ),
     twelve_data_rest.SOURCE_CODE: (
         lambda settings: twelve_data_rest.TwelveDataRestClient(
@@ -57,6 +64,7 @@ _SOURCES: Mapping[str, tuple[Callable[[Settings], _SourceClient], tuple[Instrume
             InstrumentRef(twelve_data_rest.SYMBOL_MARKETS[symbol], "SPOT", symbol)
             for symbol in twelve_data_rest.PROVIDER_SYMBOLS
         ),
+        twelve_data_rest.SUPPORTED_TIMEFRAMES,
     ),
 }
 
@@ -73,14 +81,14 @@ def build_candle_scanner_service(settings: Settings) -> CandleScannerService:
             code not in _SOURCES
         ):  # unreachable while Settings validates the list; never scan a guess
             raise ValueError(f"unknown scanner source {code!r}")
-        build_client, instruments = _SOURCES[code]
+        build_client, instruments, timeframes = _SOURCES[code]
         client = build_client(settings)
         providers[code] = client
         closers.append(client.close)
         targets.extend(
             ScanTarget(code, instrument, timeframe)
             for instrument in instruments
-            for timeframe in Timeframe
+            for timeframe in timeframes
         )
     scanner = CandleScanner(create_session_factory(engine), providers, targets)
     return CandleScannerService(

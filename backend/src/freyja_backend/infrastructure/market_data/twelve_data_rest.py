@@ -35,12 +35,16 @@ What is specific to Twelve Data:
   pair back from `time_series`' own `meta.symbol` (not `meta.currency_base`/
   `currency_quote`, which are free-text names, not catalog codes) with `outputsize=1`.
 
-Left unverified without a live API key (flagged in the ADR, to be confirmed against the
-real API before this adapter is used in production): whether Twelve Data ever answers an
-error with HTTP 200 and a JSON `status: "error"` body (handled defensively here) in
-addition to standard HTTP error status codes; whether the most recent candle in a
-`time_series` answer can still be in progress (if so, `assess_candles`' close_time <= now
-check already excludes it, the same as for Binance and Kraken).
+Confirmed against the live API in production (2026-09-29, TWELVEDATA-4H-GRID-001): forex/
+metals 4h candles are anchored to a session boundary, not Freyja's UTC grid — see
+`SUPPORTED_TIMEFRAMES` and `_resolve_interval`. 1m/5m/15m/1h are all UTC-grid-aligned and
+unaffected.
+
+Still left unverified without further live testing (flagged in the ADR): whether Twelve
+Data ever answers an error with HTTP 200 and a JSON `status: "error"` body (handled
+defensively here) in addition to standard HTTP error status codes; whether the most recent
+candle in a `time_series` answer can still be in progress (if so, `assess_candles`'
+close_time <= now check already excludes it, the same as for Binance and Kraken).
 
 Retries are bounded and deterministic (exponential backoff without jitter, injectable
 `sleep`); a `Retry-After` longer than the configured cap is not waited for — the call
@@ -126,9 +130,22 @@ _INTERVALS: Mapping[Timeframe, str] = MappingProxyType(
         Timeframe.M5: "5min",
         Timeframe.M15: "15min",
         Timeframe.H1: "1h",
-        Timeframe.H4: "4h",
+        # No Timeframe.H4: confirmed against the live API (2026-09-29, production) that
+        # Twelve Data's forex/metals 4h candles are anchored to a session boundary (the New
+        # York open), never Freyja's UTC grid (00/04/08/12/16/20) — every 4h candle is
+        # rejected by assess_candles as INVALID_RESPONSE, on every symbol, every time. See
+        # TWELVEDATA-4H-GRID-001. Deliberately not "fixed" by shifting or relabeling the
+        # candle (it would misrepresent what window it actually covers) or by relaxing the
+        # shared grid check (every other adapter still needs it). The only honest way to
+        # serve real 4h data would be aggregating four verified 1h candles inside this
+        # adapter — not done here; SUPPORTED_TIMEFRAMES below is what the scanner actually
+        # requests, so a doomed-to-fail request is never sent (also saves scarce daily quota).
     }
 )
+
+# What this adapter actually serves — narrower than the catalog's five timeframes (all of
+# which remain valid concepts for these instruments; only Twelve Data can't supply 4h).
+SUPPORTED_TIMEFRAMES: frozenset[Timeframe] = frozenset(_INTERVALS)
 
 _DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 _MIN_DATETIME = datetime(2000, 1, 1, tzinfo=UTC)
@@ -495,6 +512,11 @@ def _resolve_symbol(instrument: InstrumentRef) -> str:
 
 
 def _resolve_interval(timeframe: Timeframe) -> str:
+    if timeframe is Timeframe.H4:
+        raise MarketDataRequestError(
+            "4h is not served by Twelve Data: its forex/metals 4h candles are not aligned "
+            "to Freyja's UTC grid (confirmed 2026-09-29, TWELVEDATA-4H-GRID-001)"
+        )
     if not isinstance(timeframe, Timeframe) or timeframe not in _INTERVALS:
         raise MarketDataRequestError(f"unsupported timeframe: {timeframe!r}")
     return _INTERVALS[timeframe]
