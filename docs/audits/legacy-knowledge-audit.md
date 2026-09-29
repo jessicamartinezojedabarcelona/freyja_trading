@@ -1,5 +1,14 @@
 # Auditoría de conocimiento reutilizable — Freyja anterior
 
+> **⚠️ DOCUMENTO HISTÓRICO CONGELADO (nota añadida 30-09-2026, decisión de Jessica).**
+> - Es el documento histórico de `LEGACY-KNOWLEDGE-AUDIT-001`, una tarea distinta de las de
+>   Freyja 2.0 (POINT1–POINT15) y de POINT5-LEGACY-001.
+> - **No es fuente activa para el roadmap actual.**
+> - **No autoriza copiar código, migraciones ni lógica del repositorio anterior.**
+> - **No debe usarse para el punto 5 ni para ninguna tarea nueva, salvo decisión explícita de
+>   Jessica.** En particular, el inventario de POINT5-LEGACY-001 (repo actual, 29/30-09-2026) se
+>   hizo sin consultar este documento ni el repositorio legacy que describe.
+
 > Tarea: `LEGACY-KNOWLEDGE-AUDIT-001`
 > Tipo: auditoría estática de conocimiento, de solo lectura. No es una migración.
 > Base de Freyja 2.0 auditada: commit `e626e0da4c76c8056f3709af68c7173f3e62dfc0` (rama `main`).
