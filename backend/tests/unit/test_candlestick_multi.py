@@ -44,6 +44,8 @@ STEP = TF.duration
 SOURCE = "BINANCE"
 AUTHORIZED = frozenset({SOURCE})
 BTC = InstrumentRef("CRYPTO", "SPOT", "BTC/USDT")
+EUR_USD = InstrumentRef("FOREX", "SPOT", "EUR/USD")
+XAU_USD = InstrumentRef("METALS", "SPOT", "XAU/USD")
 
 
 # -- building a series: known trend history + two hand-shaped candles ------------------------
@@ -101,11 +103,13 @@ def context_for(
     authorized_sources: frozenset[str] = AUTHORIZED,
     params: MultiCandleParams = DEFAULT_MULTI_CANDLE_PARAMS,
     triple: ThreeCandleParams = DEFAULT_THREE_CANDLE_PARAMS,
+    instrument: InstrumentRef = BTC,
+    schedule: MarketSchedule = MarketSchedule.CONTINUOUS_24_7,
 ) -> MultiCandleContext:
     return MultiCandleContext(
         instrument_id="instrument-1",
-        instrument=BTC,
-        schedule=MarketSchedule.CONTINUOUS_24_7,
+        instrument=instrument,
+        schedule=schedule,
         data_source=SOURCE,
         authorized_sources=authorized_sources,
         timeframe=TF,
@@ -446,10 +450,90 @@ def test_three_inside_down_coexists_with_the_bearish_harami_it_is_built_on() -> 
 # -- gap policy ---------------------------------------------------------------------------------
 
 
-def test_gap_not_applicable_is_the_default_and_needs_no_real_gap() -> None:
-    assert DEFAULT_THREE_CANDLE_PARAMS.gap_policy is GapPolicy.GAP_NOT_APPLICABLE
+def test_gap_policy_defaults_to_none_meaning_the_market_decides() -> None:
+    """`ThreeCandleParams.gap_policy` is no longer a fixed CRYPTO-shaped default
+    (TWELVEDATA-4H-GRID-001 follow-up): `None` means `_gap_policy_for_market` resolves it from
+    `context.instrument.market` at detection time. An explicit value always overrides it."""
+    assert DEFAULT_THREE_CANDLE_PARAMS.gap_policy is None
+
+
+def test_crypto_defaults_to_gap_not_applicable_and_needs_no_real_gap() -> None:
     candles = series3(DOWN, *MORNING_STAR)
-    assert state_of(candles, T.MORNING_STAR) is S.CONFIRMED
+    context = context_for(candles, instrument=BTC, schedule=MarketSchedule.CONTINUOUS_24_7)
+    instance = next(
+        i
+        for i in detect_multi_candle_patterns(context, candles).instances
+        if i.pattern_type is T.MORNING_STAR
+    )
+    assert instance.state is S.CONFIRMED
+    # No GAP evidence at all: GAP_NOT_APPLICABLE measures nothing (contract section 6).
+    assert {item.code for item in instance.latest.evidence} == {"CONTEXT"}
+
+
+@pytest.mark.parametrize(
+    ("instrument", "schedule"),
+    [
+        (EUR_USD, MarketSchedule.FOREX_WEEKLY),
+        (XAU_USD, MarketSchedule.FOREX_WEEKLY),  # METALS treated like FOREX for now
+    ],
+)
+def test_forex_and_metals_default_to_gap_optional_a_missing_gap_still_confirms(
+    instrument: InstrumentRef, schedule: MarketSchedule
+) -> None:
+    """FOREX/METALS get GAP_OPTIONAL by default, never GAP_REQUIRED: a real gap almost never
+    happens candle-to-candle within a session at Freyja's intraday timeframes, so demanding one
+    would make MORNING_STAR/EVENING_STAR nearly undetectable there (patrones-de-vela.md, section
+    2, TWELVEDATA-4H-GRID-001 follow-up)."""
+    candles = series3(DOWN, *MORNING_STAR)  # same ungapped shape CRYPTO confirms with
+    context = context_for(candles, instrument=instrument, schedule=schedule)
+    instance = next(
+        i
+        for i in detect_multi_candle_patterns(context, candles).instances
+        if i.pattern_type is T.MORNING_STAR
+    )
+    assert instance.state is S.CONFIRMED
+    # GAP_OPTIONAL still measures and records the (here, absent-enough) gap as evidence.
+    evidence_codes = {item.code for item in instance.latest.evidence}
+    assert evidence_codes == {"CONTEXT", "GAP"}
+
+
+@pytest.mark.parametrize(
+    ("instrument", "schedule"),
+    [(EUR_USD, MarketSchedule.FOREX_WEEKLY), (XAU_USD, MarketSchedule.FOREX_WEEKLY)],
+)
+def test_forex_and_metals_record_a_real_gap_as_evidence_when_one_exists(
+    instrument: InstrumentRef, schedule: MarketSchedule
+) -> None:
+    gapped = (
+        ("1010", "1012", "990", "992"),
+        ("970", "972", "968", "970"),
+        ("969", "1005", "968", "1003"),
+    )
+    candles = series3(DOWN, *gapped)
+    context = context_for(candles, instrument=instrument, schedule=schedule)
+    instance = next(
+        i
+        for i in detect_multi_candle_patterns(context, candles).instances
+        if i.pattern_type is T.MORNING_STAR
+    )
+    assert instance.state is S.CONFIRMED
+    gap_evidence = next(item for item in instance.latest.evidence if item.code == "GAP")
+    facts = dict(gap_evidence.facts)
+    assert facts["policy"] == GapPolicy.GAP_OPTIONAL.value
+    assert facts["met"] is True
+
+
+def test_an_explicit_gap_policy_overrides_the_market_default_even_for_forex() -> None:
+    """Setting `gap_policy` directly always wins over `_gap_policy_for_market`, regardless of
+    the instrument's market — FOREX does not force GAP_OPTIONAL on a caller that asked for
+    GAP_REQUIRED explicitly."""
+    strict = ThreeCandleParams(gap_policy=GapPolicy.GAP_REQUIRED)
+    candles = series3(DOWN, *MORNING_STAR)
+    context = context_for(
+        candles, triple=strict, instrument=EUR_USD, schedule=MarketSchedule.FOREX_WEEKLY
+    )
+    found = {i.pattern_type for i in detect_multi_candle_patterns(context, candles).instances}
+    assert T.MORNING_STAR not in found
 
 
 def test_gap_required_rejects_a_morning_star_whose_gap_is_too_small() -> None:

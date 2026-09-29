@@ -13,8 +13,13 @@ onto the borrowed thresholds first, the same trick ``DiamondParams.channel_param
 ``pattern_detection.py``. A change to one family's thresholds or detector logic never shifts the
 other family's instance identities.
 
-Thresholds are provisional and versioned (``multi-candle-params-v1``, ``three-candle-params-v1``):
+Thresholds are provisional and versioned (``multi-candle-params-v1``, ``three-candle-params-v2``):
 reasoned from published technical-analysis definitions, not validated (PARAMS-VALIDATION-001).
+
+The gap policy for ``MORNING_STAR``/``EVENING_STAR`` (contract section 2) is decided by market:
+``_gap_policy_for_market`` gives CRYPTO ``GAP_NOT_APPLICABLE`` and FOREX/METALS ``GAP_OPTIONAL``,
+applied whenever ``ThreeCandleParams.gap_policy`` is left unset (``None``); an explicit value on
+the params always overrides the market default.
 """
 
 import enum
@@ -111,7 +116,10 @@ DEFAULT_MULTI_CANDLE_PARAMS = MultiCandleParams()
 
 # Bump on ANY change to a three-candle threshold, to a structural rule, or to how they are read.
 # Its own version, decoupled from `MultiCandleParams`'s: see the module docstring.
-THREE_CANDLE_PARAMETER_VERSION = "three-candle-params-v1"
+# v2 (POINT4-TEST-001 follow-up, 2026-09-29): the gap policy for MORNING_STAR/EVENING_STAR is
+# now decided by market (`_gap_policy_for_market`) when `gap_policy` is left unset, instead of
+# always defaulting to GAP_NOT_APPLICABLE regardless of instrument — see `ThreeCandleParams`.
+THREE_CANDLE_PARAMETER_VERSION = "three-candle-params-v2"
 # One detector, one version, for the six three-candle patterns.
 THREE_CANDLE_DETECTOR_VERSION = "three-candle-detector-v1"
 
@@ -146,8 +154,15 @@ class ThreeCandleParams:
     # MORNING_STAR/EVENING_STAR, with GAP_REQUIRED: the gap between candle 1 and candle 2's
     # bodies is at least this fraction of candle 1's body.
     gap_min_fraction: Decimal = Decimal("0.10")
-    # CRYPTO x SPOT trades in continuous session, no real gaps: patrones-de-vela.md section 2.
-    gap_policy: GapPolicy = GapPolicy.GAP_NOT_APPLICABLE
+    # None means "let the market decide" (`_gap_policy_for_market`, keyed on
+    # `MultiCandleContext.instrument.market` — patrones-de-vela.md section 2, POINT4-TEST-001
+    # follow-up): CRYPTO x SPOT trades in continuous session, no real gaps, so it gets
+    # GAP_NOT_APPLICABLE; FOREX and METALS can gap, but essentially only at their weekly reopen,
+    # never candle-to-candle within a session at Freyja's intraday timeframes, so they get
+    # GAP_OPTIONAL rather than GAP_REQUIRED (demanding one would make MORNING_STAR/EVENING_STAR
+    # nearly undetectable there — the same "invalidaría el patrón por construcción" problem the
+    # contract warns against). An explicit value here always wins over the market default.
+    gap_policy: GapPolicy | None = None
     # THREE_WHITE_SOLDIERS/THREE_BLACK_CROWS: the wick on the side against the trend of each
     # candle is at most this fraction of its own range ("mechas superiores pequeñas").
     three_soldiers_upper_wick_max_ratio: Decimal = Decimal("0.20")
@@ -314,24 +329,45 @@ _REQUIRED_TREND: dict[CandlePatternType, TrendState] = {
 
 # -- geometry: pure functions of three candles' proportions --------------------------------------
 
+# Markets whose real product/instrument still doesn't rule out a weekly-reopen gap, so requiring
+# one on every candle would make the pattern nearly undetectable at intraday timeframes — the
+# market default is GAP_OPTIONAL for these (and for any market not listed, conservatively: never
+# assume a gap is either impossible or guaranteed). Only CRYPTO gets GAP_NOT_APPLICABLE, since it
+# is the only market Freyja's catalog has today that genuinely never gaps.
+_NO_GAP_MARKET = "CRYPTO"
+
+
+def _gap_policy_for_market(market: str) -> GapPolicy:
+    """patrones-de-vela.md section 2: which gap policy applies to which market, decided here
+    (product decision, 2026-09-29) — FOREX and METALS (XAU/USD, an OTC-like market: treated the
+    same as FOREX unless the contract says otherwise) both get GAP_OPTIONAL, CRYPTO gets
+    GAP_NOT_APPLICABLE. Only used when `ThreeCandleParams.gap_policy` is left unset (`None`); an
+    explicit value always overrides this. Provider-agnostic on purpose: this layer never names
+    which data source publishes a market's candles."""
+    if market == _NO_GAP_MARKET:
+        return GapPolicy.GAP_NOT_APPLICABLE
+    return GapPolicy.GAP_OPTIONAL
+
 
 def _star_gap(
     c1: CandleAnchor, c2: CandleAnchor, p: ThreeCandleParams, *, down: bool
 ) -> tuple[bool, PatternEvidence | None]:
     """Whether the gap requirement between candle 1 and candle 2 is met, and the `GAP` evidence
-    to attach. `GAP_NOT_APPLICABLE` measures nothing and always passes (contract section 6)."""
-    if p.gap_policy is GapPolicy.GAP_NOT_APPLICABLE:
+    to attach. `GAP_NOT_APPLICABLE` measures nothing and always passes (contract section 6).
+    `p.gap_policy` must already be resolved (never `None`) — callers go through
+    `_resolved_triple_params` first."""
+    policy = p.gap_policy
+    assert policy is not None, "gap_policy must be resolved before _star_gap is called"
+    if policy is GapPolicy.GAP_NOT_APPLICABLE:
         return True, None
     if down:
         gap = min(c1.open, c1.close) - max(c2.open, c2.close)
     else:
         gap = min(c2.open, c2.close) - max(c1.open, c1.close)
-    required = (
-        p.gap_min_fraction * c1.body if p.gap_policy is GapPolicy.GAP_REQUIRED else Decimal(0)
-    )
+    required = p.gap_min_fraction * c1.body if policy is GapPolicy.GAP_REQUIRED else Decimal(0)
     met = gap >= required
-    ok = met if p.gap_policy is GapPolicy.GAP_REQUIRED else True
-    return ok, _gap_evidence(p.gap_policy, gap, required, met)
+    ok = met if policy is GapPolicy.GAP_REQUIRED else True
+    return ok, _gap_evidence(policy, gap, required, met)
 
 
 def _morning_or_evening_star(
@@ -548,6 +584,15 @@ def _instances_for_pair(
     return found
 
 
+def _resolved_triple_params(context: MultiCandleContext) -> ThreeCandleParams:
+    """`context.triple` with `gap_policy` filled in from the instrument's market when the caller
+    left it unset (`None`) — an explicit value on `context.triple` always wins."""
+    triple = context.triple
+    if triple.gap_policy is None:
+        triple = replace(triple, gap_policy=_gap_policy_for_market(context.instrument.market))
+    return triple
+
+
 def _instances_for_triple(
     context: MultiCandleContext,
     before: Sequence[Candle],
@@ -561,7 +606,7 @@ def _instances_for_triple(
     c3 = CandleAnchor.from_candle(third, "THIRD")
     if c1.range <= 0 or c2.range <= 0 or c3.range <= 0:
         return []
-    triple = context.triple
+    triple = _resolved_triple_params(context)
     at = third.close_time
     found: list[CandlePatternInstance] = []
 

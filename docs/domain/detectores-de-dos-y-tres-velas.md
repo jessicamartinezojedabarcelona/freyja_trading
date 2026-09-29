@@ -51,7 +51,7 @@ sección 9 («Versionado») para por qué.
 | `tweezer_tolerance` | 0,10 | Dos mínimos (o máximos) son «prácticamente iguales» si difieren, como mucho, esta fracción de la media de los rangos de las dos velas. |
 | `pivot_params`, `trend_params`, `min_history` | los del punto 2 | Los que usa `classify_trend` para la tendencia previa. |
 
-### 2.2 Tres velas (`three-candle-params-v1`, `ThreeCandleParams`)
+### 2.2 Tres velas (`three-candle-params-v2`, `ThreeCandleParams`)
 
 | Parámetro | Valor | Significado |
 | --------- | ----- | ----------- |
@@ -59,7 +59,7 @@ sección 9 («Versionado») para por qué.
 | `harami_inner_max_body_ratio` | 0,50 | Copia propia, igual razón. |
 | `min_body_ratio` | 0,30 | La vela 2 de `MORNING_STAR`/`EVENING_STAR` tiene un cuerpo como mucho esta fracción de su propio rango (o es un doji). |
 | `gap_min_fraction` | 0,10 | Con `GAP_REQUIRED`: el hueco entre cuerpos (vela 1 a vela 2) es al menos esta fracción del cuerpo de la vela 1. |
-| `gap_policy` | `GAP_NOT_APPLICABLE` | La política de gaps vigente (sección 6). |
+| `gap_policy` | `None` (por defecto: la decide el mercado, sección 6) | La política de gaps vigente; un valor explícito aquí siempre gana sobre el valor por mercado. |
 | `three_soldiers_upper_wick_max_ratio` | 0,20 | En `THREE_WHITE_SOLDIERS`/`THREE_BLACK_CROWS`, la mecha del lado contrario a la tendencia de cada vela es como mucho esta fracción de su rango («mechas superiores pequeñas»). |
 | `pivot_params`, `trend_params`, `min_history` | los del punto 2 | Los que usa `classify_trend`. |
 
@@ -164,10 +164,15 @@ Sea `c1`, `c2`, `c3` las tres velas en orden.
   | `GAP_OPTIONAL` | El hueco, si existe, se mide y se registra como evidencia `GAP`; su ausencia no impide el patrón. |
   | `GAP_NOT_APPLICABLE` (por defecto) | No se comprueba ningún hueco: solo se exige que `c2` tenga cuerpo pequeño. Sin evidencia `GAP`. |
 
-  **`CRYPTO × SPOT` usa `GAP_NOT_APPLICABLE`** por defecto (cotiza en continuo, sin huecos reales
-  — `patrones-de-vela.md`, sección 2); el resto de mercados quedan con `GAP_OPTIONAL` hasta que una
-  tarea posterior revise el caso de un mercado con sesiones reales. Es una decisión técnica de
-  esta tarea, versionada en `three-candle-params-v1` (sección 2.2).
+  **La política por defecto la decide el mercado del instrumento** (`_gap_policy_for_market`,
+  aplicada cuando `ThreeCandleParams.gap_policy` se deja en `None`; un valor explícito siempre
+  gana): `CRYPTO` usa `GAP_NOT_APPLICABLE` (cotiza en continuo, sin huecos reales —
+  `patrones-de-vela.md`, sección 2); `FOREX` y `METALS` usan `GAP_OPTIONAL` — ambos pueden tener un
+  hueco real, pero prácticamente solo en la reapertura semanal, nunca vela a vela en las
+  temporalidades intradía del catálogo, así que exigirlo dejaría el patrón casi indetectable ahí.
+  `METALS` se trata igual que `FOREX` porque XAU/USD (Twelve Data) es un mercado de tipo OTC con un
+  patrón de sesión equivalente. Decidido en el seguimiento de POINT4-TEST-001/TWELVEDATA-4H-GRID-001
+  (29-09-2026), versionado en `three-candle-params-v2` (sección 2.2).
 - **`EVENING_STAR`**: espejo.
 - **`THREE_WHITE_SOLDIERS`**: `c1`, `c2`, `c3` alcistas; `c2.close > c1.close`,
   `c3.close > c2.close`; `c2.open` y `c3.open` dentro del cuerpo de la vela anterior (entre su
@@ -175,7 +180,7 @@ Sea `c1`, `c2`, `c3` las tres velas en orden.
   propio rango.
 - **`THREE_BLACK_CROWS`**: espejo (mecha **inferior** pequeña).
 - **`THREE_INSIDE_UP`**: `c1`/`c2` cumplen la geometría de `BULLISH_HARAMI` (sección 5,
-  reutilizada, no reescrita: ver sección 7), con los umbrales propios de `three-candle-params-v1`
+  reutilizada, no reescrita: ver sección 7), con los umbrales propios de `three-candle-params-v2`
   (sección 2.2, nunca los de `multi-candle-params-v1`); `c3` cierra por encima del máximo de `c1`
   (`c3.close > c1.high`).
 - **`THREE_INSIDE_DOWN`**: espejo sobre `BEARISH_HARAMI` (`c3.close < c1.low`).
@@ -189,7 +194,7 @@ pendiente para quien lo construyera. Esta tarea la resuelve así:
 - El detector de `THREE_INSIDE_UP` **reutiliza la misma función de geometría** que el detector de
   `BULLISH_HARAMI` (`is_bullish_harami`, pública) para juzgar `c1`/`c2` — una sola implementación,
   nunca dos copias de la misma comprobación — pero con los **umbrales propios** de
-  `three-candle-params-v1`, nunca los de `multi-candle-params-v1` directamente (sección 9).
+  `three-candle-params-v2`, nunca los de `multi-candle-params-v1` directamente (sección 9).
 - **Ambas instancias coexisten**, con su propia identidad, igual que ya coexisten patrones con
   geometrías solapadas en el punto de una vela (pin bar y martillo, `detectores-de-una-vela.md`).
   `BULLISH_HARAMI` existe en cuanto cierra `c2`; `THREE_INSIDE_UP`, en cuanto cierra `c3` y
@@ -226,7 +231,7 @@ La corrección, antes de escribir una sola línea de las tres velas:
 
 - **Dos velas**: `MultiCandleParams`/`multi-candle-params-v1`, `MULTI_CANDLE_DETECTOR_VERSION`.
   Sin cambios respecto a la entrega 1/2: ningún campo nuevo, ninguna subida de versión.
-- **Tres velas**: `ThreeCandleParams`/`three-candle-params-v1`, `THREE_CANDLE_DETECTOR_VERSION`,
+- **Tres velas**: `ThreeCandleParams`/`three-candle-params-v2`, `THREE_CANDLE_DETECTOR_VERSION`,
   un conjunto propio, independiente.
 - **El puente entre ambas** (`THREE_INSIDE_UP`/`DOWN` reutilizando el harami) no comparte versión:
   `ThreeCandleParams.harami_params()` construye un `MultiCandleParams` con los umbrales propios de
@@ -240,10 +245,11 @@ La corrección, antes de escribir una sola línea de las tres velas:
 
 ## 10. Lo que este documento no decide
 
-Qué política de gaps aplica a mercados distintos de `CRYPTO × SPOT` con sesiones reales (queda
-`GAP_OPTIONAL` hasta revisarlo); cómo se combina esta evidencia con otra en una hipótesis
-(POINT4-HYPOTHESIS-001, incluida la regla de no doble conteo del harami); persistencia, señales,
-órdenes.
+Cómo se combina la evidencia `GAP` con otra en una hipótesis (POINT4-HYPOTHESIS-001, incluida la
+regla de no doble conteo del harami); persistencia, señales, órdenes. La política de gaps por
+mercado (`CRYPTO`/`FOREX`/`METALS`) ya no queda pendiente: resuelta en la sección 6 (seguimiento de
+POINT4-TEST-001/TWELVEDATA-4H-GRID-001, 29-09-2026). Validación fuera de muestra: fuera de alcance
+de esta tarea (`PARAMS-VALIDATION-001`, no iniciada).
 
 ## 11. Decisiones técnicas tomadas al redactar
 
@@ -271,3 +277,8 @@ Registradas aquí para que se puedan corregir; ninguna es de producto.
    llamada a `detect_multi_candle_patterns`. El mismo defecto, en ambas variantes, se corrigió
    idéntico en `detectores-de-una-vela.md`.
 7. **Umbrales provisionales, sin validar**, registrados en PARAMS-VALIDATION-001 al introducirlos.
+8. **Seguimiento (29-09-2026, POINT4-TEST-001/TWELVEDATA-4H-GRID-001): `FOREX` y `METALS` usan
+   `GAP_OPTIONAL`**, no `GAP_NOT_APPLICABLE`. `ThreeCandleParams.gap_policy` pasa a `None` por
+   defecto («lo decide el mercado») en vez de fijar `GAP_NOT_APPLICABLE` para todos; un valor
+   explícito sigue ganando siempre. Sube `three-candle-params-v1` a `-v2` (cambio de regla
+   estructural, sección 9).
