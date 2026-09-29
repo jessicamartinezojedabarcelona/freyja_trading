@@ -1,6 +1,6 @@
 """Which sources the scanner can be told to read, and what it builds for them
-(MARKET-DATA-SCANNER-001, extended by MARKET-DATA-KRAKEN-REST-001 and
-MARKET-DATA-TWELVEDATA-REST-001)."""
+(MARKET-DATA-SCANNER-001, extended by MARKET-DATA-KRAKEN-REST-001,
+MARKET-DATA-TWELVEDATA-REST-001 and TWELVEDATA-4H-GRID-001)."""
 
 import asyncio
 from typing import cast
@@ -12,6 +12,7 @@ from freyja_backend.application.candle_scanner import CandleScanner
 from freyja_backend.core.config import SCANNER_SOURCES, Settings
 from freyja_backend.db.catalog_seed_v1 import INSTRUMENTS
 from freyja_backend.domain.market_data import Timeframe
+from freyja_backend.infrastructure.market_data import twelve_data_rest
 
 TWELVE_DATA_KEY = "test-key-not-a-real-secret"
 
@@ -45,7 +46,7 @@ def test_every_source_only_publishes_instruments_the_catalog_actually_has() -> N
         ("FOREX", "SPOT", "USD/CHF"),
         ("METALS", "SPOT", "XAU/USD"),
     }
-    for code, (_build, instruments) in candle_scanner_wiring._SOURCES.items():
+    for code, (_build, instruments, _timeframes) in candle_scanner_wiring._SOURCES.items():
         assert {(i.market, i.product, i.symbol) for i in instruments} <= catalog, code
 
 
@@ -86,7 +87,11 @@ def test_twelve_data_alone_builds_series_for_both_forex_and_metals_symbols() -> 
         assert {t.source_code for t in scanner.targets} == {"TWELVEDATA"}
         markets = {t.instrument.market for t in scanner.targets}
         assert markets == {"FOREX", "METALS"}
-        assert len(scanner.targets) == 5 * len(Timeframe)  # 4 FOREX + 1 METALS symbol
+        # 5 symbols (4 FOREX + 1 METALS) x its supported timeframes only — not the
+        # catalog's full 5, since TWELVEDATA-4H-GRID-001 excludes H4 (see
+        # twelve_data_rest.SUPPORTED_TIMEFRAMES).
+        assert len(scanner.targets) == 5 * len(twelve_data_rest.SUPPORTED_TIMEFRAMES)
+        assert Timeframe.H4 not in {t.timeframe for t in scanner.targets}
     finally:
         release(service)
 

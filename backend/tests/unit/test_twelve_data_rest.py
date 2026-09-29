@@ -31,6 +31,7 @@ from freyja_backend.domain.market_data import (
 from freyja_backend.infrastructure.market_data.twelve_data_rest import (
     MAX_CANDLE_LIMIT,
     PROVIDER_SYMBOLS,
+    SUPPORTED_TIMEFRAMES,
     SYMBOL_MARKETS,
     TIME_SERIES_PATH,
     TwelveDataRestClient,
@@ -196,10 +197,9 @@ def test_a_window_is_sent_as_start_and_end_date(
         (Timeframe.M5, "5min"),
         (Timeframe.M15, "15min"),
         (Timeframe.H1, "1h"),
-        (Timeframe.H4, "4h"),
     ],
 )
-def test_every_catalog_timeframe_is_translated_to_twelve_data_intervals(
+def test_every_supported_timeframe_is_translated_to_twelve_data_intervals(
     make_client: Callable[..., TwelveDataRestClient], timeframe: Timeframe, interval: str
 ) -> None:
     newest_closed = timeframe.floor(NOW) - timeframe.duration
@@ -213,6 +213,25 @@ def test_every_catalog_timeframe_is_translated_to_twelve_data_intervals(
 
     assert provider.requests[0].url.params["interval"] == interval
     assert batch.quality is DataQuality.OK
+
+
+def test_4h_is_rejected_never_requested_from_the_provider(
+    make_client: Callable[..., TwelveDataRestClient],
+) -> None:
+    """TWELVEDATA-4H-GRID-001: confirmed against the live API (2026-09-29, production) that
+    Twelve Data's forex/metals 4h candles are anchored to a session boundary, not Freyja's
+    UTC grid — every 4h candle it returns is rejected by assess_candles. Rather than send a
+    request doomed to fail (and spend scarce daily quota on it), the adapter refuses 4h
+    itself, before any network call."""
+    provider = Provider(ok(payload([])))
+    client = make_client(provider)
+
+    with pytest.raises(MarketDataRequestError, match="not served by Twelve Data"):
+        client.get_closed_candles(EUR_USD, Timeframe.H4, limit=10)
+
+    assert provider.requests == []
+    assert Timeframe.H4 not in SUPPORTED_TIMEFRAMES
+    assert {Timeframe.M1, Timeframe.M5, Timeframe.M15, Timeframe.H1} == SUPPORTED_TIMEFRAMES
 
 
 def test_forex_and_metals_symbols_both_resolve_to_their_own_market(
