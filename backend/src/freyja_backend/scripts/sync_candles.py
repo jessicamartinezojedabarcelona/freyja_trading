@@ -13,12 +13,14 @@ Exit code: 0 data stored (OK or DEGRADED), 1 provider unavailable, 2 bad input.
 
 import argparse
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
+from typing import Protocol
 
 from sqlalchemy.engine import Engine
 
 from freyja_backend.application import market_data_service
+from freyja_backend.core.config import get_settings
 from freyja_backend.core.database import create_database_engine
 from freyja_backend.db.session import create_session_factory, session_scope
 from freyja_backend.domain.market_data import (
@@ -38,10 +40,37 @@ from freyja_backend.infrastructure.market_data.kraken_spot_rest import (
     SOURCE_CODE as KRAKEN,
 )
 from freyja_backend.infrastructure.market_data.kraken_spot_rest import KrakenSpotRestClient
+from freyja_backend.infrastructure.market_data.twelve_data_rest import (
+    SOURCE_CODE as TWELVEDATA,
+)
+from freyja_backend.infrastructure.market_data.twelve_data_rest import (
+    TwelveDataRestClient,
+    TwelveDataRestConfig,
+)
+
+
+class _SyncClient(CandleProvider, Protocol):
+    """A provider client this script owns, so it must be able to release its connection."""
+
+    def close(self) -> None: ...
+
+
+def _build_twelve_data_client() -> TwelveDataRestClient:
+    api_key = get_settings().twelve_data_api_key
+    if not api_key:
+        raise ValueError(
+            "FREYJA_TWELVE_DATA_API_KEY debe estar configurada para usar --source TWELVEDATA"
+        )
+    return TwelveDataRestClient(TwelveDataRestConfig(api_key=api_key))
+
 
 # 1 minute is Freyja's standard candle period; the user may pick another.
 DEFAULT_TIMEFRAME = Timeframe.M1
-_CLIENTS = {BINANCE: BinanceSpotRestClient, KRAKEN: KrakenSpotRestClient}
+_CLIENTS: dict[str, Callable[[], _SyncClient]] = {
+    BINANCE: BinanceSpotRestClient,
+    KRAKEN: KrakenSpotRestClient,
+    TWELVEDATA: _build_twelve_data_client,
+}
 _SUPPORTED_SOURCES = tuple(_CLIENTS)
 
 
@@ -106,8 +135,15 @@ def main(
     try:
         if provider is not None:
             return _run(args, provider, db_engine, clock)
-        with _CLIENTS[args.source]() as client:
+        try:
+            client = _CLIENTS[args.source]()
+        except ValueError as exc:
+            print(f"No se sincronizó nada: {exc}", file=sys.stderr)
+            return 2
+        try:
             return _run(args, client, db_engine, clock)
+        finally:
+            client.close()
     finally:
         if owns_engine:
             db_engine.dispose()

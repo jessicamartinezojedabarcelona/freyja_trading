@@ -17,6 +17,9 @@ from freyja_backend.domain.market_data import InstrumentRef, Timeframe
 NOW = datetime(2026, 9, 24, 12, 7, 30, tzinfo=UTC)
 BTC = InstrumentRef("CRYPTO", "SPOT", "BTC/USDT")
 ETH = InstrumentRef("CRYPTO", "SPOT", "ETH/USDT")
+EUR_USD = InstrumentRef("FOREX", "SPOT", "EUR/USD")
+GBP_USD = InstrumentRef("FOREX", "SPOT", "GBP/USD")
+XAU_USD = InstrumentRef("METALS", "SPOT", "XAU/USD")
 M1 = Timeframe.M1
 M5 = Timeframe.M5
 STEP_MS = 300_000
@@ -217,3 +220,97 @@ class SyntheticKraken:
         if self._mutate is not None:
             rows = self._mutate(rows)
         return ok({"error": [], "result": {pair: rows, "last": open_now - step_s}})
+
+
+_TWELVE_DATA_DATETIME = "%Y-%m-%d %H:%M:%S"
+_TWELVE_DATA_STEP_SECONDS: dict[str, int] = {
+    "1min": 60,
+    "5min": 300,
+    "15min": 900,
+    "1h": 3600,
+    "4h": 14400,
+}
+Values = list[dict[str, object]]
+
+
+class SyntheticTwelveData:
+    """A deterministic `/time_series` endpoint standing in for Twelve Data.
+
+    Every candle on the UTC grid exists up to `now` (including the one still in progress,
+    the same convention as the other synthetic providers), and its prices are a pure
+    function of its open time. `errors_by_call` maps a 1-based call number to a
+    `(code, message)` pair answered as an HTTP-200 embedded error — a shape the adapter
+    handles defensively but has not been confirmed against the live API. `mutate` can
+    rewrite the values of a response to inject gaps or revised values.
+    """
+
+    def __init__(
+        self,
+        *,
+        now: datetime = NOW,
+        errors_by_call: dict[int, tuple[int, str]] | None = None,
+        mutate: Callable[[Values], Values] | None = None,
+    ) -> None:
+        self._now = now
+        self._errors = errors_by_call or {}
+        self._mutate = mutate
+        self.requests: list[httpx2.Request] = []
+
+    def set_now(self, now: datetime) -> None:
+        self._now = now
+
+    @staticmethod
+    def value(open_time: datetime, step_seconds: int) -> dict[str, object]:
+        base = 100 + (int(open_time.timestamp()) // step_seconds) % 50
+        return {
+            "datetime": open_time.strftime(_TWELVE_DATA_DATETIME),
+            "open": f"{base}.10000",
+            "high": f"{base + 2}.00000",
+            "low": f"{base - 1}.00000",
+            "close": f"{base + 1}.00000",
+            "volume": "0",
+        }
+
+    def __call__(self, request: httpx2.Request) -> httpx2.Response:
+        self.requests.append(request)
+        error = self._errors.get(len(self.requests))
+        if error is not None:
+            code, message = error
+            return ok({"code": code, "message": message, "status": "error"})
+
+        params = request.url.params
+        symbol = params["symbol"]
+        step = _TWELVE_DATA_STEP_SECONDS[params["interval"]]
+        now_epoch = int(self._now.timestamp())
+        now_open = now_epoch - now_epoch % step
+        outputsize = int(params.get("outputsize", 30))
+        order = params.get("order", "DESC")
+
+        def parse(value: str) -> int:
+            return int(
+                datetime.strptime(value, _TWELVE_DATA_DATETIME).replace(tzinfo=UTC).timestamp()
+            )
+
+        if "start_date" in params:
+            first = -(-parse(params["start_date"]) // step) * step  # ceil to the grid
+            last = now_open
+            if "end_date" in params:
+                end_epoch = parse(params["end_date"])
+                last = min(last, end_epoch - end_epoch % step)
+            opens = list(range(first, last + 1, step))[:outputsize]
+        else:
+            opens = list(range(now_open - (outputsize - 1) * step, now_open + 1, step))
+        opens = [o for o in opens if o <= now_open]
+        opens.sort(reverse=(order == "DESC"))
+
+        values = [self.value(datetime.fromtimestamp(o, UTC), step) for o in opens]
+        if self._mutate is not None:
+            values = self._mutate(values)
+        meta = {
+            "symbol": symbol,
+            "interval": params["interval"],
+            "currency_base": "?",
+            "currency_quote": "?",
+            "type": "Physical Currency",
+        }
+        return ok({"meta": meta, "values": values, "status": "ok"})

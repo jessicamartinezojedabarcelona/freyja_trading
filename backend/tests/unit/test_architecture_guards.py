@@ -150,6 +150,7 @@ _AUTHORIZED_INFRASTRUCTURE_FILES = frozenset(
         "market_data/__init__.py",
         "market_data/binance_spot_rest.py",  # MARKET-DATA-BINANCE-REST-001
         "market_data/kraken_spot_rest.py",  # MARKET-DATA-KRAKEN-REST-001
+        "market_data/twelve_data_rest.py",  # MARKET-DATA-TWELVEDATA-REST-001
     }
 )
 
@@ -243,6 +244,43 @@ def test_kraken_adapter_only_ever_names_its_own_public_host() -> None:
     assert hosts == {"api.kraken.com"}
 
 
+_TWELVE_DATA_ADAPTER = SRC_DIR / "infrastructure" / "market_data" / "twelve_data_rest.py"
+# Unlike Binance/Kraken, this adapter legitimately holds an API key — "apikey" itself is
+# not forbidden. What must never appear is a real-looking hardcoded credential, a trading
+# endpoint, or a websocket/private surface.
+_FORBIDDEN_TWELVE_DATA_TOKENS = ("wss://", "/orders", "/accounts", "/trades", "apikey=demo")
+
+
+def test_twelve_data_adapter_is_public_read_only_and_holds_no_hardcoded_key() -> None:
+    """The Twelve Data adapter must stay a public market-data reader: the API key always
+    comes from the caller's config, never a literal in source, and there is no trading,
+    account or WebSocket surface — those need their own authorized tasks, and REAL stays
+    suspended."""
+    text = _TWELVE_DATA_ADAPTER.read_text(encoding="utf-8").lower()
+    found = [token for token in _FORBIDDEN_TWELVE_DATA_TOKENS if token in text]
+    assert found == [], f"Twelve Data adapter must not touch trading or a hardcoded key: {found}"
+
+
+def test_twelve_data_adapter_only_ever_names_its_own_public_host() -> None:
+    hosts = set(
+        re.findall(r"[a-z0-9.-]+\.twelvedata\.com", _TWELVE_DATA_ADAPTER.read_text("utf-8"))
+    )
+    assert hosts == {"api.twelvedata.com"}
+
+
+def test_twelve_data_adapter_never_logs_the_api_key() -> None:
+    """The only place the key may appear is the Authorization header sent to Twelve
+    Data's own host; every logging call's `extra` payload must stay clear of it."""
+    text = _TWELVE_DATA_ADAPTER.read_text(encoding="utf-8")
+    for log_match in _LOG_CALL_RE.finditer(text):
+        snippet = text[log_match.start() : log_match.start() + 300]
+        call_end = snippet.find(")\n")
+        call_text = snippet[: call_end if call_end != -1 else len(snippet)]
+        extra_match = _EXTRA_KWARG_RE.search(call_text)
+        assert extra_match is None or "api_key" not in extra_match.group(1).lower()
+        assert extra_match is None or "apikey" not in extra_match.group(1).lower()
+
+
 def test_domain_and_application_contracts_never_mention_the_provider() -> None:
     """Internal contracts must not carry provider types or names: each provider is
     confined to its adapter."""
@@ -250,6 +288,9 @@ def test_domain_and_application_contracts_never_mention_the_provider() -> None:
         str(path)
         for area in ("domain", "application", "dto", "repositories", "db")
         for path in _source_files(SRC_DIR / area)
-        if any(name in path.read_text(encoding="utf-8").lower() for name in ("binance", "kraken"))
+        if any(
+            name in path.read_text(encoding="utf-8").lower()
+            for name in ("binance", "kraken", "twelvedata", "twelve data")
+        )
     ]
     assert offenders == [], f"provider names leaked into internal layers: {offenders}"

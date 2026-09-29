@@ -13,7 +13,11 @@ from freyja_backend.core.config import Settings
 from freyja_backend.core.database import create_database_engine
 from freyja_backend.db.session import create_session_factory
 from freyja_backend.domain.market_data import CandleProvider, InstrumentRef, Timeframe
-from freyja_backend.infrastructure.market_data import binance_spot_rest, kraken_spot_rest
+from freyja_backend.infrastructure.market_data import (
+    binance_spot_rest,
+    kraken_spot_rest,
+    twelve_data_rest,
+)
 
 
 class _SourceClient(CandleProvider, Protocol):
@@ -22,16 +26,37 @@ class _SourceClient(CandleProvider, Protocol):
     def close(self) -> None: ...
 
 
-# Every source the scanner can read: how to build its client and which canonical CRYPTO x
-# SPOT symbols it publishes. A test keeps the keys in step with `SCANNER_SOURCES`.
-_SOURCES: Mapping[str, tuple[Callable[[], _SourceClient], tuple[str, ...]]] = {
+def _require_twelve_data_api_key(settings: Settings) -> str:
+    key = settings.twelve_data_api_key
+    if not key:  # unreachable while Settings validates this when TWELVEDATA is enabled
+        raise ValueError("FREYJA_TWELVE_DATA_API_KEY must be set to enable the TWELVEDATA source")
+    return key
+
+
+# Every source the scanner can read: how to build its client (given settings, since Twelve
+# Data needs an API key) and which canonical instruments it publishes. A test keeps the
+# keys in step with `SCANNER_SOURCES`.
+_SOURCES: Mapping[str, tuple[Callable[[Settings], _SourceClient], tuple[InstrumentRef, ...]]] = {
     binance_spot_rest.SOURCE_CODE: (
-        binance_spot_rest.BinanceSpotRestClient,
-        tuple(binance_spot_rest.PROVIDER_SYMBOLS),
+        lambda _settings: binance_spot_rest.BinanceSpotRestClient(),
+        tuple(
+            InstrumentRef("CRYPTO", "SPOT", symbol) for symbol in binance_spot_rest.PROVIDER_SYMBOLS
+        ),
     ),
     kraken_spot_rest.SOURCE_CODE: (
-        kraken_spot_rest.KrakenSpotRestClient,
-        tuple(kraken_spot_rest.PROVIDER_SYMBOLS),
+        lambda _settings: kraken_spot_rest.KrakenSpotRestClient(),
+        tuple(
+            InstrumentRef("CRYPTO", "SPOT", symbol) for symbol in kraken_spot_rest.PROVIDER_SYMBOLS
+        ),
+    ),
+    twelve_data_rest.SOURCE_CODE: (
+        lambda settings: twelve_data_rest.TwelveDataRestClient(
+            twelve_data_rest.TwelveDataRestConfig(api_key=_require_twelve_data_api_key(settings))
+        ),
+        tuple(
+            InstrumentRef(twelve_data_rest.SYMBOL_MARKETS[symbol], "SPOT", symbol)
+            for symbol in twelve_data_rest.PROVIDER_SYMBOLS
+        ),
     ),
 }
 
@@ -48,13 +73,13 @@ def build_candle_scanner_service(settings: Settings) -> CandleScannerService:
             code not in _SOURCES
         ):  # unreachable while Settings validates the list; never scan a guess
             raise ValueError(f"unknown scanner source {code!r}")
-        build_client, symbols = _SOURCES[code]
-        client = build_client()
+        build_client, instruments = _SOURCES[code]
+        client = build_client(settings)
         providers[code] = client
         closers.append(client.close)
         targets.extend(
-            ScanTarget(code, InstrumentRef("CRYPTO", "SPOT", symbol), timeframe)
-            for symbol in symbols
+            ScanTarget(code, instrument, timeframe)
+            for instrument in instruments
             for timeframe in Timeframe
         )
     scanner = CandleScanner(create_session_factory(engine), providers, targets)

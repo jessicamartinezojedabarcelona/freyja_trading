@@ -10,7 +10,7 @@ LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 _ROOT_ENV_FILE = Path(__file__).resolve().parents[4] / ".env"
 
 # Market-data sources the background candle scanner knows how to read.
-SCANNER_SOURCES = frozenset({"BINANCE", "KRAKEN"})
+SCANNER_SOURCES = frozenset({"BINANCE", "KRAKEN", "TWELVEDATA"})
 
 # Development-only defaults. Also used to detect a production deployment that
 # forgot to override them (see _require_production_configuration below).
@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     candle_scanner_interval_seconds: int = Field(default=60, ge=30, le=3600)
     # Comma-separated source codes (see SCANNER_SOURCES).
     candle_scanner_sources: str = "BINANCE"
+
+    # Twelve Data (MARKET-DATA-TWELVEDATA-REST-001): unlike Binance/Kraken, this provider
+    # requires a key. Required only when TWELVEDATA is an active scanner source (see
+    # _require_twelve_data_api_key_when_scanning below). Never logged or committed.
+    twelve_data_api_key: str | None = None
 
     # Independent secret for HMAC-keyed rate-limiting identifiers. Never
     # reused as a password pepper, session secret, or CSRF material.
@@ -118,6 +123,19 @@ class Settings(BaseSettings):
             raise ValueError(
                 "FREYJA_CANDLE_SCANNER_SOURCES debe listar al menos una fuente conocida "
                 f"({', '.join(sorted(SCANNER_SOURCES))}); no reconocidas: {unknown or 'ninguna'}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _require_twelve_data_api_key_when_scanning(self) -> "Settings":
+        if (
+            self.candle_scanner_enabled
+            and "TWELVEDATA" in self.candle_scanner_sources_list
+            and not self.twelve_data_api_key
+        ):
+            raise ValueError(
+                "FREYJA_TWELVE_DATA_API_KEY es obligatorio cuando "
+                "FREYJA_CANDLE_SCANNER_SOURCES incluye TWELVEDATA"
             )
         return self
 
