@@ -88,6 +88,13 @@ services:
         sync: false
         # Real secret, generated once (e.g. `openssl rand -hex 32`), entered
         # directly in the Render dashboard. Never versioned, never logged.
+      - key: FREYJA_TWELVE_DATA_API_KEY
+        sync: false
+        # MARKET-DATA-TWELVEDATA-REST-001 (ADR 0009): Twelve Data's free-tier API key,
+        # entered directly in the Render dashboard once Jessica has one. Never versioned,
+        # never logged — the adapter sends it only in the Authorization request header.
+        # Required exactly when TWELVEDATA is listed in FREYJA_CANDLE_SCANNER_SOURCES below
+        # (Settings fails closed at startup otherwise; see core/config.py).
       - key: FREYJA_SESSION_TTL_MINUTES
         value: "720"
       - key: FREYJA_CANDLE_SCANNER_ENABLED
@@ -99,10 +106,15 @@ services:
       - key: FREYJA_CANDLE_SCANNER_INTERVAL_SECONDS
         value: "60"
       - key: FREYJA_CANDLE_SCANNER_SOURCES
-        value: BINANCE,KRAKEN
+        value: BINANCE,KRAKEN,TWELVEDATA
         # MARKET-DATA-KRAKEN-REST-001 (ADR 0007): two sources, each with its own series.
         # KRAKEN needs migration 0014 applied to the database first (it was, in Neon);
         # without it the scanner would report those series as NOT_CONFIGURED.
+        # MARKET-DATA-TWELVEDATA-REST-001 (ADR 0009): a third source, FOREX/METALS
+        # instead of CRYPTO, with its own series too. Needs migrations 0016 and 0017
+        # applied first (catalog, then the data source + its mappings), and
+        # FREYJA_TWELVE_DATA_API_KEY set above — without either, Settings refuses to
+        # start rather than run the scanner half-configured.
         # No FREYJA_SMTP_* variables here at all: no SMTP provider is
         # approved yet (see README, "SMTP pendiente"), and Settings no
         # longer requires any of them to start in production (see

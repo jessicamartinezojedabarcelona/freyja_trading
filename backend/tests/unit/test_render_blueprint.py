@@ -11,7 +11,8 @@ _RENDER_YAML = _REPO_ROOT / "render.yaml"
 # this task) — a structural/regex check is enough to catch the one thing
 # that actually matters here: no literal secret value committed to Git.
 _SENSITIVE_KEY_PATTERN = re.compile(
-    r"key:\s*(FREYJA_RATE_LIMIT_HMAC_KEY|FREYJA_SMTP_PASSWORD|FREYJA_SMTP_USERNAME|DATABASE_URL)\b"
+    r"key:\s*(FREYJA_RATE_LIMIT_HMAC_KEY|FREYJA_TWELVE_DATA_API_KEY|FREYJA_SMTP_PASSWORD|"
+    r"FREYJA_SMTP_USERNAME|DATABASE_URL)\b"
 )
 _SUSPICIOUS_LITERAL_VALUE_PATTERN = re.compile(
     r"^\s*value:\s*['\"]?[A-Za-z0-9+/=_-]{16,}['\"]?\s*$"
@@ -171,13 +172,22 @@ def test_both_services_disable_auto_deploy_on_commit() -> None:
 def test_the_candle_scanner_reads_only_sources_the_backend_knows_how_to_build() -> None:
     """The production scanner is told its sources here, not in the dashboard: an unknown
     code would stop the service from starting. `SCANNER_SOURCES` is everything the backend
-    *can* read, not everything the deployed scanner is told to read right now — Twelve
-    Data (MARKET-DATA-TWELVEDATA-REST-001) is deliberately left out of the deployed list
-    until Jessica has a real `FREYJA_TWELVE_DATA_API_KEY` to configure in Render; adding it
-    here first would fail the production scanner closed at startup (Settings requires the
-    key whenever TWELVEDATA is an active source)."""
+    *can* read; the deployed list must never exceed it."""
     lines = _code_only_content().splitlines()
     index = next(i for i, line in enumerate(lines) if "key: FREYJA_CANDLE_SCANNER_SOURCES" in line)
     declared = set(lines[index + 1].split("value:", 1)[1].strip().split(","))
     assert declared <= SCANNER_SOURCES
-    assert declared == {"BINANCE", "KRAKEN"}
+    assert declared == {"BINANCE", "KRAKEN", "TWELVEDATA"}
+
+
+def test_twelve_data_api_key_is_declared_whenever_its_scanner_source_is_active() -> None:
+    """If TWELVEDATA is ever in the deployed scanner sources, its API key must be declared
+    alongside it (as sync: false, never a literal) — otherwise the scanner fails closed at
+    startup (Settings requires the key whenever TWELVEDATA is an active source). Guards
+    against a future edit re-ordering or dropping one of the two without the other."""
+    code_only = _code_only_content()
+    lines = code_only.splitlines()
+    index = next(i for i, line in enumerate(lines) if "key: FREYJA_CANDLE_SCANNER_SOURCES" in line)
+    declared = set(lines[index + 1].split("value:", 1)[1].strip().split(","))
+    if "TWELVEDATA" in declared:
+        assert "key: FREYJA_TWELVE_DATA_API_KEY" in code_only
