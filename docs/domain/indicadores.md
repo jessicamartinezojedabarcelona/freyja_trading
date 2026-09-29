@@ -241,10 +241,13 @@ Registradas aquí para que se puedan corregir; ninguna es de producto.
    diferencia de, p. ej., `GapPolicy` en POINT4-MULTI-001): igual que `patrones-de-vela.md` fue
    puramente documental para el punto 4 (sin un solo test propio), y POINT5-REGISTRY-001 es quien
    tiene, explícitamente, la responsabilidad de crear las entidades del registro — crear un enum o
-   una guarda ahora duplicaría o adelantaría ese trabajo sin necesidad, y no hay hoy ningún código
-   de order flow/DOM/footprint/SMC que una guarda pudiera detectar (sección 2): la guarda relevante
-   («ningún indicador de estas familias sin su propio contrato») se añadirá junto con
-   POINT5-REGISTRY-001, cuando exista código de dominio real que vigilar.
+   una guarda ahora duplicaría o adelantaría ese trabajo sin necesidad. **Actualizado en
+   POINT5-REGISTRY-001:** una guarda léxica (buscar «order flow»/«footprint»/etc. en el código)
+   resultó demasiado burda — choca con el propio texto de `indicator_registry.py` que explica por
+   qué esas familias no existen. La guarda real es **estructural**, no léxica:
+   `test_only_one_family_exists_today` (`test_indicator_registry.py`) falla en cuanto
+   `IndicatorFamily` deje de tener un único valor (`OHLCV`), que es exactamente cuándo alguien
+   habría empezado a implementar una familia nueva sin su propio contrato.
 
 ## 11. Informe: decisiones y dependencias para las siguientes tareas del punto 5
 
