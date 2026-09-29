@@ -5,6 +5,7 @@
 const MARKETS: Record<string, string> = {
   CRYPTO: 'Cripto',
   FOREX: 'Forex',
+  METALS: 'Metales',
 };
 
 const PRODUCTS: Record<string, string> = {

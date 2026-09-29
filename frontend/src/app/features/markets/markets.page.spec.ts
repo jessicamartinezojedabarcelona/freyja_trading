@@ -38,6 +38,13 @@ const FOREX = makeInstrument({
   canonical_symbol: 'EUR/USD',
   market: { id: 'm-forex', code: 'FOREX', display_name: 'Forex' },
 });
+// Gold is catalogued under its own market, METALS, never as a FOREX pair (Jessica's
+// decision, 2026-09-29 — MARKET-DATA-TWELVEDATA-CATALOG-001).
+const METALS = makeInstrument({
+  instrument_id: 'metals-1',
+  canonical_symbol: 'XAU/USD',
+  market: { id: 'm-metals', code: 'METALS', display_name: 'Metals' },
+});
 
 class FakeChart implements ChartHandle {
   readonly drawn: { data: ChartData; resetView: boolean }[] = [];
@@ -159,7 +166,7 @@ describe('MarketsPage', () => {
 
     it('filters the list by market', async () => {
       await open('/mercados');
-      flushInstruments([BTC, FOREX]);
+      flushInstruments([BTC, FOREX, METALS]);
       await settle();
 
       const select = root().querySelector<HTMLSelectElement>('select')!;
@@ -167,12 +174,23 @@ describe('MarketsPage', () => {
         'Todos',
         'Cripto',
         'Forex',
+        'Metales',
       ]);
       select.value = 'FOREX';
       select.dispatchEvent(new Event('change'));
       harness.detectChanges();
       expect([...root().querySelectorAll('.instrument .symbol')].map((e) => squash(e))).toEqual([
         'EUR/USD',
+      ]);
+
+      // Gold filters under Metales, not Forex — the same dynamic mechanism that already
+      // covers Cripto/Forex needs no change for a new market (MARKET-DATA-TWELVEDATA-
+      // EXPLORER-001): it just appeared once the catalog had a METALS instrument.
+      select.value = 'METALS';
+      select.dispatchEvent(new Event('change'));
+      harness.detectChanges();
+      expect([...root().querySelectorAll('.instrument .symbol')].map((e) => squash(e))).toEqual([
+        'XAU/USD',
       ]);
     });
 
@@ -526,6 +544,39 @@ describe('MarketsPage', () => {
       expect(root().querySelector('.instrument--active .symbol')?.textContent).toContain(
         'ETH/USDT',
       );
+    });
+
+    it('uses a MARKET_DATA source silently when it is the only one, same as an EXCHANGE source', async () => {
+      // Twelve Data (MARKET-DATA-TWELVEDATA-EXPLORER-001) is the first source whose
+      // data_source.source_type is 'MARKET_DATA', not 'EXCHANGE' — confirms the selector's
+      // single-source rule reads purpose/is_active only, never source_type.
+      await open(`/mercados/${FOREX.instrument_id}`);
+      flushInstruments([BTC, FOREX]);
+      flushDetail(
+        FOREX,
+        makeMappings(
+          [
+            makeSourceMapping('TWELVEDATA', 'Twelve Data', {
+              data_source: {
+                id: 'ds-TWELVEDATA',
+                code: 'TWELVEDATA',
+                display_name: 'Twelve Data',
+                source_type: 'MARKET_DATA',
+                is_active: true,
+              },
+              provider_symbol: 'EUR/USD',
+            }),
+          ],
+          FOREX.instrument_id,
+        ),
+      );
+      candlesRequest().flush(
+        makeSeries({ instrument_id: FOREX.instrument_id, data_source_code: 'TWELVEDATA' }),
+      );
+      await settle();
+
+      expect(root().querySelector('.field--inline select')).toBeNull();
+      expect(squash(root().querySelector('app-series-status'))).toContain('Twelve Data');
     });
 
     it('lets the user pick between several sources, and none when there is only one', async () => {
